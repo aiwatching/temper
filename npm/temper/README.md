@@ -1,11 +1,11 @@
-# temper-cli
+# @aion0/temper
 
 Forged memory for your code — persistent memory and code understanding for AI coding agents.
 
 ## Install
 
 ```bash
-npm install -g temper-cli
+npm install -g @aion0/temper
 ```
 
 ## Quick Start

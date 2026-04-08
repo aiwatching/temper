@@ -152,23 +152,36 @@ if command -v gh &> /dev/null; then
   gh release create "v$NEW_VERSION" --title "v$NEW_VERSION" --notes-file "$RELEASE_NOTES_FILE" || echo "(release creation skipped)"
 fi
 
-# ─── Done ───
+# ─── npm publish ───
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║  v$NEW_VERSION pushed!                               "
+echo "║  Publishing @aion0/temper@$NEW_VERSION to npm         "
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
-echo "What happens next:"
-echo "  1. GitHub Actions builds 3 platforms (macOS ARM/Intel + Linux)"
-echo "  2. CI publishes all npm packages automatically"
-echo "  3. GitHub Release created with binaries"
+
+read -p "Publish to npm now? [Y/n] " PUBLISH_NOW
+PUBLISH_NOW=${PUBLISH_NOW:-y}
+
+if [ "$PUBLISH_NOW" = "y" ] || [ "$PUBLISH_NOW" = "Y" ]; then
+  echo ""
+  echo "Publishing @aion0/temper-darwin-arm64..."
+  (cd "$PROJECT_DIR/npm/temper-darwin-arm64" && npm publish --access public)
+
+  echo ""
+  echo "Publishing @aion0/temper..."
+  (cd "$PROJECT_DIR/npm/temper" && npm publish --access public)
+
+  echo ""
+  echo "✓ Published @aion0/temper@$NEW_VERSION"
+  echo ""
+  echo "Install: npm install -g @aion0/temper"
+else
+  echo "Skipped. Manually publish later:"
+  echo "  cd npm/temper-darwin-arm64 && npm publish --access public"
+  echo "  cd npm/temper && npm publish --access public"
+fi
+
 echo ""
-echo "Check CI: https://github.com/AiON0/temper/actions"
-echo ""
-echo "After CI completes, users install with:"
-echo "  npm install -g @aion0/temper"
-echo ""
-echo "Or manually publish current platform only (if CI not set up):"
-echo "  cd npm/temper-darwin-arm64 && npm publish --access public"
-echo "  cd ../temper && npm publish --access public"
+echo "GitHub Actions will also build + publish darwin-x64 and linux-x64."
+echo "Check: https://github.com/AiON0/temper/actions"
