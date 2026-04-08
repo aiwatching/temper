@@ -83,7 +83,7 @@ fi
 # 3. Version consistency
 echo ""
 echo "Version check..."
-for PKG_DIR in temper-cli temper-darwin-arm64 temper-darwin-x64 temper-linux-x64; do
+for PKG_DIR in temper temper-darwin-arm64 temper-darwin-x64 temper-linux-x64; do
   PKG_JSON="$NPM_DIR/$PKG_DIR/package.json"
   if [ -f "$PKG_JSON" ]; then
     PKG_VER=$(node -e "console.log(require('$PKG_JSON').version)")
@@ -100,7 +100,7 @@ done
 # 4. Check if versions already published
 echo ""
 echo "Registry check..."
-for PKG_DIR in temper-cli temper-darwin-arm64 temper-darwin-x64 temper-linux-x64; do
+for PKG_DIR in temper temper-darwin-arm64 temper-darwin-x64 temper-linux-x64; do
   PKG_JSON="$NPM_DIR/$PKG_DIR/package.json"
   if [ -f "$PKG_JSON" ]; then
     PKG_NAME=$(node -e "console.log(require('$PKG_JSON').name)")
@@ -159,7 +159,7 @@ done
 # Then main package
 echo "Step 2: Publishing main package..."
 echo ""
-publish_package "temper-cli"
+publish_package "temper"
 
 # ─── Done ───
 
@@ -169,10 +169,10 @@ if $DRY_RUN; then
   echo -e "${YELLOW}Dry run complete. To actually publish:${NC}"
   echo -e "${YELLOW}  ./scripts/publish-npm.sh --publish${NC}"
 else
-  echo -e "${GREEN}Published temper-cli@$VERSION${NC}"
+  echo -e "${GREEN}Published temper@$VERSION${NC}"
   echo ""
   echo "Users can install with:"
-  echo "  npm install -g temper-cli"
+  echo "  npm install -g temper"
   echo ""
   echo "Configure with Claude Code:"
   echo "  claude mcp add temper -- temper serve ."

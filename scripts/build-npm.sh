@@ -78,7 +78,7 @@ else
 fi
 
 # Update main package version
-cd "$NPM_DIR/temper-cli"
+cd "$NPM_DIR/temper"
 npm version "$VERSION" --no-git-tag-version --allow-same-version 2>/dev/null || true
 
 # Update optionalDependencies versions
@@ -98,4 +98,4 @@ echo "To publish:"
 echo "  cd npm/temper-darwin-arm64 && npm publish --access public"
 echo "  cd npm/temper-darwin-x64   && npm publish --access public"
 echo "  cd npm/temper-linux-x64    && npm publish --access public"
-echo "  cd npm/temper-cli          && npm publish"
+echo "  cd npm/temper          && npm publish"

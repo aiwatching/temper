@@ -44,7 +44,7 @@ echo "Updating versions..."
 sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
 
 # npm packages
-for PKG in npm/temper-cli/package.json npm/temper-darwin-arm64/package.json npm/temper-darwin-x64/package.json npm/temper-linux-x64/package.json; do
+for PKG in npm/temper/package.json npm/temper-darwin-arm64/package.json npm/temper-darwin-x64/package.json npm/temper-linux-x64/package.json; do
   if [ -f "$PKG" ]; then
     sed -i '' "s/\"version\": \"$CURRENT\"/\"version\": \"$NEW_VERSION\"/" "$PKG"
   fi
@@ -52,11 +52,11 @@ done
 
 # Update optionalDependencies in main package
 node -e "
-const pkg = require('./npm/temper-cli/package.json');
+const pkg = require('./npm/temper/package.json');
 for (const dep of Object.keys(pkg.optionalDependencies || {})) {
   pkg.optionalDependencies[dep] = '$NEW_VERSION';
 }
-require('fs').writeFileSync('./npm/temper-cli/package.json', JSON.stringify(pkg, null, 2) + '\n');
+require('fs').writeFileSync('./npm/temper/package.json', JSON.stringify(pkg, null, 2) + '\n');
 "
 
 echo "  ✓ Cargo.toml → $NEW_VERSION"
@@ -152,20 +152,23 @@ if command -v gh &> /dev/null; then
   gh release create "v$NEW_VERSION" --title "v$NEW_VERSION" --notes-file "$RELEASE_NOTES_FILE" || echo "(release creation skipped)"
 fi
 
-# ─── npm publish instructions ───
+# ─── Done ───
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
-echo "║  Ready to publish @aion0/temper@$NEW_VERSION"
+echo "║  v$NEW_VERSION pushed!                               "
 echo "╚══════════════════════════════════════════════════════╝"
 echo ""
-echo "Run these commands (will prompt for npm 2FA):"
+echo "What happens next:"
+echo "  1. GitHub Actions builds 3 platforms (macOS ARM/Intel + Linux)"
+echo "  2. CI publishes all npm packages automatically"
+echo "  3. GitHub Release created with binaries"
 echo ""
-echo "  # 1. Platform binary"
-echo "  cd npm/temper-darwin-arm64 && npm publish --access public"
+echo "Check CI: https://github.com/AiON0/temper/actions"
 echo ""
-echo "  # 2. Main package"
-echo "  cd ../temper-cli && npm publish --access public"
-echo ""
-echo "After publish, users install with:"
+echo "After CI completes, users install with:"
 echo "  npm install -g @aion0/temper"
+echo ""
+echo "Or manually publish current platform only (if CI not set up):"
+echo "  cd npm/temper-darwin-arm64 && npm publish --access public"
+echo "  cd ../temper && npm publish --access public"

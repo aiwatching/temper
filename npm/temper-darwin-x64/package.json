@@ -1,6 +1,6 @@
 {
   "name": "@aion0/temper-darwin-x64",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Temper binary for macOS x86_64 (Intel)",
   "license": "MIT",
   "os": ["darwin"],
