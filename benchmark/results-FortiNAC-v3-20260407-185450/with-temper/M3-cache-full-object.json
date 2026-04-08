@@ -1,0 +1,13 @@
+{
+  "test_id": "M3-cache-full-object",
+  "mode": "with-temper",
+  "duration_ms": 123158,
+  "duration_api_ms": 121712,
+  "num_turns": 16,
+  "total_cost_usd": 0.6792535,
+  "input_tokens": 17,
+  "output_tokens": 4880,
+  "cache_read_tokens": 565262,
+  "is_error": true,
+  "exit_code": 1
+}

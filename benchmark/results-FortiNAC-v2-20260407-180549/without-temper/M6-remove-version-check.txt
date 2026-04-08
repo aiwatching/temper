@@ -1,0 +1,7 @@
+Done. Removed:
+
+1. The `StreamMessageId` import
+2. The version comparison block (lines 38-49) that skipped stale requests based on stream ID comparison
+3. The `safeParseStreamId` and `compareStreamMessageId` private methods
+
+The handler now goes straight from entity lookup to fingerprint comparison and lock acquisition. The existing tests don't reference the version check logic, so they should remain unaffected.

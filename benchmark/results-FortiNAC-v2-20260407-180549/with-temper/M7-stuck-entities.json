@@ -1,0 +1,13 @@
+{
+  "test_id": "M7-stuck-entities",
+  "mode": "with-temper",
+  "duration_ms": 191313,
+  "duration_api_ms": 185308,
+  "num_turns": 11,
+  "total_cost_usd": 0.73393125,
+  "input_tokens": 9,
+  "output_tokens": 7793,
+  "cache_read_tokens": 224537,
+  "is_error": false,
+  "exit_code": 0
+}

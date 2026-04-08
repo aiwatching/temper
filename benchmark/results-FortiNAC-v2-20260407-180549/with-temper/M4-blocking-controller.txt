@@ -1,0 +1,12 @@
+Done. Changes made:
+
+**Controller** — removed `Mono.deferContextual`, `subscribeOn`, `onErrorResume`, `doFinally`, and the `nettyOffloadExecutor` dependency. The method now:
+1. Prepares the request
+2. Registers the callback future
+3. Publishes to Redis
+4. Calls `future.get(timeout, SECONDS)` to block until the consumer completes it
+5. Returns `ResultDTO<?>` directly, with try-catch for timeout/error handling
+
+**Test** — removed the `TestConfig` that provided the `nettyOffloadExecutor` bean and the timeout test (which relied on Mono scheduling behavior). The remaining tests work unchanged since WebFlux supports blocking return types.
+
+**Note**: `NettyOffLoadThreadPoolConfig` is now unused by this controller. If nothing else references it, you may want to remove it.

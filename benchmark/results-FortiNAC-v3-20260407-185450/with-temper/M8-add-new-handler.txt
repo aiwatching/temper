@@ -1,0 +1,33 @@
+Here's the complete implementation:
+
+### `DeviceTypeChangedHandler` (new file — already exists as untracked)
+
+**`core_business_v2/ingestion/.../handler/DeviceTypeChangedHandler.java`** — handles the type-change case:
+
+1. **Acquires process lock** — type change is a mutating operation
+2. **Re-reads from DB** — avoids stale-cache races
+3. **Rebuilds fingerprint** for the new type via `EntityAttributeFingerprintBuilder`
+4. **Updates entity**: sets new type, new fingerprint, resets `processingStage` to `PENDING`, clears error state, populates `userIdentity` for `USER_HOST_BINDING`
+5. **Refreshes cache** with the updated entity ID
+6. **Re-runs state machine** from `PENDING`
+
+### Integration into `CachedExistingEntityHandler` (modified)
+
+Added at **line 30**: `DeviceTypeChangedHandler` injected via constructor (Lombok `@RequiredArgsConstructor`).
+
+Added at **lines 40-48**: type-mismatch check immediately after the DB fetch, **before** version check and fingerprint comparison. If the request's `entityType` differs from the cached entity's type, it short-circuits to `DeviceTypeChangedHandler.handle(req, entity)`.
+
+### Flow summary
+
+```
+IngestionOrchestrator.process(req)
+  ├── Cache HIT → CachedExistingEntityHandler.handle(req, cachedId)
+  │     ├── DB fetch entity
+  │     ├── Type mismatch? → DeviceTypeChangedHandler.handle(req, entity)  ← NEW
+  │     ├── Version check (skip stale)
+  │     └── Fingerprint comparison → FingerprintHandler registry
+  ├── Cache MISS + DB found → DbExistingEntityHandler → CachedExistingEntityHandler (same path)
+  └── Cache MISS + DB not found → NewEntityHandler
+```
+
+The `DbExistingEntityHandler` path also benefits automatically since it delegates to `CachedExistingEntityHandler`.

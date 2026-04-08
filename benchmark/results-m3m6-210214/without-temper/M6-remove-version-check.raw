@@ -1,0 +1,7 @@
+{"type":"result","subtype":"success","is_error":false,"duration_ms":36864,"duration_api_ms":36062,"num_turns":8,"result":"Done. Removed:
+
+- The `StreamMessageId` import
+- The version comparison block (lines 38-49) that skipped stale requests
+- The `safeParseStreamId()` and `compareStreamMessageId()` helper methods
+
+The handler now goes straight from entity lookup to fingerprint comparison. The existing tests don't test the version check path, so they should continue to pass as-is.","stop_reason":"end_turn","session_id":"fb6f42d9-eed7-45d7-8e51-765496e9f060","total_cost_usd":0.294272,"usage":{"input_tokens":10,"cache_creation_input_tokens":22262,"cache_read_input_tokens":216419,"output_tokens":1875,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":22262,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard"},"modelUsage":{"claude-opus-4-6[1m]":{"inputTokens":10,"outputTokens":1875,"cacheReadInputTokens":216419,"cacheCreationInputTokens":22262,"webSearchRequests":0,"costUSD":0.294272,"contextWindow":1000000,"maxOutputTokens":64000}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","uuid":"c54e43fa-86ee-4c75-b49c-4b5fa49eb6de"}

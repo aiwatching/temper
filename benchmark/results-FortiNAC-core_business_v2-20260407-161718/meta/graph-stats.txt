@@ -1,0 +1,8 @@
+Files:      8657
+Functions:  84859
+Classes:    8569
+Variables:  0
+Imports:    72592
+Calls:      91799
+Exports:    8487
+Total:      102085 nodes, 172878 edges

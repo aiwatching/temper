@@ -1,0 +1,15 @@
+{
+  "name": "@aion0/temper-darwin-arm64",
+  "version": "0.1.1",
+  "description": "Temper binary for macOS ARM64 (Apple Silicon)",
+  "license": "MIT",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin/temper"
+  ]
+}

@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+.next/
+
+# Coverage
+coverage/
+
+# Environment
+.env
+.env.local
+.env.production
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Debug logs
+*.log
+
+# Project data
+.claude
+.accord
+tsconfig.tsbuildinfo
+next-env.d.ts
+.*
+CLAUDE.md
+~*
+
+
+# Added by cargo
+
+/target

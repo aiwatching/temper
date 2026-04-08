@@ -1,0 +1,17 @@
+{"type":"result","subtype":"success","is_error":false,"duration_ms":11165,"duration_api_ms":11061,"num_turns":5,"result":"## REST Endpoints
+
+| HTTP Method | URL Path | Handler Method |
+|---|---|---|
+| `GET` | `/api/users` | `UserController.listUsers()` |
+| `GET` | `/api/users/{id}` | `UserController.getUser()` |
+| `POST` | `/api/users` | `UserController.createUser()` |
+| `DELETE` | `/api/users/{id}` | `UserController.deleteUser()` |
+
+All endpoints require a `token` parameter validated via `AuthService`.
+
+## Module Dependencies
+
+| Dependency | Used In | Purpose |
+|---|---|---|
+| `com.acme.auth.AuthService` | `UserController` | Token validation on every endpoint |
+| `com.acme.notification.NotificationService` | `UserService` | Sends welcome email on user creation, account-deleted email on deletion |","stop_reason":"end_turn","session_id":"0d12bc4a-1464-4e5f-b30a-5e4042efb067","total_cost_usd":0.11313375,"usage":{"input_tokens":5,"cache_creation_input_tokens":12913,"cache_read_input_tokens":39555,"output_tokens":505,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":12913,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard"},"modelUsage":{"claude-opus-4-6[1m]":{"inputTokens":5,"outputTokens":505,"cacheReadInputTokens":39555,"cacheCreationInputTokens":12913,"webSearchRequests":0,"costUSD":0.11313375,"contextWindow":1000000,"maxOutputTokens":64000}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","uuid":"e138e592-5842-4e38-bad0-a3e061048445"}

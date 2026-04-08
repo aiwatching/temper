@@ -1,0 +1,35 @@
+{
+  "name": "@aion0/temper",
+  "version": "0.1.1",
+  "description": "Forged memory for your code — persistent memory and code understanding for AI coding agents",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/AiON0/temper"
+  },
+  "files": [
+    "bin/temper",
+    "scripts/postinstall.js",
+    "README.md"
+  ],
+  "bin": {
+    "temper": "bin/temper"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "optionalDependencies": {
+    "@aion0/temper-darwin-arm64": "0.1.1",
+    "@aion0/temper-darwin-x64": "0.1.1",
+    "@aion0/temper-linux-x64": "0.1.1"
+  },
+  "keywords": [
+    "ai",
+    "code",
+    "memory",
+    "mcp",
+    "claude",
+    "tree-sitter",
+    "ast"
+  ]
+}

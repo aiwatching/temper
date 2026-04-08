@@ -1,0 +1,6 @@
+{
+  "test_id": "T9-localization-causal",
+  "mode": "with-temper",
+  "duration_ms": 55010,
+  "exit_code": 0
+}

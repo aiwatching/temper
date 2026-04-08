@@ -1,0 +1,13 @@
+{
+  "test_id": "M4-blocking-controller",
+  "mode": "without-temper",
+  "duration_ms": 132443,
+  "duration_api_ms": 129859,
+  "num_turns": 15,
+  "total_cost_usd": 0.6581222500000001,
+  "input_tokens": 16,
+  "output_tokens": 8628,
+  "cache_read_tokens": 452497,
+  "is_error": false,
+  "exit_code": 0
+}

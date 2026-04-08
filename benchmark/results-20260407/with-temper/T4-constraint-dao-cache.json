@@ -1,0 +1,6 @@
+{
+  "test_id": "T4-constraint-dao-cache",
+  "mode": "with-temper",
+  "duration_ms": 12521,
+  "exit_code": 0
+}

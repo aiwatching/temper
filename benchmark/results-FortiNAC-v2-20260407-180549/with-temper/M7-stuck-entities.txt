@@ -1,0 +1,17 @@
+Now the exception is caught and converted to `SYSTEM_ERROR = -1`, which `isRetryableCode` recognizes as retryable. After 3 retries with persistent exceptions, `handleServiceFinalFailure` sets the non-zero code, and lines 208-210 execute normally — advancing the stage and persisting the failure to DB.
+
+## Summary
+
+**Why entities get stuck in LABELED:**
+- `PolicyService.evaluate()` (called during LABELED→EVALUATED) throws an uncaught runtime exception
+- The exception bypasses the error-code and stage-advancement logic in `processStage`
+- DB retains `stage=LABELED, code=0`
+- Recovery sees `code=0` → retries → same exception → infinite retry loop with no progress
+
+**What the fix does:**
+- Wraps `serviceFunction.apply(dto)` in try-catch (line 167)
+- Converts exceptions to `SYSTEM_ERROR (-1)` result, which is retryable
+- After 3 failed retries, `handleServiceFinalFailure` records the error code and the stage advances to EVALUATED with a non-zero code
+- Recovery then correctly sees it as "finished" and stops retrying
+
+**To unstick existing entities**, you can run a one-time SQL update setting `processing_code = -1` for entities where `processing_stage = 'LABELED'` and `processing_code = 0` and `updated_at < NOW() - INTERVAL 10 MINUTE`. The recovery job will then either retry them (with the fix in place) or mark them as properly failed.

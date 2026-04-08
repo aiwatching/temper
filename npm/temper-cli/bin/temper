@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+
+const { execFileSync } = require("child_process");
+const path = require("path");
+const fs = require("fs");
+
+// Platform binary mapping
+const PLATFORMS = {
+  "darwin-arm64": "@aion0/temper-darwin-arm64",
+  "darwin-x64": "@aion0/temper-darwin-x64",
+  "linux-x64": "@aion0/temper-linux-x64",
+};
+
+function getBinaryPath() {
+  const platform = `${process.platform}-${process.arch}`;
+  const pkg = PLATFORMS[platform];
+
+  if (!pkg) {
+    console.error(`Unsupported platform: ${platform}`);
+    console.error(`Supported: ${Object.keys(PLATFORMS).join(", ")}`);
+    process.exit(1);
+  }
+
+  try {
+    // Resolve the platform-specific package
+    const pkgDir = path.dirname(require.resolve(`${pkg}/package.json`));
+    const binPath = path.join(pkgDir, "bin", "temper");
+
+    if (!fs.existsSync(binPath)) {
+      console.error(`Binary not found: ${binPath}`);
+      console.error(`Try: npm install ${pkg}`);
+      process.exit(1);
+    }
+
+    return binPath;
+  } catch (e) {
+    console.error(`Platform package not installed: ${pkg}`);
+    console.error(`Try: npm install ${pkg}`);
+    process.exit(1);
+  }
+}
+
+const binary = getBinaryPath();
+const args = process.argv.slice(2);
+
+try {
+  execFileSync(binary, args, { stdio: "inherit" });
+} catch (e) {
+  process.exit(e.status || 1);
+}

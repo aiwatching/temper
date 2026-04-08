@@ -1,0 +1,3 @@
+**No code outside of `core_business_v2/ingestion/` depends on it.** All 61 files that import from `com.fortinet.nac.ingestion` are within `core_business_v2/ingestion/` itself, and no other module's `pom.xml` declares it as a dependency.
+
+The ingestion module is fully self-contained — no other module imports its classes or depends on its Maven artifact.

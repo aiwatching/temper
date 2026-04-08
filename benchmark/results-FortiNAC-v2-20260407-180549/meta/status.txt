@@ -1,0 +1,7 @@
+Project:    /Users/zliu/IdeaProjects/FortiNAC
+Files:      8658
+Functions:  84792
+Classes:    8570
+Edges:      172879
+Scanned:    2026-04-08 01:07:44
+Git commit: f8b0a5e7ea4b

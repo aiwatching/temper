@@ -1,0 +1,642 @@
+Initializing Temper for: /Users/zliu/IdeaProjects/FortiNAC
+Scanning project...
+Scan complete: 8658 files, 84792 functions, 8570 classes, 172879 edges
+
+Detected package structure, suggested modules:
+  1. com/fortinet/nacos/cli — Package com/fortinet/nacos/cli (842 files) (842 files)
+  2. com/bsc/api/selection — Package com/bsc/api/selection (261 files) (261 files)
+  3. com/bsc/rest/response — Package com/bsc/rest/response (255 files) (255 files)
+  4. com/bsc/rest/portal — Package com/bsc/rest/portal (238 files) (238 files)
+  5. com/fortinet/nac/webserver — Package com/fortinet/nac/webserver (208 files) (208 files)
+  6. nacos-cli/src/main/java — Package nacos-cli/src/main/java (155 files) (155 files)
+  7. com/fortinet/fortincm/coordinator — Package com/fortinet/fortincm/coordinator (128 files) (128 files)
+  8. com/bsc/servlet/ncm — Package com/bsc/servlet/ncm (127 files) (127 files)
+  9. com/bsc/servlet/system — Package com/bsc/servlet/system (124 files) (124 files)
+  10. com/bsc/rest/request — Package com/bsc/rest/request (122 files) (122 files)
+  11. com/bsc/api/persistence — Package com/bsc/api/persistence (101 files) (101 files)
+  12. com/bsc/plugin/snmp — Package com/bsc/plugin/snmp (100 files) (100 files)
+  13. com/bsc/rest/system — Package com/bsc/rest/system (88 files) (88 files)
+  14. com/bsc/plugin/manager — Package com/bsc/plugin/manager (83 files) (83 files)
+  15. com/fortinet/nac/classification — Package com/fortinet/nac/classification (79 files) (79 files)
+  16. com/bsc/api/dynamic — Package com/bsc/api/dynamic (79 files) (79 files)
+  17. com/bsc/plugin/packets — Package com/bsc/plugin/packets (77 files) (77 files)
+  18. com/bsc/dao/impl — Package com/bsc/dao/impl (75 files) (75 files)
+  19. com/fortinet/nac/ingestion — Package com/fortinet/nac/ingestion (75 files) (75 files)
+  20. com/bsc/plugin/forwarding — Package com/bsc/plugin/forwarding (73 files) (73 files)
+  21. com/bsc/rest/settings — Package com/bsc/rest/settings (69 files) (69 files)
+  22. com/bsc/dpc/methods — Package com/bsc/dpc/methods (65 files) (65 files)
+  23. com/bsc/api/database — Package com/bsc/api/database (63 files) (63 files)
+  24. com/bsc/api/rest — Package com/bsc/api/rest (62 files) (62 files)
+  25. com/fortinet/fortinac/redis — Package com/fortinet/fortinac/redis (60 files) (60 files)
+  26. com/bsc/grpc/internal — Package com/bsc/grpc/internal (60 files) (60 files)
+  27. com/fortinet/fortinac/dto — Package com/fortinet/fortinac/dto (59 files) (59 files)
+  28. com/bsc/plugin/failoverchange — Package com/bsc/plugin/failoverchange (56 files) (56 files)
+  29. com/bsc/servlet/settings — Package com/bsc/servlet/settings (56 files) (56 files)
+  30. com/bsc/plugin/ncm — Package com/bsc/plugin/ncm (55 files) (55 files)
+  31. com/bsc/forwarding/fortilan — Package com/bsc/forwarding/fortilan (51 files) (51 files)
+  32. com/fortinet/fortincm/config — Package com/fortinet/fortincm/config (49 files) (49 files)
+  33. com/fortinet/api/fcp — Package com/fortinet/api/fcp (41 files) (41 files)
+  34. com/bsc/plugin/vulnerability — Package com/bsc/plugin/vulnerability (40 files) (40 files)
+  35. com/bsc/rest/firmware — Package com/bsc/rest/firmware (40 files) (40 files)
+  36. com/bsc/api/security — Package com/bsc/api/security (40 files) (40 files)
+  37. com/bsc/rest/host — Package com/bsc/rest/host (40 files) (40 files)
+  38. com/fortinet/api/iot — Package com/fortinet/api/iot (39 files) (39 files)
+  39. com/bsc/api/fradius — Package com/bsc/api/fradius (38 files) (38 files)
+  40. com/bsc/platform/centos7 — Package com/bsc/platform/centos7 (38 files) (38 files)
+  41. com/fortinet/fortinac/lib — Package com/fortinet/fortinac/lib (38 files) (38 files)
+  42. com/bsc/api/epc — Package com/bsc/api/epc (37 files) (37 files)
+  43. com/bsc/api/user — Package com/bsc/api/user (37 files) (37 files)
+  44. com/bsc/plugin/kea — Package com/bsc/plugin/kea (36 files) (36 files)
+  45. com/bsc/api/radius — Package com/bsc/api/radius (36 files) (36 files)
+  46. com/fortinet/api/csf — Package com/fortinet/api/csf (35 files) (35 files)
+  47. com/bsc/api/vulnerability — Package com/bsc/api/vulnerability (34 files) (34 files)
+  48. com/bsc/api/campus — Package com/bsc/api/campus (34 files) (34 files)
+  49. com/bsc/api/mgmtapi — Package com/bsc/api/mgmtapi (33 files) (33 files)
+  50. com/bsc/api/securityAction — Package com/bsc/api/securityAction (32 files) (32 files)
+  51. com/bsc/plugin/persistent — Package com/bsc/plugin/persistent (32 files) (32 files)
+  52. com/bsc/api/device — Package com/bsc/api/device (31 files) (31 files)
+  53. com/fortinet/nacos/cmdb — Package com/fortinet/nacos/cmdb (29 files) (29 files)
+  54. com/bsc/plugin/radius — Package com/bsc/plugin/radius (29 files) (29 files)
+  55. com/fortinet/api/oftp — Package com/fortinet/api/oftp (28 files) (28 files)
+  56. com/fortinet/nac/common — Package com/fortinet/nac/common (27 files) (27 files)
+  57. com/bsc/api/ncm — Package com/bsc/api/ncm (27 files) (27 files)
+  58. com/bsc/util/logging — Package com/bsc/util/logging (27 files) (27 files)
+  59. com/bsc/rest/logs — Package com/bsc/rest/logs (27 files) (27 files)
+  60. com/bsc/api/group — Package com/bsc/api/group (26 files) (26 files)
+  61. com/bsc/api/element — Package com/bsc/api/element (26 files) (26 files)
+  62. com/bsc/rest/policy — Package com/bsc/rest/policy (26 files) (26 files)
+  63. com/bsc/servlet/policy — Package com/bsc/servlet/policy (26 files) (26 files)
+  64. com/bsc/plugin/airwatch — Package com/bsc/plugin/airwatch (26 files) (26 files)
+  65. com/bsc/api/scheduler — Package com/bsc/api/scheduler (25 files) (25 files)
+  66. com/fortinet/api/fsso — Package com/fortinet/api/fsso (24 files) (24 files)
+  67. com/fortinet/fortinac/service — Package com/fortinet/fortinac/service (24 files) (24 files)
+  68. com/bsc/bean/settings — Package com/bsc/bean/settings (23 files) (23 files)
+  69. com/bsc/plugin/schema — Package com/bsc/plugin/schema (23 files) (23 files)
+  70. com/bsc/api/alarm — Package com/bsc/api/alarm (23 files) (23 files)
+  71. com/bsc/plugin/ldap — Package com/bsc/plugin/ldap (22 files) (22 files)
+  72. com/bsc/api/agent — Package com/bsc/api/agent (22 files) (22 files)
+  73. com/bsc/agent/tool — Package com/bsc/agent/tool (22 files) (22 files)
+  74. com/bsc/forwarding/huaweicloud — Package com/bsc/forwarding/huaweicloud (21 files) (21 files)
+  75. com/bsc/api/task — Package com/bsc/api/task (21 files) (21 files)
+  76. com/bsc/rest/util — Package com/bsc/rest/util (21 files) (21 files)
+  77. com/bsc/dpc/winrm — Package com/bsc/dpc/winrm (21 files) (21 files)
+  78. com/bsc/api/certmgmt — Package com/bsc/api/certmgmt (21 files) (21 files)
+  79. com/fortinet/fortinac/common — Package com/fortinet/fortinac/common (21 files) (21 files)
+  80. com/bsc/cache/hibernate — Package com/bsc/cache/hibernate (21 files) (21 files)
+  81. com/fortinet/api/fgd — Package com/fortinet/api/fgd (19 files) (19 files)
+  82. com/bsc/api/port — Package com/bsc/api/port (19 files) (19 files)
+  83. com/bsc/rest/user — Package com/bsc/rest/user (19 files) (19 files)
+  84. com/bsc/api/networkSession — Package com/bsc/api/networkSession (18 files) (18 files)
+  85. com/bsc/api/osconfig — Package com/bsc/api/osconfig (18 files) (18 files)
+  86. com/bsc/portal/apache — Package com/bsc/portal/apache (18 files) (18 files)
+  87. com/bsc/gen/portal — Package com/bsc/gen/portal (18 files) (18 files)
+  88. com/bsc/api/role — Package com/bsc/api/role (17 files) (17 files)
+  89. com/bsc/api/mdm — Package com/bsc/api/mdm (17 files) (17 files)
+  90. com/bradfordnetworks/rtr/data — Package com/bradfordnetworks/rtr/data (16 files) (16 files)
+  91. com/bsc/rest/device — Package com/bsc/rest/device (16 files) (16 files)
+  92. com/bsc/plugin/telnet — Package com/bsc/plugin/telnet (16 files) (16 files)
+  93. com/fortinet/fortinac/entity — Package com/fortinet/fortinac/entity (16 files) (16 files)
+  94. com/bsc/api/log — Package com/bsc/api/log (16 files) (16 files)
+  95. com/bsc/agent/response — Package com/bsc/agent/response (16 files) (16 files)
+  96. com/bsc/database/locker — Package com/bsc/database/locker (16 files) (16 files)
+  97. com/bsc/forwarding/http — Package com/bsc/forwarding/http (15 files) (15 files)
+  98. com/bsc/plugin/certmgmt — Package com/bsc/plugin/certmgmt (15 files) (15 files)
+  99. com/bsc/rest/search — Package com/bsc/rest/search (15 files) (15 files)
+  100. com/bsc/forwarding/paloalto — Package com/bsc/forwarding/paloalto (14 files) (14 files)
+  101. com/bsc/api/option — Package com/bsc/api/option (14 files) (14 files)
+  102. com/bsc/api/parser — Package com/bsc/api/parser (14 files) (14 files)
+  103. com/bsc/api/thirdparty — Package com/bsc/api/thirdparty (13 files) (13 files)
+  104. com/bsc/api/sshkeymgmt — Package com/bsc/api/sshkeymgmt (13 files) (13 files)
+  105. com/bsc/api/messagingGateway — Package com/bsc/api/messagingGateway (13 files) (13 files)
+  106. com/bsc/rest/common — Package com/bsc/rest/common (13 files) (13 files)
+  107. com/bsc/api/annotation — Package com/bsc/api/annotation (13 files) (13 files)
+  108. com/bsc/servlet/host — Package com/bsc/servlet/host (13 files) (13 files)
+  109. com/bsc/grpc/failover — Package com/bsc/grpc/failover (12 files) (12 files)
+  110. com/bsc/api/mib — Package com/bsc/api/mib (12 files) (12 files)
+  111. com/bsc/util/template — Package com/bsc/util/template (12 files) (12 files)
+  112. com/bsc/api/event — Package com/bsc/api/event (12 files) (12 files)
+  113. com/bsc/cache/global — Package com/bsc/cache/global (12 files) (12 files)
+  114. com/bsc/plugin/fradius — Package com/bsc/plugin/fradius (12 files) (12 files)
+  115. com/bsc/rest/serviceConnector — Package com/bsc/rest/serviceConnector (12 files) (12 files)
+  116. com/bsc/api/ipserver — Package com/bsc/api/ipserver (12 files) (12 files)
+  117. com/fortinet/fortinac/enums — Package com/fortinet/fortinac/enums (12 files) (12 files)
+  118. com/bsc/api/resource — Package com/bsc/api/resource (12 files) (12 files)
+  119. com/bsc/api/telnet — Package com/bsc/api/telnet (11 files) (11 files)
+  120. com/bsc/cache/dto — Package com/bsc/cache/dto (11 files) (11 files)
+  121. com/bsc/api/loader — Package com/bsc/api/loader (11 files) (11 files)
+  122. com/fortinet/fortinac/exception — Package com/fortinet/fortinac/exception (11 files) (11 files)
+  123. com/bsc/plugin/agent — Package com/bsc/plugin/agent (11 files) (11 files)
+  124. com/bsc/api/ldap — Package com/bsc/api/ldap (11 files) (11 files)
+  125. com/fortinet/fortinac/util — Package com/fortinet/fortinac/util (11 files) (11 files)
+  126. com/bsc/api/l3discovery — Package com/bsc/api/l3discovery (10 files) (10 files)
+  127. com/bsc/api/forwarding — Package com/bsc/api/forwarding (10 files) (10 files)
+  128. com/bsc/api/audit — Package com/bsc/api/audit (10 files) (10 files)
+  129. com/bsc/api/guest — Package com/bsc/api/guest (10 files) (10 files)
+  130. com/bsc/util/comparator — Package com/bsc/util/comparator (10 files) (10 files)
+  131. com/bsc/platform/configwiz — Package com/bsc/platform/configwiz (10 files) (10 files)
+  132. com/bsc/plugin/mobileiron — Package com/bsc/plugin/mobileiron (10 files) (10 files)
+  133. com/bsc/ssh/rsa — Package com/bsc/ssh/rsa (10 files) (10 files)
+  134. com/bsc/servlet/user — Package com/bsc/servlet/user (9 files) (9 files)
+  135. com/bsc/bean/policy — Package com/bsc/bean/policy (9 files) (9 files)
+  136. com/bsc/plugin/dpc — Package com/bsc/plugin/dpc (9 files) (9 files)
+  137. com/bsc/servlet/device — Package com/bsc/servlet/device (9 files) (9 files)
+  138. com/bsc/api/fingerprint — Package com/bsc/api/fingerprint (9 files) (9 files)
+  139. com/bsc/api/probe — Package com/bsc/api/probe (9 files) (9 files)
+  140. com/bsc/util/threadpool — Package com/bsc/util/threadpool (8 files) (8 files)
+  141. com/bsc/bean/user — Package com/bsc/bean/user (8 files) (8 files)
+  142. com/bsc/api/ipdiscovery — Package com/bsc/api/ipdiscovery (8 files) (8 files)
+  143. com/bsc/platform/common — Package com/bsc/platform/common (8 files) (8 files)
+  144. com/bsc/cache/database — Package com/bsc/cache/database (8 files) (8 files)
+  145. com/bsc/api/listener — Package com/bsc/api/listener (8 files) (8 files)
+  146. com/bsc/api/protocol — Package com/bsc/api/protocol (8 files) (8 files)
+  147. com/bsc/agent/config — Package com/bsc/agent/config (8 files) (8 files)
+  148. com/bsc/api/relation — Package com/bsc/api/relation (8 files) (8 files)
+  149. com/bsc/updateScript/scripts — Package com/bsc/updateScript/scripts (8 files) (8 files)
+  150. com/bsc/platform/nacos — Package com/bsc/platform/nacos (8 files) (8 files)
+  151. com/bsc/plugin/syslog — Package com/bsc/plugin/syslog (7 files) (7 files)
+  152. com/bsc/servlet/logs — Package com/bsc/servlet/logs (7 files) (7 files)
+  153. com/bsc/api/rpc — Package com/bsc/api/rpc (7 files) (7 files)
+  154. com/bsc/plugin/bridge — Package com/bsc/plugin/bridge (7 files) (7 files)
+  155. com/bsc/api/validMAC — Package com/bsc/api/validMAC (7 files) (7 files)
+  156. com/bsc/api/yamsview — Package com/bsc/api/yamsview (7 files) (7 files)
+  157. com/bsc/license/util — Package com/bsc/license/util (7 files) (7 files)
+  158. com/bsc/forwarding/ruckuscloud — Package com/bsc/forwarding/ruckuscloud (7 files) (7 files)
+  159. com/bsc/api/application — Package com/bsc/api/application (7 files) (7 files)
+  160. com/bsc/forwarding/merakicloud — Package com/bsc/forwarding/merakicloud (7 files) (7 files)
+  161. com/bsc/api/message — Package com/bsc/api/message (7 files) (7 files)
+  162. com/bsc/plugin/portal — Package com/bsc/plugin/portal (7 files) (7 files)
+  163. com/bsc/api/sms — Package com/bsc/api/sms (6 files) (6 files)
+  164. com/fortinet/fortinac/filter — Package com/fortinet/fortinac/filter (6 files) (6 files)
+  165. com/bsc/plugin/guest — Package com/bsc/plugin/guest (6 files) (6 files)
+  166. com/bsc/api/client — Package com/bsc/api/client (6 files) (6 files)
+  167. com/bsc/servlet/radius — Package com/bsc/servlet/radius (6 files) (6 files)
+  168. com/bsc/api/customHealthCheck — Package com/bsc/api/customHealthCheck (6 files) (6 files)
+  169. com/bsc/grpc/globalobject — Package com/bsc/grpc/globalobject (6 files) (6 files)
+  170. com/bsc/api/profile — Package com/bsc/api/profile (6 files) (6 files)
+  171. com/bsc/plugin/l3discovery — Package com/bsc/plugin/l3discovery (6 files) (6 files)
+  172. com/bsc/api/inventory — Package com/bsc/api/inventory (6 files) (6 files)
+  173. com/bsc/license/dto — Package com/bsc/license/dto (6 files) (6 files)
+  174. com/bsc/plugin/iprange — Package com/bsc/plugin/iprange (6 files) (6 files)
+  175. com/fortinet/fortinac/controller — Package com/fortinet/fortinac/controller (5 files) (5 files)
+  176. com/bsc/plugin/server — Package com/bsc/plugin/server (5 files) (5 files)
+  177. com/bsc/dpc/dhcp — Package com/bsc/dpc/dhcp (5 files) (5 files)
+  178. com/bsc/api/mapping — Package com/bsc/api/mapping (5 files) (5 files)
+  179. com/bsc/api/rtr — Package com/bsc/api/rtr (5 files) (5 files)
+  180. com/bsc/plugin/grpcserver — Package com/bsc/plugin/grpcserver (5 files) (5 files)
+  181. com/bsc/api/settings — Package com/bsc/api/settings (5 files) (5 files)
+  182. com/fortinet/datatools/id — Package com/fortinet/datatools/id (5 files) (5 files)
+  183. com/bsc/forwarding/mistCloud — Package com/bsc/forwarding/mistCloud (5 files) (5 files)
+  184. com/bsc/plugin/dynamic — Package com/bsc/plugin/dynamic (5 files) (5 files)
+  185. com/bsc/api/admingui — Package com/bsc/api/admingui (4 files) (4 files)
+  186. com/bsc/campusmgr/api — Package com/bsc/campusmgr/api (4 files) (4 files)
+  187. com/bsc/api/sharedclientfilter — Package com/bsc/api/sharedclientfilter (4 files) (4 files)
+  188. com/bsc/plugin/event — Package com/bsc/plugin/event (4 files) (4 files)
+  189. com/bsc/plugin/persistence — Package com/bsc/plugin/persistence (4 files) (4 files)
+  190. com/fortinet/fortincm/dto — Package com/fortinet/fortincm/dto (4 files) (4 files)
+  191. com/bsc/api/wireless — Package com/bsc/api/wireless (4 files) (4 files)
+  192. com/bsc/api/oauth — Package com/bsc/api/oauth (4 files) (4 files)
+  193. com/bsc/plugin/configuration — Package com/bsc/plugin/configuration (4 files) (4 files)
+  194. org/apache/commons/fileupload — Package org/apache/commons/fileupload (4 files) (4 files)
+  195. com/bsc/api/addressing — Package com/bsc/api/addressing (4 files) (4 files)
+  196. device-support/src/main/java — Package device-support/src/main/java (4 files) (4 files)
+  197. com/bsc/platform/persistence — Package com/bsc/platform/persistence (4 files) (4 files)
+  198. com/bsc/api/loglistener — Package com/bsc/api/loglistener (4 files) (4 files)
+  199. com/bsc/api/template — Package com/bsc/api/template (4 files) (4 files)
+  200. com/bsc/bean/vulnerability — Package com/bsc/bean/vulnerability (4 files) (4 files)
+  201. com/bsc/api/view — Package com/bsc/api/view (4 files) (4 files)
+  202. com/bsc/forwarding/host — Package com/bsc/forwarding/host (4 files) (4 files)
+  203. com/bsc/plugin/alarm — Package com/bsc/plugin/alarm (3 files) (3 files)
+  204. com/bsc/servlet/search — Package com/bsc/servlet/search (3 files) (3 files)
+  205. com/bsc/plugin/admingui — Package com/bsc/plugin/admingui (3 files) (3 files)
+  206. com/bsc/api/devicetype — Package com/bsc/api/devicetype (3 files) (3 files)
+  207. com/bsc/plugin/dhcp — Package com/bsc/plugin/dhcp (3 files) (3 files)
+  208. com/bsc/api/statistics — Package com/bsc/api/statistics (3 files) (3 files)
+  209. com/bsc/rest/adapter — Package com/bsc/rest/adapter (3 files) (3 files)
+  210. com/fortinet/datatools/ddata — Package com/fortinet/datatools/ddata (3 files) (3 files)
+  211. com/bsc/api/filter — Package com/bsc/api/filter (3 files) (3 files)
+  212. com/bsc/grpc/endpoint — Package com/bsc/grpc/endpoint (3 files) (3 files)
+  213. com/bsc/api/sso — Package com/bsc/api/sso (3 files) (3 files)
+  214. com/fortinet/fortincm/filter — Package com/fortinet/fortincm/filter (3 files) (3 files)
+  215. com/bsc/plugin/validMAC — Package com/bsc/plugin/validMAC (3 files) (3 files)
+  216. com/bsc/rest/permissions — Package com/bsc/rest/permissions (3 files) (3 files)
+  217. com/bsc/campusmgr/service — Package com/bsc/campusmgr/service (3 files) (3 files)
+  218. com/bsc/api/authenticate — Package com/bsc/api/authenticate (3 files) (3 files)
+  219. com/bsc/bean/dynamic — Package com/bsc/bean/dynamic (3 files) (3 files)
+  220. com/fortinet/fortincm/common — Package com/fortinet/fortincm/common (3 files) (3 files)
+  221. com/bsc/plugin/remediation — Package com/bsc/plugin/remediation (3 files) (3 files)
+  222. com/bsc/plugin/device — Package com/bsc/plugin/device (2 files) (2 files)
+  223. com/bsc/plugin/log — Package com/bsc/plugin/log (2 files) (2 files)
+  224. com/bsc/plugin/report — Package com/bsc/plugin/report (2 files) (2 files)
+  225. com/bsc/license/common — Package com/bsc/license/common (2 files) (2 files)
+  226. com/bsc/api/autocomplete — Package com/bsc/api/autocomplete (2 files) (2 files)
+  227. test/com/fortinet/api — Package test/com/fortinet/api (2 files) (2 files)
+  228. com/fortinet/nac/enforcement — Package com/fortinet/nac/enforcement (2 files) (2 files)
+  229. com/fortinac/openapi/fndn — Package com/fortinac/openapi/fndn (2 files) (2 files)
+  230. com/bsc/plugin/probe — Package com/bsc/plugin/probe (2 files) (2 files)
+  231. com/bsc/rest/messagingGateway — Package com/bsc/rest/messagingGateway (2 files) (2 files)
+  232. com/bsc/plugin/scheduler — Package com/bsc/plugin/scheduler (2 files) (2 files)
+  233. com/bsc/api/serverutil — Package com/bsc/api/serverutil (2 files) (2 files)
+  234. com/fortinet/nac/evaluation — Package com/fortinet/nac/evaluation (2 files) (2 files)
+  235. com/bsc/servlet/util — Package com/bsc/servlet/util (2 files) (2 files)
+  236. com/bsc/util/firmware — Package com/bsc/util/firmware (2 files) (2 files)
+  237. com/bsc/plugin/gcmserver — Package com/bsc/plugin/gcmserver (2 files) (2 files)
+  238. com/bsc/api/sizing — Package com/bsc/api/sizing (2 files) (2 files)
+  239. com/bsc/plugin/platform — Package com/bsc/plugin/platform (2 files) (2 files)
+  240. com/fortinet/fortinac/portal — Package com/fortinet/fortinac/portal (2 files) (2 files)
+  241. com/bsc/api/snmp — Package com/bsc/api/snmp (2 files) (2 files)
+  242. com/bsc/api/fgd — Package com/bsc/api/fgd (2 files) (2 files)
+  243. com/bsc/grpc/healthcheck — Package com/bsc/grpc/healthcheck (2 files) (2 files)
+  244. com/bsc/api/dhcp — Package com/bsc/api/dhcp (2 files) (2 files)
+  245. com/bsc/servlet/portal — Package com/bsc/servlet/portal (2 files) (2 files)
+  246. com/bsc/plugin/securityDB — Package com/bsc/plugin/securityDB (2 files) (2 files)
+  247. com/bsc/plugin/customHealthCheck — Package com/bsc/plugin/customHealthCheck (2 files) (2 files)
+  248. com/bsc/util/profiling — Package com/bsc/util/profiling (2 files) (2 files)
+  249. com/bsc/plugin/rtr — Package com/bsc/plugin/rtr (2 files) (2 files)
+  250. com/bsc/api/analytics — Package com/bsc/api/analytics (2 files) (2 files)
+  251. com/bsc/plugin/stats — Package com/bsc/plugin/stats (2 files) (2 files)
+  252. com/bsc/api/certificate — Package com/bsc/api/certificate (2 files) (2 files)
+  253. com/bsc/servlet/permissions — Package com/bsc/servlet/permissions (2 files) (2 files)
+  254. com/bsc/plugin/resource — Package com/bsc/plugin/resource (2 files) (2 files)
+  255. com/bsc/plugin/analytics — Package com/bsc/plugin/analytics (1 files) (1 files)
+  256. com/bsc/plugin/rest — Package com/bsc/plugin/rest (1 files) (1 files)
+  257. com/bsc/servlet/rpc — Package com/bsc/servlet/rpc (1 files) (1 files)
+  258. firmware.2/bsc/services/tomcat-portal — Package firmware.2/bsc/services/tomcat-portal (1 files) (1 files)
+  259. com/bsc/plugin/usermanager — Package com/bsc/plugin/usermanager (1 files) (1 files)
+  260. com/bsc/util/builders — Package com/bsc/util/builders (1 files) (1 files)
+  261. com/bsc/api/cache — Package com/bsc/api/cache (1 files) (1 files)
+  262. com/fortinet/api/cli — Package com/fortinet/api/cli (1 files) (1 files)
+  263. com/bsc/plugin/task — Package com/bsc/plugin/task (1 files) (1 files)
+  264. com/bsc/plugin/serverutil — Package com/bsc/plugin/serverutil (1 files) (1 files)
+  265. com/bsc/plugin/port — Package com/bsc/plugin/port (1 files) (1 files)
+  266. com/bsc/plugin/agentupdate — Package com/bsc/plugin/agentupdate (1 files) (1 files)
+  267. com/bsc/portal/jspc — Package com/bsc/portal/jspc (1 files) (1 files)
+  268. com/bsc/plugin/packeteer — Package com/bsc/plugin/packeteer (1 files) (1 files)
+  269. com/bsc/plugin/aaa — Package com/bsc/plugin/aaa (1 files) (1 files)
+  270. com/bsc/plugin/security — Package com/bsc/plugin/security (1 files) (1 files)
+  271. com/bsc/grpc/ncmcaconfig — Package com/bsc/grpc/ncmcaconfig (1 files) (1 files)
+  272. com/bsc/plugin/patchLink — Package com/bsc/plugin/patchLink (1 files) (1 files)
+  273. com/bsc/api/backgroundTask — Package com/bsc/api/backgroundTask (1 files) (1 files)
+  274. com/bsc/servlet/shell — Package com/bsc/servlet/shell (1 files) (1 files)
+  275. com/fortinet/api/terraform — Package com/fortinet/api/terraform (1 files) (1 files)
+  276. com/bsc/plugin/cache — Package com/bsc/plugin/cache (1 files) (1 files)
+  277. com/bsc/plugin/messagingGateway — Package com/bsc/plugin/messagingGateway (1 files) (1 files)
+  278. com/bsc/plugin/role — Package com/bsc/plugin/role (1 files) (1 files)
+  279. com/bsc/plugin/sizing — Package com/bsc/plugin/sizing (1 files) (1 files)
+  280. com/bsc/api/csf — Package com/bsc/api/csf (1 files) (1 files)
+  281. com/bsc/plugin/relation — Package com/bsc/plugin/relation (1 files) (1 files)
+  282. com/bsc/plugin/autocomplete — Package com/bsc/plugin/autocomplete (1 files) (1 files)
+  283. com/bsc/plugin/sshkeymanagement — Package com/bsc/plugin/sshkeymanagement (1 files) (1 files)
+  284. com/fortinac/javascript/jscomp — Package com/fortinac/javascript/jscomp (1 files) (1 files)
+  285. com/bsc/plugin/policyhelper — Package com/bsc/plugin/policyhelper (1 files) (1 files)
+  286. firmware.2/bsc/services/tomcat-admin — Package firmware.2/bsc/services/tomcat-admin (1 files) (1 files)
+  287. com/bsc/plugin/interfacemanager — Package com/bsc/plugin/interfacemanager (1 files) (1 files)
+  288. com/bsc/server/util — Package com/bsc/server/util (1 files) (1 files)
+  289. com/bsc/api/host — Package com/bsc/api/host (1 files) (1 files)
+  290. com/bsc/util/ncmcluster — Package com/bsc/util/ncmcluster (1 files) (1 files)
+  291. com/bsc/plugin/squid — Package com/bsc/plugin/squid (1 files) (1 files)
+  292. com/bsc/servlet/dynamic — Package com/bsc/servlet/dynamic (1 files) (1 files)
+  293. com/bsc/plugin/bigFix — Package com/bsc/plugin/bigFix (1 files) (1 files)
+  294. com/fortinet/fortincm/util — Package com/fortinet/fortincm/util (1 files) (1 files)
+  295. com/bsc/ui/common — Package com/bsc/ui/common (1 files) (1 files)
+  296. com/bsc/api/remoteAccess — Package com/bsc/api/remoteAccess (1 files) (1 files)
+  297. com/bsc/plugin/devicetype — Package com/bsc/plugin/devicetype (1 files) (1 files)
+  298. com/bsc/plugin/option — Package com/bsc/plugin/option (1 files) (1 files)
+  299. com/bsc/plugin/database — Package com/bsc/plugin/database (1 files) (1 files)
+  300. com/bsc/plugin/ipserver — Package com/bsc/plugin/ipserver (1 files) (1 files)
+  301. com/bsc/plugin/user — Package com/bsc/plugin/user (1 files) (1 files)
+  302. com/bsc/plugin/loginagent — Package com/bsc/plugin/loginagent (1 files) (1 files)
+  303. com/bsc/plugin/terraform — Package com/bsc/plugin/terraform (1 files) (1 files)
+  304. com/bsc/plugin/ping — Package com/bsc/plugin/ping (1 files) (1 files)
+  305. com/bsc/plugin/alarmmanager — Package com/bsc/plugin/alarmmanager (1 files) (1 files)
+  306. com/bsc/plugin/fiberlink — Package com/bsc/plugin/fiberlink (1 files) (1 files)
+  307. com/bsc/plugin/citrix — Package com/bsc/plugin/citrix (1 files) (1 files)
+  308. com/bsc/plugin/remote — Package com/bsc/plugin/remote (1 files) (1 files)
+  309. common/src/main/java — Package common/src/main/java (1 files) (1 files)
+  310. com/lowagie/text/rtf — Package com/lowagie/text/rtf (1 files) (1 files)
+  311. com/bsc/plugin/agentmanagement — Package com/bsc/plugin/agentmanagement (1 files) (1 files)
+  312. com/bsc/plugin/fwupgrade — Package com/bsc/plugin/fwupgrade (1 files) (1 files)
+  313. com/bsc/plugin/wireless — Package com/bsc/plugin/wireless (1 files) (1 files)
+  314. com/bsc/plugin/mgmtapi — Package com/bsc/plugin/mgmtapi (1 files) (1 files)
+  315. com/bsc/servlet/messagingGateway — Package com/bsc/servlet/messagingGateway (1 files) (1 files)
+
+Accept all suggestions? [Y/n/select] 
+  Defined: com/fortinet/nacos/cli
+  Defined: com/bsc/api/selection
+  Defined: com/bsc/rest/response
+  Defined: com/bsc/rest/portal
+  Defined: com/fortinet/nac/webserver
+  Defined: nacos-cli/src/main/java
+  Defined: com/fortinet/fortincm/coordinator
+  Defined: com/bsc/servlet/ncm
+  Defined: com/bsc/servlet/system
+  Defined: com/bsc/rest/request
+  Defined: com/bsc/api/persistence
+  Defined: com/bsc/plugin/snmp
+  Defined: com/bsc/rest/system
+  Defined: com/bsc/plugin/manager
+  Defined: com/fortinet/nac/classification
+  Defined: com/bsc/api/dynamic
+  Defined: com/bsc/plugin/packets
+  Defined: com/bsc/dao/impl
+  Defined: com/fortinet/nac/ingestion
+  Defined: com/bsc/plugin/forwarding
+  Defined: com/bsc/rest/settings
+  Defined: com/bsc/dpc/methods
+  Defined: com/bsc/api/database
+  Defined: com/bsc/api/rest
+  Defined: com/fortinet/fortinac/redis
+  Defined: com/bsc/grpc/internal
+  Defined: com/fortinet/fortinac/dto
+  Defined: com/bsc/plugin/failoverchange
+  Defined: com/bsc/servlet/settings
+  Defined: com/bsc/plugin/ncm
+  Defined: com/bsc/forwarding/fortilan
+  Defined: com/fortinet/fortincm/config
+  Defined: com/fortinet/api/fcp
+  Defined: com/bsc/plugin/vulnerability
+  Defined: com/bsc/rest/firmware
+  Defined: com/bsc/api/security
+  Defined: com/bsc/rest/host
+  Defined: com/fortinet/api/iot
+  Defined: com/bsc/api/fradius
+  Defined: com/bsc/platform/centos7
+  Defined: com/fortinet/fortinac/lib
+  Defined: com/bsc/api/epc
+  Defined: com/bsc/api/user
+  Defined: com/bsc/plugin/kea
+  Defined: com/bsc/api/radius
+  Defined: com/fortinet/api/csf
+  Defined: com/bsc/api/vulnerability
+  Defined: com/bsc/api/campus
+  Defined: com/bsc/api/mgmtapi
+  Defined: com/bsc/api/securityAction
+  Defined: com/bsc/plugin/persistent
+  Defined: com/bsc/api/device
+  Defined: com/fortinet/nacos/cmdb
+  Defined: com/bsc/plugin/radius
+  Defined: com/fortinet/api/oftp
+  Defined: com/fortinet/nac/common
+  Defined: com/bsc/api/ncm
+  Defined: com/bsc/util/logging
+  Defined: com/bsc/rest/logs
+  Defined: com/bsc/api/group
+  Defined: com/bsc/api/element
+  Defined: com/bsc/rest/policy
+  Defined: com/bsc/servlet/policy
+  Defined: com/bsc/plugin/airwatch
+  Defined: com/bsc/api/scheduler
+  Defined: com/fortinet/api/fsso
+  Defined: com/fortinet/fortinac/service
+  Defined: com/bsc/bean/settings
+  Defined: com/bsc/plugin/schema
+  Defined: com/bsc/api/alarm
+  Defined: com/bsc/plugin/ldap
+  Defined: com/bsc/api/agent
+  Defined: com/bsc/agent/tool
+  Defined: com/bsc/forwarding/huaweicloud
+  Defined: com/bsc/api/task
+  Defined: com/bsc/rest/util
+  Defined: com/bsc/dpc/winrm
+  Defined: com/bsc/api/certmgmt
+  Defined: com/fortinet/fortinac/common
+  Defined: com/bsc/cache/hibernate
+  Defined: com/fortinet/api/fgd
+  Defined: com/bsc/api/port
+  Defined: com/bsc/rest/user
+  Defined: com/bsc/api/networkSession
+  Defined: com/bsc/api/osconfig
+  Defined: com/bsc/portal/apache
+  Defined: com/bsc/gen/portal
+  Defined: com/bsc/api/role
+  Defined: com/bsc/api/mdm
+  Defined: com/bradfordnetworks/rtr/data
+  Defined: com/bsc/rest/device
+  Defined: com/bsc/plugin/telnet
+  Defined: com/fortinet/fortinac/entity
+  Defined: com/bsc/api/log
+  Defined: com/bsc/agent/response
+  Defined: com/bsc/database/locker
+  Defined: com/bsc/forwarding/http
+  Defined: com/bsc/plugin/certmgmt
+  Defined: com/bsc/rest/search
+  Defined: com/bsc/forwarding/paloalto
+  Defined: com/bsc/api/option
+  Defined: com/bsc/api/parser
+  Defined: com/bsc/api/thirdparty
+  Defined: com/bsc/api/sshkeymgmt
+  Defined: com/bsc/api/messagingGateway
+  Defined: com/bsc/rest/common
+  Defined: com/bsc/api/annotation
+  Defined: com/bsc/servlet/host
+  Defined: com/bsc/grpc/failover
+  Defined: com/bsc/api/mib
+  Defined: com/bsc/util/template
+  Defined: com/bsc/api/event
+  Defined: com/bsc/cache/global
+  Defined: com/bsc/plugin/fradius
+  Defined: com/bsc/rest/serviceConnector
+  Defined: com/bsc/api/ipserver
+  Defined: com/fortinet/fortinac/enums
+  Defined: com/bsc/api/resource
+  Defined: com/bsc/api/telnet
+  Defined: com/bsc/cache/dto
+  Defined: com/bsc/api/loader
+  Defined: com/fortinet/fortinac/exception
+  Defined: com/bsc/plugin/agent
+  Defined: com/bsc/api/ldap
+  Defined: com/fortinet/fortinac/util
+  Defined: com/bsc/api/l3discovery
+  Defined: com/bsc/api/forwarding
+  Defined: com/bsc/api/audit
+  Defined: com/bsc/api/guest
+  Defined: com/bsc/util/comparator
+  Defined: com/bsc/platform/configwiz
+  Defined: com/bsc/plugin/mobileiron
+  Defined: com/bsc/ssh/rsa
+  Defined: com/bsc/servlet/user
+  Defined: com/bsc/bean/policy
+  Defined: com/bsc/plugin/dpc
+  Defined: com/bsc/servlet/device
+  Defined: com/bsc/api/fingerprint
+  Defined: com/bsc/api/probe
+  Defined: com/bsc/util/threadpool
+  Defined: com/bsc/bean/user
+  Defined: com/bsc/api/ipdiscovery
+  Defined: com/bsc/platform/common
+  Defined: com/bsc/cache/database
+  Defined: com/bsc/api/listener
+  Defined: com/bsc/api/protocol
+  Defined: com/bsc/agent/config
+  Defined: com/bsc/api/relation
+  Defined: com/bsc/updateScript/scripts
+  Defined: com/bsc/platform/nacos
+  Defined: com/bsc/plugin/syslog
+  Defined: com/bsc/servlet/logs
+  Defined: com/bsc/api/rpc
+  Defined: com/bsc/plugin/bridge
+  Defined: com/bsc/api/validMAC
+  Defined: com/bsc/api/yamsview
+  Defined: com/bsc/license/util
+  Defined: com/bsc/forwarding/ruckuscloud
+  Defined: com/bsc/api/application
+  Defined: com/bsc/forwarding/merakicloud
+  Defined: com/bsc/api/message
+  Defined: com/bsc/plugin/portal
+  Defined: com/bsc/api/sms
+  Defined: com/fortinet/fortinac/filter
+  Defined: com/bsc/plugin/guest
+  Defined: com/bsc/api/client
+  Defined: com/bsc/servlet/radius
+  Defined: com/bsc/api/customHealthCheck
+  Defined: com/bsc/grpc/globalobject
+  Defined: com/bsc/api/profile
+  Defined: com/bsc/plugin/l3discovery
+  Defined: com/bsc/api/inventory
+  Defined: com/bsc/license/dto
+  Defined: com/bsc/plugin/iprange
+  Defined: com/fortinet/fortinac/controller
+  Defined: com/bsc/plugin/server
+  Defined: com/bsc/dpc/dhcp
+  Defined: com/bsc/api/mapping
+  Defined: com/bsc/api/rtr
+  Defined: com/bsc/plugin/grpcserver
+  Defined: com/bsc/api/settings
+  Defined: com/fortinet/datatools/id
+  Defined: com/bsc/forwarding/mistCloud
+  Defined: com/bsc/plugin/dynamic
+  Defined: com/bsc/api/admingui
+  Defined: com/bsc/campusmgr/api
+  Defined: com/bsc/api/sharedclientfilter
+  Defined: com/bsc/plugin/event
+  Defined: com/bsc/plugin/persistence
+  Defined: com/fortinet/fortincm/dto
+  Defined: com/bsc/api/wireless
+  Defined: com/bsc/api/oauth
+  Defined: com/bsc/plugin/configuration
+  Defined: org/apache/commons/fileupload
+  Defined: com/bsc/api/addressing
+  Defined: device-support/src/main/java
+  Defined: com/bsc/platform/persistence
+  Defined: com/bsc/api/loglistener
+  Defined: com/bsc/api/template
+  Defined: com/bsc/bean/vulnerability
+  Defined: com/bsc/api/view
+  Defined: com/bsc/forwarding/host
+  Defined: com/bsc/plugin/alarm
+  Defined: com/bsc/servlet/search
+  Defined: com/bsc/plugin/admingui
+  Defined: com/bsc/api/devicetype
+  Defined: com/bsc/plugin/dhcp
+  Defined: com/bsc/api/statistics
+  Defined: com/bsc/rest/adapter
+  Defined: com/fortinet/datatools/ddata
+  Defined: com/bsc/api/filter
+  Defined: com/bsc/grpc/endpoint
+  Defined: com/bsc/api/sso
+  Defined: com/fortinet/fortincm/filter
+  Defined: com/bsc/plugin/validMAC
+  Defined: com/bsc/rest/permissions
+  Defined: com/bsc/campusmgr/service
+  Defined: com/bsc/api/authenticate
+  Defined: com/bsc/bean/dynamic
+  Defined: com/fortinet/fortincm/common
+  Defined: com/bsc/plugin/remediation
+  Defined: com/bsc/plugin/device
+  Defined: com/bsc/plugin/log
+  Defined: com/bsc/plugin/report
+  Defined: com/bsc/license/common
+  Defined: com/bsc/api/autocomplete
+  Defined: test/com/fortinet/api
+  Defined: com/fortinet/nac/enforcement
+  Defined: com/fortinac/openapi/fndn
+  Defined: com/bsc/plugin/probe
+  Defined: com/bsc/rest/messagingGateway
+  Defined: com/bsc/plugin/scheduler
+  Defined: com/bsc/api/serverutil
+  Defined: com/fortinet/nac/evaluation
+  Defined: com/bsc/servlet/util
+  Defined: com/bsc/util/firmware
+  Defined: com/bsc/plugin/gcmserver
+  Defined: com/bsc/api/sizing
+  Defined: com/bsc/plugin/platform
+  Defined: com/fortinet/fortinac/portal
+  Defined: com/bsc/api/snmp
+  Defined: com/bsc/api/fgd
+  Defined: com/bsc/grpc/healthcheck
+  Defined: com/bsc/api/dhcp
+  Defined: com/bsc/servlet/portal
+  Defined: com/bsc/plugin/securityDB
+  Defined: com/bsc/plugin/customHealthCheck
+  Defined: com/bsc/util/profiling
+  Defined: com/bsc/plugin/rtr
+  Defined: com/bsc/api/analytics
+  Defined: com/bsc/plugin/stats
+  Defined: com/bsc/api/certificate
+  Defined: com/bsc/servlet/permissions
+  Defined: com/bsc/plugin/resource
+  Defined: com/bsc/plugin/analytics
+  Defined: com/bsc/plugin/rest
+  Defined: com/bsc/servlet/rpc
+  Defined: firmware.2/bsc/services/tomcat-portal
+  Defined: com/bsc/plugin/usermanager
+  Defined: com/bsc/util/builders
+  Defined: com/bsc/api/cache
+  Defined: com/fortinet/api/cli
+  Defined: com/bsc/plugin/task
+  Defined: com/bsc/plugin/serverutil
+  Defined: com/bsc/plugin/port
+  Defined: com/bsc/plugin/agentupdate
+  Defined: com/bsc/portal/jspc
+  Defined: com/bsc/plugin/packeteer
+  Defined: com/bsc/plugin/aaa
+  Defined: com/bsc/plugin/security
+  Defined: com/bsc/grpc/ncmcaconfig
+  Defined: com/bsc/plugin/patchLink
+  Defined: com/bsc/api/backgroundTask
+  Defined: com/bsc/servlet/shell
+  Defined: com/fortinet/api/terraform
+  Defined: com/bsc/plugin/cache
+  Defined: com/bsc/plugin/messagingGateway
+  Defined: com/bsc/plugin/role
+  Defined: com/bsc/plugin/sizing
+  Defined: com/bsc/api/csf
+  Defined: com/bsc/plugin/relation
+  Defined: com/bsc/plugin/autocomplete
+  Defined: com/bsc/plugin/sshkeymanagement
+  Defined: com/fortinac/javascript/jscomp
+  Defined: com/bsc/plugin/policyhelper
+  Defined: firmware.2/bsc/services/tomcat-admin
+  Defined: com/bsc/plugin/interfacemanager
+  Defined: com/bsc/server/util
+  Defined: com/bsc/api/host
+  Defined: com/bsc/util/ncmcluster
+  Defined: com/bsc/plugin/squid
+  Defined: com/bsc/servlet/dynamic
+  Defined: com/bsc/plugin/bigFix
+  Defined: com/fortinet/fortincm/util
+  Defined: com/bsc/ui/common
+  Defined: com/bsc/api/remoteAccess
+  Defined: com/bsc/plugin/devicetype
+  Defined: com/bsc/plugin/option
+  Defined: com/bsc/plugin/database
+  Defined: com/bsc/plugin/ipserver
+  Defined: com/bsc/plugin/user
+  Defined: com/bsc/plugin/loginagent
+  Defined: com/bsc/plugin/terraform
+  Defined: com/bsc/plugin/ping
+  Defined: com/bsc/plugin/alarmmanager
+  Defined: com/bsc/plugin/fiberlink
+  Defined: com/bsc/plugin/citrix
+  Defined: com/bsc/plugin/remote
+  Defined: common/src/main/java
+  Defined: com/lowagie/text/rtf
+  Defined: com/bsc/plugin/agentmanagement
+  Defined: com/bsc/plugin/fwupgrade
+  Defined: com/bsc/plugin/wireless
+  Defined: com/bsc/plugin/mgmtapi
+  Defined: com/bsc/servlet/messagingGateway
+
+315 modules defined.
+
+Temper initialized at /Users/zliu/IdeaProjects/FortiNAC/.temper
+Use `temper modules` to list modules, `temper search` to search code.

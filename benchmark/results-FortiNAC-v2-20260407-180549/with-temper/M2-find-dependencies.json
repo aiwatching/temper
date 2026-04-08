@@ -1,0 +1,13 @@
+{
+  "test_id": "M2-find-dependencies",
+  "mode": "with-temper",
+  "duration_ms": 43148,
+  "duration_api_ms": 41564,
+  "num_turns": 10,
+  "total_cost_usd": 0.3145575,
+  "input_tokens": 7,
+  "output_tokens": 1434,
+  "cache_read_tokens": 148420,
+  "is_error": false,
+  "exit_code": 0
+}

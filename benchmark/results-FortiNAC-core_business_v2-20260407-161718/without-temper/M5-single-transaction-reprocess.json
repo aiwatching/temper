@@ -1,0 +1,13 @@
+{
+  "test_id": "M5-single-transaction-reprocess",
+  "mode": "without-temper",
+  "duration_ms": 31718,
+  "duration_api_ms": 30741,
+  "num_turns": 3,
+  "total_cost_usd": 0.161402,
+  "input_tokens": 5,
+  "output_tokens": 1136,
+  "cache_read_tokens": 62854,
+  "is_error": false,
+  "exit_code": 0
+}

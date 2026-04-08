@@ -1,0 +1,12 @@
+{
+  "test_id": "T4-constraint-dao-cache",
+  "mode": "without-temper",
+  "duration_ms": 20457,
+  "duration_api_ms": 20376,
+  "num_turns": 6,
+  "total_cost_usd": 0.1021415,
+  "input_tokens": 7,
+  "output_tokens": 690,
+  "cache_read_tokens": 80638,
+  "exit_code": 1
+}

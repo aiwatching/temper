@@ -1,0 +1,39 @@
+[package]
+name = "temper"
+version = "0.1.1"
+edition = "2021"
+description = "Forged memory for your code — persistent memory and code understanding for Claude Code"
+license = "MIT"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+
+# AST Parsing
+tree-sitter = "0.24"
+tree-sitter-java = "0.23"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Git
+git2 = "0.19"
+
+# Glob matching
+globset = "0.4"
+
+# Async (for MCP server)
+tokio = { version = "1", features = ["full"] }
+
+# HTTP (for embedding API)
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+
+# Utilities
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }

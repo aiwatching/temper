@@ -1,0 +1,16 @@
+No errors in EntityStateMachine. The pre-existing errors are in unrelated files (`RedisStreamBacklogMetrics`, `IngestionRequestValidator`).
+
+## Summary
+
+Two bugs in `EntityStateMachine.processStage()`:
+
+**Bug 1 — Uncaught exceptions leave entities permanently stuck** (the main issue you're seeing):
+- When `txRunner::runPolicy` throws a RuntimeException (NPE, connection error, etc.), it propagates out of `processStage()`, skipping the DB update entirely
+- Entity stays at `LABELED` with `processingCode=0` forever
+- Recovery job finds it, retries, same exception → infinite loop
+- **Fix**: Wrap `serviceFunction.apply(dto)` in try-catch, converting exceptions to `SYSTEM_ERROR (-1)`, which triggers the retry mechanism. After 3 retries, the error code is persisted and the entity is marked as failed.
+
+**Bug 2 — Stage advances unconditionally, even on failure**:
+- `dto.setProcessingStage(nextStage)` ran regardless of success/failure
+- A failed policy evaluation would show `stage=EVALUATED, code=3200` — misleading since evaluation never succeeded
+- **Fix**: Only call `setProcessingStage(nextStage)` when `serviceSuccess=true`. Failed entities now stay at the stage where they failed (e.g., `LABELED` with `code=3200`), making it clear where the problem is.

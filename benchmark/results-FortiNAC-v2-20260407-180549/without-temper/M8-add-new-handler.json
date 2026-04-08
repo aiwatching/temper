@@ -1,0 +1,13 @@
+{
+  "test_id": "M8-add-new-handler",
+  "mode": "without-temper",
+  "duration_ms": 70249,
+  "duration_api_ms": 67087,
+  "num_turns": 16,
+  "total_cost_usd": 0.44171749999999993,
+  "input_tokens": 1717,
+  "output_tokens": 3365,
+  "cache_read_tokens": 321165,
+  "is_error": false,
+  "exit_code": 0
+}

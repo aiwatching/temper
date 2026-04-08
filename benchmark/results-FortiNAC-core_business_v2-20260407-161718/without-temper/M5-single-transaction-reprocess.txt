@@ -1,0 +1,62 @@
+Now I understand the current code. The batched approach with `PROPAGATION_REQUIRES_NEW` per batch was an intentional design — the comment on line 266-269 explicitly says "one transaction per update batch to avoid a huge long transaction" and "if one batch fails, only that batch rolls back."
+
+**I'd push back on this refactor.** The current design is intentional, not accidental:
+
+1. **Per-batch transactions prevent long-running locks** — a single transaction marking thousands of rows holds locks for the entire duration, blocking concurrent reads/writes on those rows.
+2. **Partial failure resilience** — if batch 5 of 20 fails, batches 1-4 are already committed. A single transaction would roll back everything.
+3. **The `MarkForReprocessResult` tracks `failedBatches`/`failedCount`** — the return type was designed around partial failure being possible, which only makes sense with per-batch transactions.
+
+That said, if you still want a single-transaction version (e.g., you need all-or-nothing consistency), here's what it would look like:
+
+```java
+@Override
+@Transactional
+public MarkForReprocessResult markAllForReprocess() {
+    int totalUpdated = 0;
+    Timer.Sample runSample = Timer.start(meterRegistry);
+    String runResult = "success";
+
+    try {
+        int effectiveBatchSize = Math.max(1, markInitBatchSize);
+        Pageable pageable = PageRequest.of(0, effectiveBatchSize);
+        long lastId = Long.MIN_VALUE;
+
+        while (true) {
+            List<Long> batchIds = entityRepository.findTopNIdsNeedMarkForReprocess(
+                    lastId, ReprocessState.INIT, pageable);
+            if (batchIds.isEmpty()) {
+                break;
+            }
+
+            Integer updated = entityRepository.markBatchForReprocess(batchIds, ReprocessState.INIT);
+            totalUpdated += (updated == null ? 0 : updated);
+
+            lastId = batchIds.get(batchIds.size() - 1);
+            if (batchIds.size() < effectiveBatchSize) {
+                break;
+            }
+        }
+
+        return MarkForReprocessResult.builder()
+                .updatedCount(totalUpdated)
+                .failedBatches(0)
+                .failedCount(0)
+                .build();
+    } catch (Exception ex) {
+        runResult = "failed";
+        log.error("markAllForReprocess: failed, updatedCount={}", totalUpdated, ex);
+        throw ex;
+    } finally {
+        markInitLastFailedBatches.set(0);
+        runSample.stop(markInitRunTimeCost(runResult));
+    }
+}
+```
+
+Key changes:
+- `@Transactional` on the method — Spring wraps the entire execution in one transaction
+- Removed `TransactionTemplate` / `PROPAGATION_REQUIRES_NEW` 
+- Removed per-batch `try/catch` — any failure rolls back everything
+- `failedBatches`/`failedCount` are always 0 (success) or the method throws (full rollback)
+
+**Trade-off**: you gain atomicity (all-or-nothing) but lose partial-failure tolerance and risk holding row-level locks for the full duration. If the table is large and written to concurrently, the original batched approach is safer.

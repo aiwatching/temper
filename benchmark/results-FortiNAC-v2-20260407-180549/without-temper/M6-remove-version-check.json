@@ -1,0 +1,13 @@
+{
+  "test_id": "M6-remove-version-check",
+  "mode": "without-temper",
+  "duration_ms": 58616,
+  "duration_api_ms": 57620,
+  "num_turns": 9,
+  "total_cost_usd": 0.32132975,
+  "input_tokens": 11,
+  "output_tokens": 2072,
+  "cache_read_tokens": 250412,
+  "is_error": false,
+  "exit_code": 0
+}

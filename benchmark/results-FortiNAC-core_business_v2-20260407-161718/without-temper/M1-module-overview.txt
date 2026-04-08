@@ -1,0 +1,99 @@
+## Ingestion Module in `core_business_v2`
+
+### Location
+`/Users/zliu/IdeaProjects/FortiNAC/core_business_v2/ingestion`
+
+### Package Structure
+- `controller/` — REST endpoints
+- `consumer/` — Redis stream consumers + state machine + orchestrator + handlers
+- `service/stages/` — Business logic per processing stage
+- `entity/` — JPA entities
+- `repository/` — DB access
+- `dto/` — Data transfer objects
+- `registry/` — Callback and processing registries
+- `config/`, `util/`, `job/`, `delayqueue/`
+
+---
+
+### REST Endpoints
+
+| Controller | Path | Method | Purpose |
+|---|---|---|---|
+| **IngestionController** | `POST /api/v1/ingestion/events` | `ingestEvent()` | Main entry — publishes to Redis stream, registers callback with 60s timeout, returns result reactively |
+| | `GET /api/v1/ingestion/health-check` | | Health probe |
+| **EntityController** | `POST /api/v1/entities/query` | `queryFailedEntities()` | Query entities with filtering/pagination |
+| | `GET /api/v1/entities/{id}` | | Get entity by ID |
+| | `GET /api/v1/entities/{id}/display-status` | | Display status (init/running/enforced/failed) |
+| **PolicyController** | `POST /api/v1/policy/apply-existing-entities` | `applyExistingEntities()` | Mark all entities for reprocessing |
+| **FingerprintController** | `POST /api/v1/fingerprint/calculate` | `calc()` | Compute attribute fingerprint |
+
+---
+
+### State Machine (`EntityStateMachine`)
+
+Four stages driven by `EntityStage` enum:
+
+```
+PENDING  →  LABELED  →  EVALUATED  →  ENFORCED
+   │            │            │
+   ▼            ▼            ▼
+LabelService  PolicyService  EnforcementService
+```
+
+Each stage:
+- Wrapped in `@Transactional` via `EntityStageTransactionRunner`
+- Up to **3 retries** with exponential backoff + jitter (1s × attempt + random 0–99ms)
+- Error codes determine retryability: `21xx`/`31xx`/`41xx` = retryable, `22xx`/`32xx`/`42xx` = permanent failure
+- DB state updated after each stage completes
+
+---
+
+### End-to-End Request Flow
+
+```
+REST POST /api/v1/ingestion/events
+    │
+    ▼
+IngestionController
+    ├── Register CompletableFuture in IngestionCallbackRegistry
+    └── Publish to Redis INGESTION_INTERNAL_STREAM
+            │
+            ▼
+IngestionInternalConsumer (Redis stream listener)
+            │
+            ▼
+IngestionOrchestrator.process()
+    ├── Cache lookup (Redis) → hit? → CachedExistingEntityHandler
+    ├── Miss → acquire distributed create lock
+    │       ├── Lock acquired → DB lookup
+    │       │     ├── Found → DbExistingEntityHandler
+    │       │     └── Not found → NewEntityHandler
+    │       └── Lock not acquired → requeue with backoff (2s,4s,8s,16s,32s; max 5)
+    │
+    ▼
+Handler (New or Existing)
+    ├── Validate referenced entities (Host/Adapter/User)
+    ├── Create/update Entity in DB (state = PENDING)
+    ├── Cache entity ID in Redis
+    ├── Acquire distributed process lock
+    └── Start EntityStateMachine.start()
+            │
+            ▼
+        PENDING → LabelService.label()   → LABELED
+        LABELED → PolicyService.evaluate() → EVALUATED
+        EVALUATED → EnforcementService.enforce() → ENFORCED
+            │
+            ▼
+        IngestionCallbackRegistry.complete(requestId, result)
+            │
+            ▼
+        CompletableFuture resolves → REST response returned
+```
+
+### Key Design Patterns
+
+- **Distributed locking** (Redis): separate create-lock and process-lock prevent duplicate entity creation and concurrent state machine execution
+- **Attribute fingerprinting**: deduplicates identical requests; `FingerprintCase` enum determines behavior based on fingerprint match × lock status (SAME_ATTR_LOCK, DIFF_ATTR_LOCK, etc.)
+- **Callback registry**: `CompletableFuture`-based with timeout auto-cleanup — bridges async Redis consumer back to synchronous REST response
+- **Transaction isolation**: each stage runs in its own `@Transactional`; state updates use `REQUIRES_NEW` propagation so they commit even if the outer tx fails
+- **External → Internal queue**: `IngestionExternalConsumer` validates and forwards to internal stream, separating ingress concerns from business logic

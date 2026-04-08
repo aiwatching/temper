@@ -1,0 +1,7 @@
+**No module outside of `ingestion` depends on it.** The `ingestion` module is a **leaf module** — it is:
+
+- Listed as a `<module>` in the parent `core_business_v2/pom.xml`
+- Never declared as a `<dependency>` in any sibling module's pom.xml
+- Its package `com.fortinet.nac.ingestion` is not imported by any code outside `core_business_v2/ingestion/`
+
+The only external reference is a comment in `core_business_v2/classification/pom.xml` mentioning ingestion as a potential consumer of classification's library JAR, but classification does not actually depend on ingestion — it's the reverse direction (ingestion might depend on classification).

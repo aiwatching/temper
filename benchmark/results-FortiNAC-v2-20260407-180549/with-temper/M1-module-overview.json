@@ -1,0 +1,13 @@
+{
+  "test_id": "M1-module-overview",
+  "mode": "with-temper",
+  "duration_ms": 238358,
+  "duration_api_ms": 233852,
+  "num_turns": 2,
+  "total_cost_usd": 0.6332057,
+  "input_tokens": 4,
+  "output_tokens": 1597,
+  "cache_read_tokens": 36939,
+  "is_error": false,
+  "exit_code": 0
+}

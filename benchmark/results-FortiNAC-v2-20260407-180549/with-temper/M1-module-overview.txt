@@ -1,0 +1,88 @@
+## core_business_v2/ingestion Module Overview
+
+### REST Endpoints (4 controllers)
+
+| Controller | Method | Path | Purpose |
+|---|---|---|---|
+| **IngestionController** | `POST` | `/api/v1/ingestion/events` | Main ingestion entry point |
+| | `GET` | `/api/v1/ingestion/health-check` | Health check |
+| **EntityController** | `POST` | `/api/v1/entities/query` | Query failed entities (paginated) |
+| | `GET` | `/api/v1/entities/{id}` | Get entity by ID |
+| | `GET` | `/api/v1/entities/{id}/display-status` | Get display status |
+| **FingerprintController** | `POST` | `/api/v1/fingerprint/calculate` | Calculate entity fingerprint |
+| **PolicyController** | `POST` | `/api/v1/policy/apply-existing-entities` | Mark all entities for policy reprocessing |
+
+### Request Processing Flow
+
+```
+POST /api/v1/ingestion/events
+    │
+    ▼
+IngestionController
+    ├── Generate requestId (16-char hex)
+    ├── Register callback (CompletableFuture with 60s timeout)
+    ├── Publish to Redis INGESTION_INTERNAL_STREAM
+    └── Return Mono<ResultDTO> (reactive, non-blocking)
+    │
+    ▼
+IngestionInternalConsumer (Redis Stream consumer group, 16 consumers × 32 workers)
+    ├── Parse IngestionRequest from stream
+    └── Call IngestionOrchestrator.process()
+    │
+    ▼
+IngestionOrchestrator (routing logic)
+    ├── Check EntityCache (Redis) for existing entity
+    │   ├── CACHE HIT → CachedExistingEntityHandler
+    │   └── CACHE MISS → Acquire CREATE_LOCK
+    │       ├── Query DB
+    │       │   ├── Found → DbExistingEntityHandler
+    │       │   └── Not found → NewEntityHandler
+    │       └── Lock failure → Requeue with exponential backoff
+    │
+    ▼
+Handler Selection (fingerprint-based for existing entities):
+    ├── NewEntityHandler: create entity, cache, acquire PROCESS_LOCK, run state machine
+    ├── SameAttr + Lock: return entity as-is (no reprocessing needed)
+    ├── SameAttr + NoLock: poll every 500ms until other request completes
+    ├── DiffAttr + Lock: reset to PENDING, re-run state machine
+    └── DiffAttr + NoLock: interrupt running SM, acquire lock, reset, re-run
+    │
+    ▼
+EntityStateMachine.start()
+    ├── PENDING  → LabelService.label()      → LABELED
+    ├── LABELED  → PolicyService.evaluate()   → EVALUATED
+    ├── EVALUATED → EnforcementService.enforce() → ENFORCED
+    └── Each stage: max 3 retries, backoff 1-3s + jitter, separate @Transactional
+    │
+    ▼
+IngestionCallbackRegistry.complete(requestId, result)
+    └── CompletableFuture resolves → REST response returned to caller
+```
+
+### State Machine (EntityStateMachine)
+
+**States**: `PENDING` → `LABELED` → `EVALUATED` → `ENFORCED`
+
+Each transition:
+- Wrapped in its own `@Transactional` via `EntityStageTransactionRunner`
+- Max 3 retries with increasing backoff (1s, 2s, 3s + jitter)
+- Distinguishes retryable vs non-retryable error codes
+- Checks `interrupted` flag between stages (allows preemption by newer requests)
+- Persists stage progress to DB after each successful transition
+- Merges stage results into a cumulative JSON `processingResult`
+- Has failpoints (`SM_BEFORE_SERVICE_*`, `SM_AFTER_SERVICE_*`) for crash testing
+
+### Key Architectural Patterns
+
+1. **Redis Streams** for reliable message delivery (external → internal pipeline)
+2. **Distributed locks** (CREATE_LOCK + PROCESS_LOCK) for concurrency control
+3. **Fingerprint-based routing** — SHA256 of ~40 host fields + ~35 user fields determines if entity attributes changed
+4. **Callback registry** bridges async stream processing back to synchronous REST responses
+5. **Version ordering** via Redis stream IDs to skip stale requests
+6. **Interrupt mechanism** — newer requests with different attributes can preempt running state machines
+7. **Recovery service** — scheduled scan finds stuck entities (non-ENFORCED, code=0, stale timestamp) and retriggers them
+8. **Policy reprocess job** — scheduled + event-driven scan marks entities as INIT for bulk re-evaluation
+
+### Entity Model
+
+The core `Entity` table tracks: type (HOST or USER_HOST_BINDING), identity keys (hostId, userId, adapterId), processing state (stage + code + errorMessage + JSON result), attribute fingerprint (SHA256), version (stream ID), interrupted flag, and reprocess state.

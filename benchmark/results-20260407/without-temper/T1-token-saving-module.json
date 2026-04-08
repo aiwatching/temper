@@ -1,0 +1,6 @@
+{
+  "test_id": "T1-token-saving-module",
+  "mode": "without-temper",
+  "duration_ms": 14315,
+  "exit_code": 0
+}

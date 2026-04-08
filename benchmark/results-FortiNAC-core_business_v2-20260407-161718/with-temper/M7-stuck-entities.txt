@@ -1,0 +1,76 @@
+
+
+Now I have a clear picture of the flow. Here's the analysis:
+
+## Root Cause: Stale Cache Serving Mid-Processing Entities
+
+The bug is in the interaction between **EntityCache** and **SameAttributesWithLockAcquiredHandler**.
+
+### The Stuck Scenario
+
+1. Entity is created, enters the state machine, completes PENDING → **LABELED** stage
+2. During the LABELED → EVALUATED transition, `txRunner::runPolicy` throws an exception or the process crashes (e.g., OOM, pod restart)
+3. The entity is now persisted in DB with `processingStage=LABELED`, `processingCode=0`
+4. The **Redis cache still holds the full Entity object** with `processingStage=LABELED`
+5. A new request arrives for the same entity with the **same fingerprint**
+6. Cache HIT → `CachedExistingEntityHandler` → fingerprint matches + lock acquired → **`SameAttributesWithLockAcquiredHandler`**
+7. `SameAttributesWithLockAcquiredHandler` **just returns the cached entity as-is** — it never re-enters the state machine
+
+The entity is stuck at LABELED forever because:
+- **Same fingerprint + lock acquired** is treated as "nothing changed, already processed" — but it hasn't finished
+- The cache TTL keeps the stale LABELED entity alive
+- No recovery mechanism re-drives entities stuck in intermediate stages
+
+### Secondary Issue: `SameAttributesWithLockNotAcquiredHandler`
+
+This handler polls waiting for ENFORCED, but with a 60s timeout. If the entity is genuinely stuck (no one is processing it), it times out and returns an error — but doesn't trigger reprocessing either.
+
+### The Fix
+
+**`SameAttributesWithLockAcquiredHandler`** must check whether the entity has actually completed processing before returning early. If it's in an intermediate stage (PENDING, LABELED, EVALUATED) with `processingCode=0`, it should **resume the state machine** rather than return.
+
+Here's the key change needed in `SameAttributesWithLockAcquiredHandler`:
+
+```java
+// Current (buggy): unconditionally returns
+return StatusOr.ok(e);
+
+// Fixed: resume if entity is in an intermediate stage
+EntityStage stage = EntityStage.valueOf(e.getProcessingStage().toUpperCase());
+if (stage != EntityStage.ENFORCED && e.getProcessingCode() == 0) {
+    // Entity didn't finish — resume the state machine
+    return stateMachine.start(req.getRequestId(), req.isAsync(), e);
+}
+return StatusOr.ok(e);
+```
+
+The same logic should apply in `SameAttributesWithLockNotAcquiredHandler` — after the poll timeout, if the entity is still in an intermediate stage, it should attempt to acquire the lock and resume rather than just returning an error.
+
+### Additional Safeguard: Cache Invalidation
+
+The cache in `EntityCache.cacheEntity()` stores the entity at creation time with stage=PENDING. As the state machine progresses, **the cache is never updated**. Consider either:
+
+1. **Invalidating/updating the cache** after each stage transition in `updateDBEntityProcessingState()`, or
+2. **Not caching entities until they reach ENFORCED** (terminal state)
+
+Option 2 is simpler and safer — only cache completed entities:
+
+```java
+// In NewEntityHandler and the orchestrator's DB-lookup path:
+// Only cache after state machine completes with ENFORCED
+StatusOr<Entity> result = stateMachine.start(...);
+if (result.ok() && EntityStage.ENFORCED.toString()
+        .equals(result.getData().getProcessingStage())) {
+    entityCache.cacheEntity(key, result.getData(), ttl);
+}
+```
+
+### Summary
+
+| Problem | Where | Fix |
+|---------|-------|-----|
+| Same-fingerprint + lock returns stale entity without checking stage | `SameAttributesWithLockAcquiredHandler` | Check stage, resume state machine if not ENFORCED |
+| Cache stores incomplete entities | `NewEntityHandler`, `IngestionOrchestrator` | Only cache entities that reached ENFORCED |
+| No recovery for orphaned intermediate entities | System-wide | Consider a periodic sweep that re-drives entities stuck in non-terminal stages beyond a TTL |
+
+Want me to implement these fixes?

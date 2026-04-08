@@ -1,0 +1,6 @@
+{
+  "test_id": "T5-constraint-token-security",
+  "mode": "with-temper",
+  "duration_ms": 14274,
+  "exit_code": 0
+}
