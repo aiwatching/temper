@@ -46,6 +46,10 @@ impl EmbeddingClient {
         }))
     }
 
+    pub fn model_name(&self) -> String {
+        self.model.clone()
+    }
+
     /// Generate embedding for a text string.
     pub fn embed(&self, text: &str) -> Result<Vec<f32>> {
         let texts = vec![text.to_string()];

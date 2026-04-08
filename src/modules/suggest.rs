@@ -10,6 +10,9 @@ pub struct ModuleSuggestion {
     pub file_count: usize,
 }
 
+const MIN_FILES_PER_MODULE: usize = 5;
+const MAX_SUGGESTIONS: usize = 30;
+
 /// Analyze project file paths and suggest module boundaries.
 /// For Java: finds the optimal package split level where hierarchy diverges most.
 pub fn suggest_modules(files: &[String]) -> Vec<ModuleSuggestion> {
@@ -135,7 +138,7 @@ fn find_optimal_split(packages: &[PackageInfo], all_files: &[String]) -> Vec<Mod
 
     let mut suggestions: Vec<ModuleSuggestion> = groups
         .into_iter()
-        .filter(|(_, files)| !files.is_empty())
+        .filter(|(_, files)| files.len() >= MIN_FILES_PER_MODULE)
         .map(|(group_key, group_files)| {
             let segments: Vec<&str> = group_key.split('/').collect();
 
@@ -173,6 +176,7 @@ fn find_optimal_split(packages: &[PackageInfo], all_files: &[String]) -> Vec<Mod
         .collect();
 
     suggestions.sort_by(|a, b| b.file_count.cmp(&a.file_count));
+    suggestions.truncate(MAX_SUGGESTIONS);
     suggestions
 }
 

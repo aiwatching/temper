@@ -145,15 +145,31 @@ impl CodeGraph {
         }
     }
 
+    /// Load graph — tries binary first (fast), falls back to JSON (compatible).
     pub fn load(path: &Path) -> Result<Self> {
+        let bin_path = path.with_extension("bin");
+        if bin_path.exists() {
+            let data = std::fs::read(&bin_path)
+                .with_context(|| format!("Failed to read graph: {}", bin_path.display()))?;
+            return bincode::deserialize(&data)
+                .with_context(|| "Failed to parse graph.bin");
+        }
+
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read graph: {}", path.display()))?;
         serde_json::from_str(&content).with_context(|| "Failed to parse graph.json")
     }
 
+    /// Save graph — writes both binary (fast load) and JSON (human-readable).
     pub fn save(&self, path: &Path) -> Result<()> {
-        let content = serde_json::to_string(self)?;
-        std::fs::write(path, content)?;
+        // Binary format (fast)
+        let bin_path = path.with_extension("bin");
+        let bin_data = bincode::serialize(self)?;
+        std::fs::write(&bin_path, bin_data)?;
+
+        // JSON format (human-readable, backward compatible)
+        let json_data = serde_json::to_string(self)?;
+        std::fs::write(path, json_data)?;
         Ok(())
     }
 

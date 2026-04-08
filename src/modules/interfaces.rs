@@ -83,13 +83,51 @@ pub fn scan_module_interfaces(
         extract_interfaces(tree.root_node(), &content, &mut exposes);
     }
 
+    // Auto-fill depends_on by analyzing imports against other modules
+    let all_modules = registry.list_modules()?;
+    let mut depends_on = Vec::new();
+
+    // Collect all import targets from this module's files
+    let graph_path = project_path.join(".temper").join("graph.json");
+    if let Ok(graph) = crate::graph::CodeGraph::load(&graph_path) {
+        // Get imports from this module's files
+        for file_path in &files {
+            let imports: Vec<_> = graph.edges.iter()
+                .filter(|e| e.from == *file_path && e.edge_type == crate::graph::EdgeType::Imports)
+                .collect();
+
+            for import_edge in imports {
+                // Check which module the imported file belongs to
+                for other_module in &all_modules {
+                    if other_module.name == module_name {
+                        continue;
+                    }
+                    if let Ok(other_files) = registry.resolve_files(other_module) {
+                        if other_files.iter().any(|f| import_edge.to.contains(f.as_str()) || f.contains(&import_edge.to)) {
+                            let detail = import_edge.detail.as_deref().unwrap_or("").to_string();
+                            // Avoid duplicates
+                            if !depends_on.iter().any(|d: &Dependency| d.module == other_module.name && d.class == detail) {
+                                depends_on.push(Dependency {
+                                    module: other_module.name.clone(),
+                                    class: detail,
+                                    method: String::new(),
+                                    usage: format!("imported by {}", file_path),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(ModuleInterface {
         module: module_name.to_string(),
         generated_at: chrono::Utc::now().format("%Y-%m-%d").to_string(),
         verified: false,
         exposes,
-        depends_on: Vec::new(),
-        depended_by: Vec::new(),
+        depends_on,
+        depended_by: Vec::new(), // Filled when scanning OTHER modules that depend on this one
     })
 }
 

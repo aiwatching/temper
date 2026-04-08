@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use crate::graph::{CodeEdge, CodeGraph, CodeNode};
 
 mod java;
+mod python;
+mod typescript;
 
 /// Source file scanner — finds files and orchestrates parsing.
 pub struct Scanner {
@@ -211,8 +213,9 @@ fn parse_file(
 
     match ext.as_str() {
         "java" => java::parse_java(full_path, rel_path, module),
-        // Future: "py" => python::parse_python(full_path, rel_path, module),
-        // Future: "ts" | "tsx" | "js" | "mjs" => ts::parse_ts(full_path, rel_path, module),
+        "py" => python::parse_python(full_path, rel_path, module),
+        "ts" | "tsx" => typescript::parse_typescript(full_path, rel_path, module),
+        "js" | "mjs" => typescript::parse_typescript(full_path, rel_path, module),
         _ => Ok((Vec::new(), Vec::new())),
     }
 }

@@ -395,6 +395,22 @@ impl McpServer {
                         },
                         "required": ["module"]
                     }
+                },
+                {
+                    "name": "refresh_modules",
+                    "description": "Scan project for new package structures and suggest new modules. Does not modify existing modules. Only suggests — user must confirm.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
+                },
+                {
+                    "name": "validate_modules",
+                    "description": "Check all module definitions for issues: glob patterns that match no files, stale interfaces, missing paths.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {}
+                    }
                 }
             ]
         }))
@@ -422,6 +438,8 @@ impl McpServer {
             "get_constraints" => self.tool_get_constraints(&args),
             "search_knowledge" => self.tool_search_knowledge(&args),
             "scan_module_interfaces" => self.tool_scan_module_interfaces(&args),
+            "refresh_modules" => self.tool_refresh_modules(&args),
+            "validate_modules" => self.tool_validate_modules(&args),
             _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_name)),
         }
     }
@@ -868,6 +886,18 @@ impl McpServer {
         };
 
         let id = self.store.remember(entry)?;
+
+        // Auto-generate embedding if API is configured
+        if let Ok(Some(client)) = storage::EmbeddingClient::from_config() {
+            let emb_store = storage::EmbeddingStore::new(self.store.connection());
+            let _ = emb_store.init_schema();
+            let embed_text = format!("{} {}", title, content);
+            if let Ok(embedding) = client.embed(&embed_text) {
+                let _ = emb_store.store(&id, "knowledge", &embedding, &client.model_name());
+                eprintln!("[temper] Embedding generated for {}", id);
+            }
+        }
+
         let file_info = args.get("file").and_then(|v| v.as_str())
             .map(|f| format!(" → {}", f))
             .unwrap_or_default();
@@ -1136,6 +1166,101 @@ impl McpServer {
         Ok(json!({
             "content": [{ "type": "text", "text": lines.join("\n\n") }]
         }))
+    }
+
+    fn tool_refresh_modules(&mut self, _args: &Value) -> Result<Value> {
+        let graph = self.ensure_graph()?;
+        let files = graph.files.clone();
+        let existing = {
+            let temper = self.temper_dir();
+            let registry = crate::modules::ModuleRegistry::new(&temper, files.clone());
+            registry.list_modules()?.iter().map(|m| m.name.clone()).collect::<Vec<_>>()
+        };
+
+        let suggestions = crate::modules::suggest_modules(&files);
+
+        // Filter out already-defined modules
+        let new_suggestions: Vec<_> = suggestions
+            .iter()
+            .filter(|s| !existing.iter().any(|e| e == &s.name))
+            .collect();
+
+        if new_suggestions.is_empty() {
+            return Ok(json!({
+                "content": [{ "type": "text", "text": "No new modules to suggest. All detected packages are already defined." }]
+            }));
+        }
+
+        let mut lines = vec![format!("Found {} new module candidates:\n", new_suggestions.len())];
+        for (i, s) in new_suggestions.iter().enumerate() {
+            lines.push(format!(
+                "{}. **{}** — {} ({} files)\n   paths: {:?}",
+                i + 1, s.name, s.description, s.file_count, s.paths
+            ));
+        }
+        lines.push("\nUse `define_module` to add any of these.".into());
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": lines.join("\n") }]
+        }))
+    }
+
+    fn tool_validate_modules(&mut self, _args: &Value) -> Result<Value> {
+        let graph = self.ensure_graph()?;
+        let files = graph.files.clone();
+        let temper = self.temper_dir();
+        let registry = crate::modules::ModuleRegistry::new(&temper, files);
+        let modules = registry.list_modules()?;
+
+        let mut issues = Vec::new();
+
+        for module in &modules {
+            // Check if glob matches any files
+            let matched = registry.file_count(module);
+            if matched == 0 {
+                issues.push(format!(
+                    "⚠️ **{}**: glob patterns match 0 files. Paths: {:?}",
+                    module.name, module.paths
+                ));
+            }
+
+            // Check if interface file exists and is fresh
+            if let Ok(Some(iface)) = crate::modules::load_interface(&temper, &module.name) {
+                // Simple staleness check: interface older than 7 days
+                if let Ok(gen_date) = chrono::NaiveDate::parse_from_str(&iface.generated_at, "%Y-%m-%d") {
+                    let today = chrono::Utc::now().date_naive();
+                    let age = today.signed_duration_since(gen_date).num_days();
+                    if age > 7 {
+                        issues.push(format!(
+                            "📅 **{}**: interface scanned {} days ago ({}). Consider running scan_module_interfaces.",
+                            module.name, age, iface.generated_at
+                        ));
+                    }
+                }
+            }
+
+            // Check for empty description
+            if module.description.is_empty() {
+                issues.push(format!("📝 **{}**: no description.", module.name));
+            }
+
+            // Check for no tags
+            if module.tags.is_empty() {
+                issues.push(format!("🏷️ **{}**: no tags (affects dimension auto-inference).", module.name));
+            }
+        }
+
+        if issues.is_empty() {
+            Ok(json!({
+                "content": [{ "type": "text", "text": format!("All {} modules are valid. No issues found.", modules.len()) }]
+            }))
+        } else {
+            let mut lines = vec![format!("Found {} issues across {} modules:\n", issues.len(), modules.len())];
+            lines.extend(issues);
+            Ok(json!({
+                "content": [{ "type": "text", "text": lines.join("\n") }]
+            }))
+        }
     }
 
     /// Proactive constraint injection: find constraints anchored to a file path.
