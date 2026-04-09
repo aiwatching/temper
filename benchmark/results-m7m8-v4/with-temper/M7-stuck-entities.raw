@@ -1,0 +1,54 @@
+{"type":"result","subtype":"success","is_error":false,"duration_ms":97187,"duration_api_ms":95687,"num_turns":14,"result":"Now I have the full picture. Here's the analysis:
+
+## Root Cause: Uncaught Exceptions in `processStage` 
+
+The bug is in `EntityStateMachine.processStage()` (line 144-213). The service call at **line 167** is **not wrapped in try-catch**:
+
+```java
+ObjectNode serviceResult = serviceFunction.apply(dto);  // line 167 — can throw!
+```
+
+When `txRunner::runPolicy` (which calls `policyService.evaluate(dto)`) throws an unchecked exception (NPE, timeout, Spring transaction exception, etc.):
+
+1. The exception escapes the for-loop — **lines 208-210 are never reached**
+2. `dto.setProcessingStage(nextStage)` never executes — stage stays LABELED
+3. `dto.setProcessingCode(code)` never executes — code stays **0**
+4. The exception propagates all the way out of `start()` (no catch block there either)
+
+The entity is left in DB as: `stage=LABELED, processingCode=0, stale updatedAt`.
+
+### Why Recovery Doesn't Fix It
+
+`StuckEntityRecoveryJob` **does** pick these up (its query matches `stage != ENFORCED AND code = 0 AND updatedAt < threshold`). But the recovery just re-runs `stateMachine.start()`, which hits the same exception again. The entity enters an **infinite recovery loop** — recovered every 30 seconds, failing the same way each time, never advancing or being marked as failed.
+
+### Contributing Factors
+
+- **`@Transactional` on `runPolicy`**: If the underlying service throws, Spring rolls back the transaction and re-throws an `UndeclaredThrowableException` or the original `RuntimeException` — neither is caught.
+- **Policy service errors**: The most likely culprits are `MasterLoader` connectivity issues (gRPC timeout → `StatusRuntimeException`), NPE on missing entity attributes, or classification/label data inconsistencies.
+
+## Fix
+
+Wrap the service call in `processStage` with a try-catch that converts exceptions into a failure result:
+
+```java
+// In processStage(), replace line 167:
+ObjectNode serviceResult;
+try {
+    serviceResult = serviceFunction.apply(dto);
+} catch (Exception ex) {
+    log.error(\"Stage [{}] threw exception on attempt {}, entityId={}: {}\",
+              nextStage, attempt, entityId, ex.getMessage(), ex);
+    serviceResult = objectMapper.createObjectNode();
+    serviceResult.put(\"code\", EntityProcessingCode.SYSTEM_ERROR);  // -1, retryable
+    serviceResult.put(\"errMessage\", ex.getClass().getSimpleName() + \": \" + ex.getMessage());
+}
+```
+
+This way:
+- Exceptions are converted to `code = -1` (SYSTEM_ERROR), which `isRetryableCode` returns `true` for
+- The 3-retry mechanism kicks in properly
+- After exhausting retries, `handleServiceFinalFailure` sets a non-zero `processingCode`
+- Lines 208-210 execute, persisting the failure state to DB
+- The entity is marked as failed (`code != 0`), so `StuckEntityRecoveryJob` skips it instead of looping
+
+Want me to apply this fix?","stop_reason":"end_turn","session_id":"c8f1d883-d20c-49df-8833-d4cb7ce480b2","total_cost_usd":0.50380225,"usage":{"input_tokens":1470,"cache_creation_input_tokens":43001,"cache_read_input_tokens":233392,"output_tokens":4440,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":43001,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard"},"modelUsage":{"claude-opus-4-6[1m]":{"inputTokens":1470,"outputTokens":4440,"cacheReadInputTokens":233392,"cacheCreationInputTokens":43001,"webSearchRequests":0,"costUSD":0.50380225,"contextWindow":1000000,"maxOutputTokens":64000}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","uuid":"bac75fd2-5e76-4131-8dcf-40b7df2a368b"}

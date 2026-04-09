@@ -87,6 +87,9 @@ pub enum Command {
     /// Project overview
     Status,
 
+    /// Show Temper usage statistics
+    Stats,
+
     /// Export visualization
     Export {
         /// Output format
@@ -151,6 +154,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Serve { path } => cmd_serve(path),
         Command::Scan { path, force } => cmd_scan(path, force),
         Command::Status => cmd_status(),
+        Command::Stats => cmd_stats(),
         Command::Search { query } => cmd_search(&query),
         Command::Modules { name, dimension } => cmd_modules(name, dimension),
         Command::Knowledge { module, entry_type } => cmd_knowledge(module, entry_type),
@@ -267,8 +271,120 @@ fn cmd_init(path: PathBuf) -> Result<()> {
         }
     }
 
+    // Auto-register MCP server for Claude Code
+    let project_str = project_path.to_string_lossy().to_string();
+    let mcp_config_path = project_path.join(".mcp.json");
+
+    // Read or create .mcp.json
+    let mut mcp_config: serde_json::Value = if mcp_config_path.exists() {
+        let content = std::fs::read_to_string(&mcp_config_path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Add temper MCP server
+    if mcp_config.get("mcpServers").is_none() {
+        mcp_config["mcpServers"] = serde_json::json!({});
+    }
+    mcp_config["mcpServers"]["temper"] = serde_json::json!({
+        "type": "stdio",
+        "command": "temper",
+        "args": ["serve", project_str]
+    });
+
+    std::fs::write(&mcp_config_path, serde_json::to_string_pretty(&mcp_config)?)?;
+    eprintln!("  .mcp.json — MCP server registered");
+
+    // Setup Claude Code hooks
+    let claude_dir = project_path.join(".claude");
+    let hooks_dir = claude_dir.join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+
+    // PreToolUse hook: inject constraints before Edit/Write
+    let hook_script = hooks_dir.join("temper-pre-edit.sh");
+    if !hook_script.exists() {
+        std::fs::write(&hook_script, r#"#!/bin/bash
+# Temper: inject constraints before Edit/Write
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)
+[ -z "$FILE_PATH" ] && exit 0
+DB=".temper/knowledge.db"
+[ ! -f "$DB" ] && exit 0
+CONSTRAINTS=$(sqlite3 "$DB" "SELECT type, title, content FROM knowledge WHERE status='active' AND type='constraint' AND (file LIKE '%${FILE_PATH}%' OR '${FILE_PATH}' LIKE '%' || file || '%') LIMIT 5;" 2>/dev/null)
+[ -z "$CONSTRAINTS" ] && exit 0
+jq -n --arg ctx "⚠️ TEMPER CONSTRAINTS for ${FILE_PATH}:
+${CONSTRAINTS}" '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":$ctx}}'
+exit 0
+"#)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook_script, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+
+    // Write .claude/settings.json with hooks
+    let settings_path = claude_dir.join("settings.json");
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = std::fs::read_to_string(&settings_path).unwrap_or_default();
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Add hooks if not already present
+    if settings.get("hooks").is_none() {
+        let hook_cmd = hook_script.to_string_lossy().to_string();
+        settings["hooks"] = serde_json::json!({
+            "PreToolUse": [
+                {
+                    "matcher": "Edit",
+                    "hooks": [{"type": "command", "command": hook_cmd, "timeout": 5}]
+                },
+                {
+                    "matcher": "Write",
+                    "hooks": [{"type": "command", "command": hook_cmd, "timeout": 5}]
+                }
+            ]
+        });
+    }
+
+    std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
+    eprintln!("  .claude/settings.json — PreToolUse hooks configured");
+    eprintln!("  .claude/hooks/temper-pre-edit.sh — constraint injection hook");
+
+    // Append Temper section to CLAUDE.md if not already present
+    let claudemd_path = project_path.join("CLAUDE.md");
+    let temper_marker = "## Temper — Project Memory";
+    let needs_append = if claudemd_path.exists() {
+        let content = std::fs::read_to_string(&claudemd_path).unwrap_or_default();
+        !content.contains(temper_marker)
+    } else {
+        true
+    };
+
+    if needs_append {
+        let section = format!("\n\n{}\n\n\
+This project uses Temper for persistent memory. Available tools:\n\
+- `get_module` — module context (files, interfaces, constraints)\n\
+- `search_code` — AST-based code search with impact chain\n\
+- `recall` — retrieve stored knowledge\n\
+- `get_patterns` — code patterns for writing new code\n\
+- `remember` — store constraints, decisions, experiences\n\
+- `search_symptom` — find past incidents by symptom\n\n\
+Use Temper tools before grep/glob for better results.\n", temper_marker);
+
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&claudemd_path)?;
+        std::io::Write::write_all(&mut file, section.as_bytes())?;
+        eprintln!("  CLAUDE.md — Temper section appended");
+    }
+
     eprintln!("\nTemper initialized at {}", temper.display());
-    eprintln!("Use `temper modules` to list modules, `temper search` to search code.");
+    eprintln!("Restart Claude Code to connect.");
     Ok(())
 }
 
@@ -778,6 +894,63 @@ fn cmd_sync(action: SyncAction) -> Result<()> {
         SyncAction::Push => eprintln!("Central sync not yet implemented (future)."),
         SyncAction::Pull => eprintln!("Central sync not yet implemented (future)."),
     }
+    Ok(())
+}
+
+fn cmd_stats() -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let stats_path = temper.join("stats.json");
+
+    if !stats_path.exists() {
+        eprintln!("No usage stats yet. Stats are recorded when Claude Code calls Temper tools.");
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(&stats_path)?;
+    let data: serde_json::Value = serde_json::from_str(&content)?;
+
+    // Header
+    println!("Temper Usage Stats");
+    println!("{}", "=".repeat(50));
+
+    // Last active
+    if let Some(last) = data.get("last_active").and_then(|v| v.as_str()) {
+        println!("Last active: {}", last);
+    }
+
+    // Session stats
+    let session_total = data.get("session_total").and_then(|v| v.as_u64()).unwrap_or(0);
+    let uptime = data.get("session_uptime_secs").and_then(|v| v.as_u64()).unwrap_or(0);
+    println!("\nLast session: {} calls, {}s uptime", session_total, uptime);
+
+    // Per-tool breakdown
+    if let Some(calls) = data.get("session_tool_calls").and_then(|v| v.as_object()) {
+        if !calls.is_empty() {
+            println!("\n{:<25} {:>6}", "Tool", "Calls");
+            println!("{}", "-".repeat(32));
+            let mut sorted: Vec<_> = calls.iter().collect();
+            sorted.sort_by(|a, b| b.1.as_u64().cmp(&a.1.as_u64()));
+            for (tool, count) in &sorted {
+                println!("{:<25} {:>6}", tool, count);
+            }
+        }
+    }
+
+    // Knowledge stats
+    let db_path = temper.join("knowledge.db");
+    if db_path.exists() {
+        let store = crate::storage::LocalStorage::open(&db_path)?;
+        let all = crate::storage::KnowledgeStore::recall(
+            &store,
+            crate::storage::RecallQuery { include_stale: true, ..Default::default() },
+        )?;
+        let active = all.iter().filter(|k| k.status == "active").count();
+        let stale = all.iter().filter(|k| k.status == "stale").count();
+
+        println!("\nKnowledge: {} active, {} stale", active, stale);
+    }
+
     Ok(())
 }
 

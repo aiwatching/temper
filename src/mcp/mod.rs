@@ -18,6 +18,13 @@ struct McpServer {
     graph: Option<CodeGraph>,
     store: LocalStorage,
     last_refresh_check: std::time::Instant,
+    stats: UsageStats,
+}
+
+#[derive(Default)]
+struct UsageStats {
+    tool_calls: std::collections::HashMap<String, u32>,
+    session_start: Option<std::time::Instant>,
 }
 
 const REFRESH_THROTTLE_SECS: u64 = 3;
@@ -33,11 +40,70 @@ impl McpServer {
             graph: None,
             store,
             last_refresh_check: std::time::Instant::now(),
+            stats: UsageStats {
+                tool_calls: std::collections::HashMap::new(),
+                session_start: Some(std::time::Instant::now()),
+            },
         })
     }
 
     fn temper_dir(&self) -> PathBuf {
         self.project_path.join(".temper")
+    }
+
+    fn save_stats(&self) {
+        let stats_path = self.temper_dir().join("stats.json");
+        let total: u32 = self.stats.tool_calls.values().sum();
+        let uptime = self.stats.session_start
+            .map(|s| s.elapsed().as_secs())
+            .unwrap_or(0);
+
+        let _data = json!({
+            "session_tool_calls": &self.stats.tool_calls,
+            "session_total": total,
+            "session_uptime_secs": uptime,
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+        });
+
+        // Merge with existing stats
+        let mut cumulative = if let Ok(content) = std::fs::read_to_string(&stats_path) {
+            serde_json::from_str::<serde_json::Value>(&content).unwrap_or(json!({}))
+        } else {
+            json!({})
+        };
+
+        // Update cumulative tool calls
+        let cum_calls = cumulative.get("cumulative_tool_calls")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut merged = cum_calls;
+        for (tool, count) in &self.stats.tool_calls {
+            let prev = merged.get(tool)
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as u32;
+            // Only add the delta since last save (session count includes all)
+            merged.insert(tool.clone(), json!(*count as u64 + prev as u64 - prev as u64));
+        }
+
+        // Simpler: just write session + cumulative total
+        let cum_total = cumulative.get("cumulative_total")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        cumulative["session_tool_calls"] = json!(&self.stats.tool_calls);
+        cumulative["session_total"] = json!(total);
+        cumulative["session_uptime_secs"] = json!(uptime);
+        cumulative["last_active"] = json!(chrono::Utc::now().to_rfc3339());
+
+        // Increment cumulative (approximate — resets each serve process)
+        if total > 0 {
+            cumulative["cumulative_tool_calls"] = json!(merged);
+            cumulative["cumulative_total"] = json!(cum_total + total as u64);
+        }
+
+        let _ = std::fs::write(&stats_path, serde_json::to_string_pretty(&cumulative).unwrap_or_default());
     }
 
     /// Ensure graph is loaded AND up-to-date via git diff on-demand.
@@ -442,6 +508,10 @@ impl McpServer {
     fn handle_tools_call(&mut self, params: &Value) -> Result<Value> {
         let tool_name = params["name"].as_str().unwrap_or("");
         let args = params.get("arguments").cloned().unwrap_or(json!({}));
+
+        // Track usage
+        *self.stats.tool_calls.entry(tool_name.to_string()).or_insert(0) += 1;
+        self.save_stats();
 
         match tool_name {
             "search_code" => self.tool_search_code(&args),
@@ -1234,7 +1304,7 @@ impl McpServer {
 
             // Extract class/interface declarations and public method signatures
             let mut in_class = false;
-            let mut brace_depth = 0i32;
+            let _brace_depth = 0i32;
             let mut snippet_lines = Vec::new();
 
             for (i, line) in content.lines().enumerate() {

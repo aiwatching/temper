@@ -6,6 +6,7 @@ use crate::graph::{CodeEdge, CodeGraph, CodeNode};
 
 mod java;
 mod python;
+mod rust;
 mod typescript;
 
 /// Source file scanner — finds files and orchestrates parsing.
@@ -62,7 +63,7 @@ impl Scanner {
         mut existing: CodeGraph,
         changed_files: &[String],
     ) -> Result<CodeGraph> {
-        let source_exts = [".java", ".py", ".ts", ".tsx", ".js", ".mjs"];
+        let source_exts = [".java", ".py", ".ts", ".tsx", ".js", ".mjs", ".rs"];
         let source_files: Vec<&String> = changed_files
             .iter()
             .filter(|f| source_exts.iter().any(|ext| f.ends_with(ext)))
@@ -216,6 +217,7 @@ fn parse_file(
         "py" => python::parse_python(full_path, rel_path, module),
         "ts" | "tsx" => typescript::parse_typescript(full_path, rel_path, module),
         "js" | "mjs" => typescript::parse_typescript(full_path, rel_path, module),
+        "rs" => rust::parse_rust(full_path, rel_path, module),
         _ => Ok((Vec::new(), Vec::new())),
     }
 }
@@ -232,7 +234,7 @@ fn infer_module(rel_path: &str) -> String {
 
 /// Check if a filename is a parseable source file.
 fn is_source_file(name: &str) -> bool {
-    let source_exts = [".java", ".py", ".ts", ".tsx", ".js", ".mjs"];
+    let source_exts = [".java", ".py", ".ts", ".tsx", ".js", ".mjs", ".rs"];
     let test_patterns = [".test.", ".spec.", "Test.java"];
 
     source_exts.iter().any(|ext| name.ends_with(ext))

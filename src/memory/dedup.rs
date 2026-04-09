@@ -1,8 +1,7 @@
 //! Smart dedup — embedding-based similarity check before storing.
 //! Inspired by Mem0's conflict resolution: similar entries get merged via LLM.
 
-use anyhow::{Context, Result};
-use rusqlite::Connection;
+use anyhow::Result;
 
 use crate::storage::{
     embedding::{EmbeddingClient, EmbeddingStore},

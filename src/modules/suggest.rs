@@ -94,7 +94,7 @@ fn extract_java_package(file_path: &str) -> Option<PackageInfo> {
 /// Find the optimal package level to split modules.
 /// Strategy: find the depth where the number of distinct children is highest
 /// relative to the number of files — this is where the hierarchy diverges most.
-fn find_optimal_split(packages: &[PackageInfo], all_files: &[String]) -> Vec<ModuleSuggestion> {
+fn find_optimal_split(packages: &[PackageInfo], _all_files: &[String]) -> Vec<ModuleSuggestion> {
     if packages.is_empty() {
         return Vec::new();
     }

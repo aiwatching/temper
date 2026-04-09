@@ -1,0 +1,8 @@
+Done. Removed from `CachedExistingEntityHandler`:
+
+1. **The version comparison block** (lines 38-49) — the `StreamMessageId` parsing and comparison that skipped stale requests
+2. **`safeParseStreamId()` method** — parsed Redis Stream IDs from strings
+3. **`compareStreamMessageId()` method** — compared two `StreamMessageId` values by timestamp/sequence
+4. **`org.redisson.api.StreamMessageId` import**
+
+The handler now goes straight from entity lookup to fingerprint comparison and lock-based dispatch. The existing tests don't test the version check path, so they should continue to pass as-is.
