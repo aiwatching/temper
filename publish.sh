@@ -131,7 +131,7 @@ else
 fi
 
 echo "" >> "$RELEASE_NOTES_FILE"
-echo "**Full Changelog**: https://github.com/AiON0/temper/compare/${LAST_TAG:-main}...v${NEW_VERSION}" >> "$RELEASE_NOTES_FILE"
+echo "**Full Changelog**: https://github.com/aiwatching/temper/compare/${LAST_TAG:-main}...v${NEW_VERSION}" >> "$RELEASE_NOTES_FILE"
 
 echo "Release notes:"
 cat "$RELEASE_NOTES_FILE"
@@ -187,4 +187,4 @@ fi
 
 echo ""
 echo "GitHub Actions will also build + publish darwin-x64 and linux-x64."
-echo "Check: https://github.com/AiON0/temper/actions"
+echo "Check: https://github.com/aiwatching/temper/actions"
