@@ -32,6 +32,8 @@ Thumbs.db
 tsconfig.tsbuildinfo
 next-env.d.ts
 .*
+!.github
+!.mcp.json
 CLAUDE.md
 ~*
 
