@@ -341,6 +341,39 @@ echo "Temper: ${CALLS} calls | ${KNOWLEDGE} knowledge"
         }
     }
 
+    // UserPromptSubmit hook: auto-inject relevant knowledge before Claude thinks
+    let inject_script = hooks_dir.join("temper-context-inject.sh");
+    if !inject_script.exists() {
+        std::fs::write(&inject_script, r#"#!/bin/bash
+INPUT=$(cat)
+PROMPT=$(echo "$INPUT" | jq -r '.prompt // empty' 2>/dev/null)
+[ -z "$PROMPT" ] && exit 0
+DB=".temper/knowledge.db"
+[ ! -f "$DB" ] && exit 0
+KEYWORDS=$(echo "$PROMPT" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '\n' | grep -v -E '^(the|a|an|to|of|in|is|it|and|or|for|on|at|by|do|be|if|so|no|up|my|me|we|he|she|can|you|this|that|with|from|have|will|what|how|are|was|not|but|all|just|show|make|add|get|set|put|use|run|let|try|new|old|any|may|its|too)$' | head -5)
+[ -z "$KEYWORDS" ] && exit 0
+CONDITIONS=""
+for kw in $KEYWORDS; do
+  [ ${#kw} -lt 3 ] && continue
+  [ -n "$CONDITIONS" ] && CONDITIONS="$CONDITIONS OR"
+  CONDITIONS="$CONDITIONS title LIKE '%${kw}%' OR content LIKE '%${kw}%' OR tags LIKE '%${kw}%'"
+done
+[ -z "$CONDITIONS" ] && exit 0
+RESULTS=$(sqlite3 -separator '|' "$DB" "SELECT type, title, content FROM knowledge WHERE status='active' AND ($CONDITIONS) LIMIT 5;" 2>/dev/null)
+[ -z "$RESULTS" ] && exit 0
+CONTEXT="[Temper] Relevant knowledge:
+$(echo "$RESULTS" | while IFS='|' read -r type title content; do echo "- [$type] $title: $content"; done)"
+CONTEXT=$(echo "$CONTEXT" | head -c 5000)
+jq -n --arg ctx "$CONTEXT" '{"additionalContext":$ctx}'
+exit 0
+"#)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&inject_script, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+
     // Write .claude/settings.json with hooks + statusline
     let settings_path = claude_dir.join("settings.json");
     let mut settings: serde_json::Value = if settings_path.exists() {
@@ -353,7 +386,13 @@ echo "Temper: ${CALLS} calls | ${KNOWLEDGE} knowledge"
     // Add hooks if not already present
     if settings.get("hooks").is_none() {
         let hook_cmd = hook_script.to_string_lossy().to_string();
+        let inject_cmd = inject_script.to_string_lossy().to_string();
         settings["hooks"] = serde_json::json!({
+            "UserPromptSubmit": [
+                {
+                    "hooks": [{"type": "command", "command": inject_cmd, "timeout": 3}]
+                }
+            ],
             "PreToolUse": [
                 {
                     "matcher": "Edit",
