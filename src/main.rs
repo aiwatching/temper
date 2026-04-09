@@ -3,6 +3,7 @@ mod config;
 mod export;
 mod graph;
 mod mcp;
+mod memory;
 mod modules;
 mod parser;
 mod storage;

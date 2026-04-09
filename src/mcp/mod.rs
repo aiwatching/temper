@@ -248,7 +248,7 @@ impl McpServer {
                 },
                 {
                     "name": "get_module",
-                    "description": "Get complete module context: files, dependencies, interfaces, and knowledge. Call this before working on a module.",
+                    "description": "Get complete module context: files, dependencies, interfaces, knowledge, and constraints. Call this before working on a module. For code examples, also call get_patterns.",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -405,6 +405,29 @@ impl McpServer {
                     }
                 },
                 {
+                    "name": "get_patterns",
+                    "description": "Get code patterns and conventions for a module. Returns example code snippets from key files showing how things are implemented. ALWAYS call this before writing new code in a module — it shows the patterns you should follow.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "module": { "type": "string", "description": "Module name" },
+                            "pattern_type": { "type": "string", "description": "What kind of pattern: 'handler', 'service', 'controller', 'test', or omit for all" }
+                        },
+                        "required": ["module"]
+                    }
+                },
+                {
+                    "name": "auto_extract",
+                    "description": "Auto-extract knowledge from conversation context using LLM. Extracts constraints, decisions, causal relations, and experiences. Stores them automatically. Use after completing a task to capture what was learned.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "context": { "type": "string", "description": "Conversation or code change context to extract knowledge from" }
+                        },
+                        "required": ["context"]
+                    }
+                },
+                {
                     "name": "validate_modules",
                     "description": "Check all module definitions for issues: glob patterns that match no files, stale interfaces, missing paths.",
                     "inputSchema": {
@@ -438,6 +461,8 @@ impl McpServer {
             "get_constraints" => self.tool_get_constraints(&args),
             "search_knowledge" => self.tool_search_knowledge(&args),
             "scan_module_interfaces" => self.tool_scan_module_interfaces(&args),
+            "get_patterns" => self.tool_get_patterns(&args),
+            "auto_extract" => self.tool_auto_extract(&args),
             "refresh_modules" => self.tool_refresh_modules(&args),
             "validate_modules" => self.tool_validate_modules(&args),
             _ => Err(anyhow::anyhow!("Unknown tool: {}", tool_name)),
@@ -885,18 +910,9 @@ impl McpServer {
             updated_at: 0,
         };
 
-        let id = self.store.remember(entry)?;
-
-        // Auto-generate embedding if API is configured
-        if let Ok(Some(client)) = storage::EmbeddingClient::from_config() {
-            let emb_store = storage::EmbeddingStore::new(self.store.connection());
-            let _ = emb_store.init_schema();
-            let embed_text = format!("{} {}", title, content);
-            if let Ok(embedding) = client.embed(&embed_text) {
-                let _ = emb_store.store(&id, "knowledge", &embedding, &client.model_name());
-                eprintln!("[temper] Embedding generated for {}", id);
-            }
-        }
+        // Smart remember with dedup
+        let emb_client = storage::EmbeddingClient::from_config().ok().flatten();
+        let (action, id) = crate::memory::smart_remember(&self.store, entry, emb_client.as_ref())?;
 
         let file_info = args.get("file").and_then(|v| v.as_str())
             .map(|f| format!(" → {}", f))
@@ -904,7 +920,7 @@ impl McpServer {
 
         Ok(json!({
             "content": [{ "type": "text", "text": format!(
-                "Remembered: \"{}\" [{}]{} (id: {})", title, entry_type, file_info, id
+                "Remembered: \"{}\" [{}]{} — {} (id: {})", title, entry_type, file_info, action, id
             ) }]
         }))
     }
@@ -1165,6 +1181,271 @@ impl McpServer {
 
         Ok(json!({
             "content": [{ "type": "text", "text": lines.join("\n\n") }]
+        }))
+    }
+
+    fn tool_get_patterns(&mut self, args: &Value) -> Result<Value> {
+        let module_name = args["module"].as_str().context("Missing 'module'")?;
+        let pattern_type = args.get("pattern_type").and_then(|v| v.as_str());
+
+        let registry = self.get_registry()?;
+        let module = match registry.get_module(module_name)? {
+            Some(m) => m,
+            None => {
+                return Ok(json!({
+                    "content": [{ "type": "text", "text": format!("Module '{}' not found.", module_name) }]
+                }));
+            }
+        };
+
+        let files = registry.resolve_files(&module)?;
+        let mut lines = vec![format!("## Code Patterns for module: {}\n", module_name)];
+
+        // Filter files by pattern type
+        let relevant_files: Vec<&String> = files.iter().filter(|f| {
+            match pattern_type {
+                Some("handler") => f.contains("handler") || f.contains("Handler"),
+                Some("service") => f.contains("service") || f.contains("Service"),
+                Some("controller") => f.contains("controller") || f.contains("Controller"),
+                Some("test") => f.contains("test") || f.contains("Test"),
+                _ => true,
+            }
+        }).collect();
+
+        // Read up to 5 key files, extract class structure
+        let sample_files: Vec<&&String> = relevant_files.iter().take(5).collect();
+
+        if sample_files.is_empty() {
+            lines.push("No matching files found for this pattern type.".into());
+        }
+
+        for file_path in &sample_files {
+            let full_path = self.project_path.join(file_path);
+            if !full_path.exists() {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(&full_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            lines.push(format!("### {}\n", file_path));
+
+            // Extract class/interface declarations and public method signatures
+            let mut in_class = false;
+            let mut brace_depth = 0i32;
+            let mut snippet_lines = Vec::new();
+
+            for (i, line) in content.lines().enumerate() {
+                let trimmed = line.trim();
+
+                // Class/interface declaration
+                if (trimmed.contains("class ") || trimmed.contains("interface "))
+                    && (trimmed.starts_with("public") || trimmed.starts_with("abstract") || trimmed.starts_with("@"))
+                {
+                    snippet_lines.push(format!("L{}: {}", i + 1, line));
+                    in_class = true;
+                }
+
+                // Public method signatures (first 2 lines of each)
+                if in_class
+                    && trimmed.starts_with("public")
+                    && trimmed.contains("(")
+                    && !trimmed.contains("class ")
+                {
+                    snippet_lines.push(format!("L{}: {}", i + 1, line));
+                    // Include next line if method sig continues
+                    if !trimmed.contains(")") || !trimmed.contains("{") {
+                        if let Some(next) = content.lines().nth(i + 1) {
+                            snippet_lines.push(format!("L{}: {}", i + 2, next));
+                        }
+                    }
+                }
+
+                // Track imports for dependencies
+                if trimmed.starts_with("import ") && !trimmed.contains("java.util") && !trimmed.contains("java.io") {
+                    snippet_lines.push(format!("L{}: {}", i + 1, line));
+                }
+
+                // Annotations on classes/methods
+                if trimmed.starts_with("@") && !trimmed.starts_with("@Override") && !trimmed.starts_with("@Slf4j") {
+                    snippet_lines.push(format!("L{}: {}", i + 1, line));
+                }
+            }
+
+            if snippet_lines.is_empty() {
+                lines.push("  (no public API extracted)\n".into());
+            } else {
+                lines.push("```java".into());
+                // Dedup and limit
+                let mut seen = std::collections::HashSet::new();
+                for sl in snippet_lines.iter().take(30) {
+                    if seen.insert(sl.clone()) {
+                        lines.push(sl.clone());
+                    }
+                }
+                lines.push("```\n".into());
+            }
+        }
+
+        // Add constraints for this module
+        if let Ok(constraints) = self.store.get_constraints(module_name) {
+            if !constraints.is_empty() {
+                lines.push(format!("### ⚠️ Constraints ({}):\n", constraints.len()));
+                for c in &constraints {
+                    lines.push(format!("- **{}**: {}", c.title, c.content));
+                }
+            }
+        }
+
+        // Add relevant experiences
+        let query = storage::RecallQuery {
+            module: Some(module_name.to_string()),
+            entry_type: Some("decision".to_string()),
+            ..Default::default()
+        };
+        if let Ok(decisions) = self.store.recall(query) {
+            if !decisions.is_empty() {
+                lines.push(format!("\n### Design Decisions ({}):\n", decisions.len()));
+                for d in decisions.iter().take(5) {
+                    lines.push(format!("- 🎯 **{}**: {}", d.title, d.content));
+                }
+            }
+        }
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": lines.join("\n") }]
+        }))
+    }
+
+    fn tool_auto_extract(&self, args: &Value) -> Result<Value> {
+        let context = args["context"].as_str().context("Missing 'context'")?;
+
+        // Get LLM config — use the same endpoint as embedding but with a chat model
+        let config = crate::config::GlobalConfig::load_or_default()?;
+        let api_key = std::env::var(&config.embedding.api_key_env)
+            .unwrap_or_default();
+
+        if api_key.is_empty() {
+            return Ok(json!({
+                "content": [{ "type": "text", "text": "auto_extract requires an LLM API key. Set OPENAI_API_KEY or configure in ~/.temper/config.yaml" }]
+            }));
+        }
+
+        // Use chat completions endpoint (not embeddings)
+        let chat_endpoint = config.embedding.endpoint
+            .replace("/embeddings", "/chat/completions");
+        let model = std::env::var("TEMPER_EXTRACT_MODEL")
+            .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+        let result = crate::memory::auto_extract(
+            context, &chat_endpoint, &api_key, &model,
+        )?;
+
+        let mut lines = Vec::new();
+        let mut stored_count = 0;
+
+        // Store constraints
+        for fact in &result.constraints {
+            let entry = storage::KnowledgeEntry {
+                id: String::new(),
+                entry_type: "constraint".to_string(),
+                title: fact.title.clone(),
+                content: fact.content.clone(),
+                module: fact.module.clone(),
+                file: fact.file.clone(),
+                function: None,
+                tags: Vec::new(),
+                status: "active".to_string(),
+                current_version: 1,
+                git_commit: None,
+                created_at: 0,
+                updated_at: 0,
+            };
+
+            // Use smart dedup
+            let emb_client = storage::EmbeddingClient::from_config().ok().flatten();
+            let (action, id) = crate::memory::smart_remember(
+                &self.store, entry, emb_client.as_ref(),
+            )?;
+            lines.push(format!("⚠️ [constraint] {} — {} ({})", fact.title, action, id));
+            stored_count += 1;
+        }
+
+        // Store decisions
+        for fact in &result.decisions {
+            let entry = storage::KnowledgeEntry {
+                id: String::new(),
+                entry_type: "decision".to_string(),
+                title: fact.title.clone(),
+                content: fact.content.clone(),
+                module: fact.module.clone(),
+                file: fact.file.clone(),
+                function: None,
+                tags: Vec::new(),
+                status: "active".to_string(),
+                current_version: 1,
+                git_commit: None,
+                created_at: 0,
+                updated_at: 0,
+            };
+            let emb_client = storage::EmbeddingClient::from_config().ok().flatten();
+            let (action, id) = crate::memory::smart_remember(
+                &self.store, entry, emb_client.as_ref(),
+            )?;
+            lines.push(format!("🎯 [decision] {} — {} ({})", fact.title, action, id));
+            stored_count += 1;
+        }
+
+        // Store causal relations
+        for rel in &result.causal_relations {
+            let relation = storage::CausalRelation {
+                id: String::new(),
+                from_entity: rel.from.clone(),
+                to_entity: rel.to.clone(),
+                relation_type: rel.relation_type.clone(),
+                description: rel.description.clone(),
+                confidence: "suspected".to_string(),
+                git_commit: None,
+                created_at: 0,
+            };
+            let id = self.store.add_causal_relation(relation)?;
+            lines.push(format!("🔗 [causal] {} → [{}] → {} ({})", rel.from, rel.relation_type, rel.to, id));
+            stored_count += 1;
+        }
+
+        // Store experiences
+        for exp in &result.experiences {
+            let experience = storage::Experience {
+                id: String::new(),
+                module: None,
+                symptom: exp.symptom.clone(),
+                cause: exp.cause.clone(),
+                fix: exp.fix.clone(),
+                constraint_note: exp.constraint_note.clone(),
+                tags: Vec::new(),
+                status: "active".to_string(),
+                git_commit: None,
+                created_at: 0,
+                updated_at: 0,
+            };
+            let id = self.store.record_experience(experience)?;
+            lines.push(format!("💡 [experience] {} ({})", exp.symptom, id));
+            stored_count += 1;
+        }
+
+        if stored_count == 0 {
+            return Ok(json!({
+                "content": [{ "type": "text", "text": "No knowledge extracted from this context." }]
+            }));
+        }
+
+        let mut output = vec![format!("Auto-extracted {} items:\n", stored_count)];
+        output.extend(lines);
+
+        Ok(json!({
+            "content": [{ "type": "text", "text": output.join("\n") }]
         }))
     }
 

@@ -1,0 +1,17 @@
+[
+  {
+    "id": "M7-stuck-entities",
+    "category": "Fast Localization",
+    "prompt": "We're seeing entities stuck in LABELED state that never progress to EVALUATED. What could cause this and how should we fix it?",
+    "expected_keywords": ["REQUIRES_NEW", "transaction", "rollback", "updateProcessingState", "state machine"],
+    "grading": "keyword_coverage"
+  },
+  {
+    "id": "M8-add-new-handler",
+    "category": "No Wrong Changes",
+    "prompt": "Add a new entity handler for the case where the entity exists in cache but has a different device type (e.g., HOST changed to USER_HOST_BINDING). Follow the existing handler patterns in the ingestion module. Show me the implementation.",
+    "expected_keywords": ["DistributedLock", "EntityCache", "EntityService", "StatusOr", "IngestionOrchestrator"],
+    "anti_patterns": ["synchronized", "new Thread", "Thread.sleep"],
+    "grading": "keyword_coverage"
+  }
+]
