@@ -93,25 +93,25 @@ jobs:
 
       - name: Publish @aion0/temper-darwin-arm64
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.TEMPER }}
         run: cd npm/temper-darwin-arm64 && npm publish --access public
         continue-on-error: true
 
       - name: Publish @aion0/temper-darwin-x64
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.TEMPER }}
         run: cd npm/temper-darwin-x64 && npm publish --access public
         continue-on-error: true
 
       - name: Publish @aion0/temper-linux-x64
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.TEMPER }}
         run: cd npm/temper-linux-x64 && npm publish --access public
         continue-on-error: true
 
       - name: Publish @aion0/temper (main package)
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.TEMPER }}
         run: cd npm/temper && npm publish --access public
 
       - name: Create GitHub Release
