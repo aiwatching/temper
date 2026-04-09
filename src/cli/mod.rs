@@ -324,7 +324,24 @@ exit 0
         }
     }
 
-    // Write .claude/settings.json with hooks
+    // Statusline script
+    let statusline_script = hooks_dir.join("temper-statusline.sh");
+    if !statusline_script.exists() {
+        std::fs::write(&statusline_script, r#"#!/bin/bash
+cat > /dev/null
+CALLS=0; KNOWLEDGE=0
+[ -f .temper/stats.json ] && CALLS=$(python3 -c "import json; print(json.load(open('.temper/stats.json')).get('session_total',0))" 2>/dev/null || echo 0)
+[ -f .temper/knowledge.db ] && KNOWLEDGE=$(sqlite3 .temper/knowledge.db "SELECT COUNT(*) FROM knowledge WHERE status='active'" 2>/dev/null || echo 0)
+echo "Temper: ${CALLS} calls | ${KNOWLEDGE} knowledge"
+"#)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&statusline_script, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+
+    // Write .claude/settings.json with hooks + statusline
     let settings_path = claude_dir.join("settings.json");
     let mut settings: serde_json::Value = if settings_path.exists() {
         let content = std::fs::read_to_string(&settings_path).unwrap_or_default();
@@ -350,9 +367,20 @@ exit 0
         });
     }
 
+    // Add statusline if not already present
+    if settings.get("statusLine").is_none() {
+        let sl_cmd = statusline_script.to_string_lossy().to_string();
+        settings["statusLine"] = serde_json::json!({
+            "type": "command",
+            "command": sl_cmd,
+            "refreshInterval": 10
+        });
+    }
+
     std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-    eprintln!("  .claude/settings.json — PreToolUse hooks configured");
-    eprintln!("  .claude/hooks/temper-pre-edit.sh — constraint injection hook");
+    eprintln!("  .claude/settings.json — hooks + statusline configured");
+    eprintln!("  .claude/hooks/temper-pre-edit.sh — constraint injection");
+    eprintln!("  .claude/hooks/temper-statusline.sh — status bar");
 
     // Append Temper section to CLAUDE.md if not already present
     let claudemd_path = project_path.join("CLAUDE.md");

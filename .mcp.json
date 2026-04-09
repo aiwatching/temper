@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "temper": {
+      "args": [
+        "serve",
+        "/Users/zliu/IdeaProjects/temper"
+      ],
+      "command": "temper",
+      "type": "stdio"
+    }
+  }
+}
