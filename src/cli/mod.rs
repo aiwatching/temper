@@ -90,6 +90,25 @@ pub enum Command {
     /// Show Temper usage statistics
     Stats,
 
+    /// Show impact chain for a symbol (class, function, file)
+    Impact {
+        /// Symbol to analyze (e.g. "HostRecord", "UserService.findAll")
+        symbol: String,
+        /// Max depth of impact chain (default 3)
+        #[arg(long, default_value = "3")]
+        depth: u32,
+    },
+
+    /// Assess risk of current uncommitted changes
+    Risk {
+        /// Compare against this git ref (default: HEAD)
+        #[arg(long, default_value = "HEAD")]
+        base: String,
+    },
+
+    /// Project architecture overview (for onboarding)
+    Overview,
+
     /// Export visualization
     Export {
         /// Output format
@@ -155,6 +174,9 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Scan { path, force } => cmd_scan(path, force),
         Command::Status => cmd_status(),
         Command::Stats => cmd_stats(),
+        Command::Impact { symbol, depth } => cmd_impact(&symbol, depth),
+        Command::Risk { base } => cmd_risk(&base),
+        Command::Overview => cmd_overview(),
         Command::Search { query } => cmd_search(&query),
         Command::Modules { name, dimension } => cmd_modules(name, dimension),
         Command::Knowledge { module, entry_type } => cmd_knowledge(module, entry_type),
@@ -961,6 +983,286 @@ fn cmd_sync(action: SyncAction) -> Result<()> {
         SyncAction::Push => eprintln!("Central sync not yet implemented (future)."),
         SyncAction::Pull => eprintln!("Central sync not yet implemented (future)."),
     }
+    Ok(())
+}
+
+fn cmd_impact(symbol: &str, max_depth: u32) -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let graph_path = temper.join("graph.json");
+
+    if !graph_path.exists() {
+        eprintln!("No graph found. Run `temper init` or `temper scan` first.");
+        return Ok(());
+    }
+
+    let graph = CodeGraph::load(&graph_path)?;
+    let result = graph.search(symbol);
+
+    if result.direct_matches.is_empty() {
+        println!("No symbol found matching '{}'", symbol);
+        return Ok(());
+    }
+
+    println!("## Impact analysis for '{}'\n", symbol);
+
+    // Direct matches
+    println!("### Direct matches ({})", result.direct_matches.len());
+    for n in result.direct_matches.iter().take(10) {
+        let loc = n.line.map(|l| format!(":{}", l)).unwrap_or_default();
+        let exp = if n.exported { " [exported]" } else { "" };
+        println!("  [{}] {}{} — {}{}", n.node_type, n.name, exp, n.file_path, loc);
+    }
+    if result.direct_matches.len() > 10 {
+        println!("  ... and {} more", result.direct_matches.len() - 10);
+    }
+
+    // Group impact chain by module (depth <= max_depth)
+    let impacted: Vec<_> = result.impact_chain.iter()
+        .filter(|i| i.depth <= max_depth)
+        .collect();
+
+    if impacted.is_empty() {
+        println!("\nNo downstream impact.");
+        return Ok(());
+    }
+
+    // Group by module
+    let mut by_module: std::collections::BTreeMap<String, Vec<&crate::graph::ImpactNode>> = std::collections::BTreeMap::new();
+    for i in &impacted {
+        by_module.entry(i.node.module.clone()).or_default().push(*i);
+    }
+
+    println!("\n### Impact chain ({} nodes across {} modules, depth<={})",
+        impacted.len(), by_module.len(), max_depth);
+
+    // Sort modules by number of impacted nodes (descending)
+    let mut modules: Vec<_> = by_module.iter().collect();
+    modules.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+
+    for (module, nodes) in modules {
+        println!("\n  {} ({} nodes):", module, nodes.len());
+        // Show top 5 most direct impacts in this module
+        let mut sorted_nodes: Vec<_> = nodes.iter().collect();
+        sorted_nodes.sort_by_key(|n| n.depth);
+        for impact in sorted_nodes.iter().take(5) {
+            let loc = impact.node.line.map(|l| format!(":{}", l)).unwrap_or_default();
+            println!("    depth={} [{}] {} — {}{}",
+                impact.depth, impact.node.node_type, impact.node.name,
+                impact.node.file_path, loc);
+        }
+        if nodes.len() > 5 {
+            println!("    ... and {} more", nodes.len() - 5);
+        }
+    }
+
+    // Summary line at the end
+    let total_files: std::collections::HashSet<_> = impacted.iter()
+        .map(|i| i.node.file_path.as_str())
+        .collect();
+    println!("\n### Summary");
+    println!("  Symbol: {}", symbol);
+    println!("  Direct matches: {}", result.direct_matches.len());
+    println!("  Impacted nodes: {}", impacted.len());
+    println!("  Impacted files: {}", total_files.len());
+    println!("  Modules affected: {}", by_module.len());
+
+    Ok(())
+}
+
+fn cmd_risk(base: &str) -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let graph_path = temper.join("graph.json");
+
+    if !graph_path.exists() {
+        eprintln!("No graph found. Run `temper init` first.");
+        return Ok(());
+    }
+
+    // Get changed files from git
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-only", base])
+        .current_dir(&project_path)
+        .output()?;
+
+    let changed_files: Vec<String> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|l| !l.is_empty())
+        .filter(|l| {
+            let exts = [".java", ".py", ".ts", ".tsx", ".js", ".mjs", ".rs"];
+            exts.iter().any(|ext| l.ends_with(ext))
+        })
+        .map(String::from)
+        .collect();
+
+    if changed_files.is_empty() {
+        println!("No source file changes vs {}", base);
+        return Ok(());
+    }
+
+    let graph = CodeGraph::load(&graph_path)?;
+    println!("## Change risk analysis (vs {})\n", base);
+    println!("### Changed files ({})", changed_files.len());
+    for f in &changed_files {
+        println!("  - {}", f);
+    }
+
+    // For each changed file, find its impact chain
+    let mut all_impacted: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let mut modules_affected: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for file in &changed_files {
+        // Find the file node in graph
+        let file_node = graph.nodes.iter().find(|n| {
+            n.node_type == crate::graph::NodeType::File
+                && (n.file_path == *file || n.file_path.ends_with(file))
+        });
+
+        if let Some(node) = file_node {
+            modules_affected.insert(node.module.clone());
+            // Find all reverse edges (who imports this file)
+            for edge in &graph.edges {
+                if edge.to == node.id && edge.edge_type == crate::graph::EdgeType::Imports {
+                    if let Some(importer) = graph.nodes.iter().find(|n| n.id == edge.from) {
+                        *all_impacted.entry(importer.file_path.clone()).or_insert(0) += 1;
+                        modules_affected.insert(importer.module.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Risk score: based on impacted files and modules
+    let impacted_count = all_impacted.len();
+    let modules_count = modules_affected.len();
+
+    let risk_level = if impacted_count < 5 {
+        "🟢 LOW"
+    } else if impacted_count < 20 {
+        "🟡 MEDIUM"
+    } else if impacted_count < 50 {
+        "🟠 HIGH"
+    } else {
+        "🔴 CRITICAL"
+    };
+
+    println!("\n### Impact");
+    println!("  Files that import changed files: {}", impacted_count);
+    println!("  Modules affected: {}", modules_count);
+    println!("  Risk level: {}", risk_level);
+
+    if impacted_count > 0 {
+        println!("\n### Top impacted files");
+        let mut sorted: Vec<_> = all_impacted.iter().collect();
+        sorted.sort_by(|a, b| b.1.cmp(a.1));
+        for (file, count) in sorted.iter().take(15) {
+            println!("  [{} refs] {}", count, file);
+        }
+    }
+
+    if !modules_affected.is_empty() {
+        println!("\n### Modules affected");
+        let mut mods: Vec<_> = modules_affected.iter().collect();
+        mods.sort();
+        for m in mods {
+            println!("  - {}", m);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_overview() -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let graph_path = temper.join("graph.json");
+
+    if !graph_path.exists() {
+        eprintln!("No graph found. Run `temper init` first.");
+        return Ok(());
+    }
+
+    let graph = CodeGraph::load(&graph_path)?;
+    let stats = graph.stats();
+
+    println!("# Project Overview\n");
+    println!("Location: {}", project_path.display());
+    println!("\n## Stats");
+    println!("  Files:      {}", stats.files);
+    println!("  Functions:  {}", stats.functions);
+    println!("  Classes:    {}", stats.classes);
+    println!("  Edges:      {}", stats.edges);
+
+    // Modules
+    let registry = ModuleRegistry::new(&temper, graph.files.clone());
+    if let Ok(modules) = registry.list_modules() {
+        if !modules.is_empty() {
+            println!("\n## Modules ({})", modules.len());
+            let mut sorted: Vec<_> = modules.iter().collect();
+            sorted.sort_by(|a, b| {
+                let ac = registry.file_count(a);
+                let bc = registry.file_count(b);
+                bc.cmp(&ac)
+            });
+            for m in sorted.iter().take(15) {
+                let fc = registry.file_count(m);
+                println!("  [{:>4} files] {} — {}", fc, m.name, m.description);
+            }
+            if sorted.len() > 15 {
+                println!("  ... and {} more modules", sorted.len() - 15);
+            }
+        }
+    }
+
+    // Find hotspots: most-imported files (popular dependencies)
+    let mut incoming_count: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    for edge in &graph.edges {
+        if edge.edge_type == crate::graph::EdgeType::Imports {
+            *incoming_count.entry(edge.to.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let mut hotspots: Vec<_> = incoming_count.iter()
+        .filter_map(|(id, count)| {
+            graph.nodes.iter()
+                .find(|n| &n.id == id && n.node_type == crate::graph::NodeType::File)
+                .map(|n| (n, *count))
+        })
+        .collect();
+    hotspots.sort_by(|a, b| b.1.cmp(&a.1));
+
+    if !hotspots.is_empty() {
+        println!("\n## Dependency Hotspots (most imported files)");
+        for (node, count) in hotspots.iter().take(10) {
+            println!("  [{:>4} imports] {}", count, node.file_path);
+        }
+    }
+
+    // Knowledge summary if available
+    let db_path = temper.join("knowledge.db");
+    if db_path.exists() {
+        if let Ok(store) = crate::storage::LocalStorage::open(&db_path) {
+            if let Ok(all) = crate::storage::KnowledgeStore::recall(
+                &store,
+                crate::storage::RecallQuery { include_stale: true, ..Default::default() },
+            ) {
+                let constraints = all.iter().filter(|k| k.entry_type == "constraint").count();
+                let decisions = all.iter().filter(|k| k.entry_type == "decision").count();
+                if constraints + decisions > 0 {
+                    println!("\n## Knowledge");
+                    println!("  Constraints: {}", constraints);
+                    println!("  Decisions:   {}", decisions);
+                }
+            }
+        }
+    }
+
+    println!("\n## Next Steps");
+    println!("  temper impact <symbol>    — analyze impact chain for a class/function");
+    println!("  temper risk               — assess current uncommitted changes");
+    println!("  temper export --open      — interactive HTML visualization");
+
     Ok(())
 }
 
