@@ -217,6 +217,17 @@ pub fn export_html(project_path: &Path, output_dir: &Path) -> Result<()> {
         })
         .collect();
 
+    // --- Analysis data for new tabs ---
+    let migration = crate::analysis::migration_progress(project_path, "*", "restructured");
+    let dead = crate::analysis::dead_code(&graph, Some(&registry));
+    let violations = crate::analysis::boundary_violations(&graph, &registry);
+    let cohesion = crate::analysis::module_cohesion(&graph, &registry);
+
+    let migration_json = serde_json::to_string(&migration)?;
+    let dead_code_json = serde_json::to_string(&dead)?;
+    let violations_json = serde_json::to_string(&violations)?;
+    let cohesion_json = serde_json::to_string(&cohesion)?;
+
     let project_name = project_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -234,6 +245,10 @@ pub fn export_html(project_path: &Path, output_dir: &Path) -> Result<()> {
         &serde_json::to_string(&file_paths)?,
         &serde_json::to_string(&file_modules)?,
         &serde_json::to_string(&reverse_adj)?,
+        &migration_json,
+        &dead_code_json,
+        &violations_json,
+        &cohesion_json,
     );
 
     std::fs::create_dir_all(output_dir)?;
@@ -256,6 +271,10 @@ fn generate_html(
     file_paths: &str,
     file_modules: &str,
     reverse_adj: &str,
+    migration_json: &str,
+    dead_code_json: &str,
+    violations_json: &str,
+    cohesion_json: &str,
 ) -> String {
     format!(
         r#"<!DOCTYPE html>
@@ -310,6 +329,24 @@ tr.clickable{{cursor:pointer}}
 .module-group li .depth{{color:#484f58;margin-right:6px}}
 .risk-bar{{display:inline-block;width:200px;height:8px;background:#21262d;border-radius:4px;overflow:hidden;vertical-align:middle}}
 .risk-bar .fill{{height:100%;background:linear-gradient(90deg,#3fb950,#d29922,#f85149)}}
+.depth-hist{{background:#0d1117;padding:10px 14px;border-radius:6px;margin-top:12px}}
+.hist-row{{display:flex;align-items:center;gap:10px;padding:3px 0;font-size:11px}}
+.hist-label{{color:#8b949e;font-family:Consolas,monospace;width:60px}}
+.hist-bar{{flex:1;height:10px;background:#21262d;border-radius:3px;overflow:hidden;max-width:400px}}
+.hist-fill{{height:100%;background:linear-gradient(90deg,#1f6feb,#58a6ff)}}
+.hist-count{{color:#58a6ff;font-family:Consolas,monospace;font-weight:600;width:40px;text-align:right}}
+.chain-link{{cursor:pointer;transition:background 0.1s}}
+.chain-link:hover{{background:#1f6feb22;border-radius:3px}}
+.chain-viz{{background:#0d1117;padding:12px;border-radius:6px;margin-top:8px}}
+.chain-step{{display:flex;align-items:center;gap:12px;padding:8px 12px;background:#161b22;border-radius:6px;border:1px solid #21262d;margin:2px 0}}
+.chain-source{{border-color:#da3633;background:#da363311}}
+.chain-target{{border-color:#3fb950;background:#23863611}}
+.chain-role{{font-size:11px;color:#8b949e;width:90px;font-weight:600}}
+.chain-path{{flex:1;font-size:11px}}
+.chain-mod{{font-size:10px}}
+.chain-arrow{{text-align:center;color:#58a6ff;font-size:10px;padding:2px 0}}
+.search-box button{{background:#238636;border:none;color:#fff;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600}}
+.search-box button:hover{{background:#2ea043}}
 #graph-container{{width:100%;height:600px;border:1px solid #30363d;border-radius:6px;background:#0d1117}}
 .hint{{font-size:12px;color:#8b949e;margin-top:4px}}
 .mono{{font-family:Consolas,monospace;font-size:11px}}
@@ -329,11 +366,15 @@ tr.clickable{{cursor:pointer}}
 </div>
 
 <div class="tabs">
-  <div class="tab active" onclick="showTab('impact')">Impact Explorer</div>
-  <div class="tab" onclick="showTab('hotspots')">Hotspots</div>
-  <div class="tab" onclick="showTab('graph')">Module Graph</div>
-  <div class="tab" onclick="showTab('modules')">Modules</div>
-  <div class="tab" onclick="showTab('knowledge')">Knowledge</div>
+  <div class="tab active" data-tab="impact">Impact Explorer</div>
+  <div class="tab" data-tab="hotspots">Hotspots</div>
+  <div class="tab" data-tab="graph">Module Graph</div>
+  <div class="tab" data-tab="migration">Migration</div>
+  <div class="tab" data-tab="boundary">Boundaries</div>
+  <div class="tab" data-tab="cohesion">Cohesion</div>
+  <div class="tab" data-tab="deadcode">Dead Code</div>
+  <div class="tab" data-tab="modules">Modules</div>
+  <div class="tab" data-tab="knowledge">Knowledge</div>
 </div>
 
 <div class="content">
@@ -367,6 +408,29 @@ tr.clickable{{cursor:pointer}}
   <div id="panel-graph" class="panel">
     <div class="hint">Module-level dependency graph. Edge thickness = number of cross-module imports. Weak edges (≤1) are pruned.</div>
     <div id="graph-container" style="margin-top:12px"></div>
+  </div>
+
+  <!-- Migration Progress -->
+  <div id="panel-migration" class="panel">
+    <div id="migration-content"></div>
+  </div>
+
+  <!-- Boundary Violations -->
+  <div id="panel-boundary" class="panel">
+    <div class="hint">Cross-module imports. Modules that import from many others are highly coupled.</div>
+    <div id="boundary-content" style="margin-top:12px"></div>
+  </div>
+
+  <!-- Module Cohesion -->
+  <div id="panel-cohesion" class="panel">
+    <div class="hint">Cohesion ratio = internal imports / total imports. Higher = more self-contained.</div>
+    <div id="cohesion-content" style="margin-top:12px"></div>
+  </div>
+
+  <!-- Dead Code -->
+  <div id="panel-deadcode" class="panel">
+    <div class="hint">Files with no incoming imports. May be entry points, tests, or unused code.</div>
+    <div id="deadcode-content" style="margin-top:12px"></div>
   </div>
 
   <!-- Modules -->
@@ -405,11 +469,18 @@ const fileModules = {file_modules};
 // reverseAdj[i] = [parent file indices]
 const reverseAdj = {reverse_adj};
 
+// Analysis data
+const migrationData = {migration_json};
+const deadCodeData = {dead_code_json};
+const violationsData = {violations_json};
+const cohesionData = {cohesion_json};
+
 // ─── Tabs ───
-function showTab(name) {{
+function showTab(name, el) {{
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-  event.target.classList.add('active');
+  if (el) el.classList.add('active');
+  else document.querySelector('[data-tab="' + name + '"]').classList.add('active');
   document.getElementById('panel-' + name).classList.add('active');
   if (name === 'graph' && !graphInit) initGraph();
 }}
@@ -429,6 +500,10 @@ function badge(type, text) {{
 // searchIndex entries: [name, type_code, file_idx, line, is_exported]
 const TYPE_LABELS = ['file', 'class', 'function', 'variable'];
 
+// State shared across impact runs
+let currentImpact = null;
+let impactNetwork = null;
+
 function runImpact() {{
   const query = document.getElementById('impact-query').value.trim().toLowerCase();
   const maxDepth = parseInt(document.getElementById('impact-depth').value);
@@ -439,7 +514,7 @@ function runImpact() {{
     return;
   }}
 
-  // Find matches: search name or file path
+  // Find matches
   const matches = searchIndex.filter(entry => {{
     const name = entry[0].toLowerCase();
     const fileIdx = entry[2];
@@ -452,65 +527,99 @@ function runImpact() {{
     return;
   }}
 
-  // Top 20 (exported first)
+  // Sort: exported first, then by name length (shorter = more relevant usually)
   const direct = matches
-    .sort((a, b) => (b[4] ? 1 : 0) - (a[4] ? 1 : 0))
-    .slice(0, 20);
+    .sort((a, b) => {{
+      if (a[4] !== b[4]) return b[4] ? 1 : -1;
+      return a[0].length - b[0].length;
+    }})
+    .slice(0, 30);
 
   // Unique start file indices
   const startFiles = new Set();
   matches.forEach(entry => {{
-    startFiles.add(entry[2]); // file_idx
+    startFiles.add(entry[2]);
   }});
 
-  // BFS with integer indices
-  const impacted = new Map(); // file_idx → depth
+  // BFS with PARENT tracking so we can reconstruct chains
+  // impacted: fidx → {{ depth, parent: fidx_or_null }}
+  const impacted = new Map();
   const queue = [];
   for (const fidx of startFiles) {{
-    queue.push([fidx, 0]);
-    impacted.set(fidx, 0);
+    queue.push(fidx);
+    impacted.set(fidx, {{ depth: 0, parent: null }});
   }}
 
   while (queue.length > 0) {{
-    const [idx, depth] = queue.shift();
-    if (depth >= maxDepth) continue;
+    const idx = queue.shift();
+    const info = impacted.get(idx);
+    if (info.depth >= maxDepth) continue;
     const parents = reverseAdj[idx] || [];
     for (const p of parents) {{
       if (!impacted.has(p)) {{
-        impacted.set(p, depth + 1);
-        queue.push([p, depth + 1]);
+        impacted.set(p, {{ depth: info.depth + 1, parent: idx }});
+        queue.push(p);
       }}
     }}
   }}
 
-  // Remove source files from impact
-  for (const fidx of startFiles) impacted.delete(fidx);
+  // Save state for chain drill-down
+  currentImpact = {{ startFiles, impacted, direct }};
+
+  // Separate source vs impact
+  const impactedFiles = new Map();
+  for (const [fidx, info] of impacted) {{
+    if (!startFiles.has(fidx)) impactedFiles.set(fidx, info);
+  }}
+
+  // Depth histogram
+  const depthCounts = new Map();
+  for (const [, info] of impactedFiles) {{
+    depthCounts.set(info.depth, (depthCounts.get(info.depth) || 0) + 1);
+  }}
 
   // Group by module
   const byModule = new Map();
-  for (const [fidx, depth] of impacted) {{
+  for (const [fidx, info] of impactedFiles) {{
     const mod = fileModules[fidx] || '_unassigned';
     if (!byModule.has(mod)) byModule.set(mod, []);
-    byModule.get(mod).push({{ fidx, depth }});
+    byModule.get(mod).push({{ fidx, depth: info.depth }});
   }}
 
-  // Sort modules by impact count
   const sortedModules = [...byModule.entries()].sort((a, b) => b[1].length - a[1].length);
 
-  // Build HTML
+  // ─── Build HTML ───
   let html = '<div class="impact-results">';
   html += '<h3>Results for "' + query + '"</h3>';
   html += '<div class="stats-row">';
   html += 'Matches: <b>' + matches.length + '</b>';
-  html += 'Impacted files: <b>' + impacted.size + '</b>';
+  html += 'Source files: <b>' + startFiles.size + '</b>';
+  html += 'Impacted files: <b>' + impactedFiles.size + '</b>';
   html += 'Modules affected: <b>' + byModule.size + '</b>';
   html += 'Max depth: <b>' + maxDepth + '</b>';
   html += '</div>';
 
+  // Depth histogram (bar chart)
+  if (depthCounts.size > 0) {{
+    html += '<div class="depth-hist">';
+    html += '<div class="mod-name">Depth distribution</div>';
+    const maxCount = Math.max(...depthCounts.values());
+    const depths = [...depthCounts.keys()].sort((a, b) => a - b);
+    for (const d of depths) {{
+      const count = depthCounts.get(d);
+      const pct = (count / maxCount * 100).toFixed(0);
+      html += '<div class="hist-row"><span class="hist-label">depth=' + d + '</span>';
+      html += '<div class="hist-bar"><div class="hist-fill" style="width:' + pct + '%"></div></div>';
+      html += '<span class="hist-count">' + count + '</span></div>';
+    }}
+    html += '</div>';
+  }}
+
+  // Direct matches
   if (direct.length > 0) {{
     html += '<div class="module-group">';
-    html += '<div class="mod-name">Direct matches (' + matches.length + ')</div><ul>';
-    direct.slice(0, 10).forEach(entry => {{
+    html += '<div class="mod-name">Direct matches (' + matches.length + ' total, showing ' + Math.min(direct.length, 15) + ')</div><ul>';
+    direct.slice(0, 15).forEach(entry => {{
       const name = entry[0];
       const typeCode = entry[1];
       const fileIdx = entry[2];
@@ -520,30 +629,37 @@ function runImpact() {{
       const exp = exported ? ' [exported]' : '';
       const lineStr = line ? ':' + line : '';
       const path = filePaths[fileIdx] || '';
-      html += '<li>' + badge(label) + ' ' + name + exp + ' — <span class="mono dim">' + path + lineStr + '</span></li>';
+      html += '<li>' + badge(label) + ' <b>' + name + '</b>' + exp + ' — <span class="mono dim">' + path + lineStr + '</span></li>';
     }});
-    if (matches.length > 10) {{
-      html += '<li class="dim">... and ' + (matches.length - 10) + ' more</li>';
-    }}
     html += '</ul></div>';
   }}
 
+  // Impact by module
   if (sortedModules.length > 0) {{
-    html += '<h3 style="margin-top:16px">Impact by module</h3>';
+    html += '<h3 style="margin-top:16px">Impact chain by module</h3>';
+    html += '<div class="hint">Click any file to see the full path from source.</div>';
     for (const [mod, items] of sortedModules) {{
       items.sort((a, b) => a.depth - b.depth);
+      const shown = Math.min(items.length, 20);
       html += '<div class="module-group">';
       html += '<div class="mod-name">' + mod + ' <span class="dim">(' + items.length + ' files)</span></div>';
       html += '<ul>';
-      items.slice(0, 8).forEach(it => {{
+      items.slice(0, shown).forEach(it => {{
         const path = filePaths[it.fidx] || '';
-        html += '<li><span class="depth">depth=' + it.depth + '</span><span class="mono">' + path + '</span></li>';
+        html += '<li class="chain-link" data-fidx="' + it.fidx + '">'
+          + '<span class="depth">d' + it.depth + '</span>'
+          + '<span class="mono">' + path + '</span></li>';
       }});
-      if (items.length > 8) {{
-        html += '<li class="dim">... and ' + (items.length - 8) + ' more</li>';
+      if (items.length > shown) {{
+        html += '<li class="dim">... and ' + (items.length - shown) + ' more</li>';
       }}
       html += '</ul></div>';
     }}
+
+    // Add visualize button
+    html += '<div style="margin-top:16px"><button class="visualize-btn">📊 Visualize impact subgraph</button></div>';
+    html += '<div id="impact-graph-container" style="display:none;margin-top:12px"></div>';
+    html += '<div id="chain-detail" style="margin-top:12px"></div>';
   }} else if (direct.length > 0) {{
     html += '<div class="hint" style="margin-top:12px">No downstream impact — nothing imports these files.</div>';
   }}
@@ -583,6 +699,127 @@ function populate() {{
   ).join('');
 }}
 
+// ─── Chain drill-down: show full path from source to target ───
+function showChain(targetIdx) {{
+  if (!currentImpact) return;
+  const info = currentImpact.impacted.get(targetIdx);
+  if (!info) return;
+
+  // Walk parent pointers back to source
+  const chain = [];
+  let cur = targetIdx;
+  while (cur !== null && cur !== undefined) {{
+    chain.push(cur);
+    const nodeInfo = currentImpact.impacted.get(cur);
+    if (!nodeInfo) break;
+    cur = nodeInfo.parent;
+  }}
+
+  // Reverse so source is first
+  chain.reverse();
+
+  const out = document.getElementById('chain-detail');
+  let html = '<div class="impact-results"><h3>Dependency chain to ' + filePaths[targetIdx] + '</h3>';
+  html += '<div class="chain-viz">';
+  chain.forEach((fidx, i) => {{
+    const path = filePaths[fidx] || '';
+    const mod = fileModules[fidx] || '_unassigned';
+    const isSource = i === 0;
+    const isTarget = i === chain.length - 1;
+    const role = isSource ? '📍 SOURCE' : isTarget ? '🎯 TARGET' : '↑';
+    html += '<div class="chain-step ' + (isSource ? 'chain-source' : isTarget ? 'chain-target' : '') + '">';
+    html += '<div class="chain-role">' + role + '</div>';
+    html += '<div class="chain-path"><span class="mono">' + path + '</span></div>';
+    html += '<div class="chain-mod dim">' + mod + '</div>';
+    html += '</div>';
+    if (i < chain.length - 1) {{
+      html += '<div class="chain-arrow">↑ imported by</div>';
+    }}
+  }});
+  html += '</div>';
+  html += '<div class="hint" style="margin-top:8px">Chain length: ' + chain.length + ' files</div>';
+  html += '</div>';
+  out.innerHTML = html;
+  out.scrollIntoView({{ behavior: 'smooth', block: 'nearest' }});
+}}
+
+// ─── Visualize impact subgraph as a network ───
+function visualizeImpact() {{
+  if (!currentImpact) return;
+  const container = document.getElementById('impact-graph-container');
+  container.style.display = 'block';
+  container.innerHTML = '<div id="impact-net" style="width:100%;height:500px;border:1px solid #30363d;border-radius:6px"></div>';
+
+  // Build subgraph: sources + impacted, with BFS tree edges
+  const nodes = [];
+  const edges = [];
+  const seen = new Set();
+
+  // Limit to top 200 nodes (sort by depth ascending)
+  const allImpacted = [...currentImpact.impacted.entries()]
+    .sort((a, b) => a[1].depth - b[1].depth)
+    .slice(0, 200);
+
+  for (const [fidx, info] of allImpacted) {{
+    if (seen.has(fidx)) continue;
+    seen.add(fidx);
+    const path = filePaths[fidx] || ('f' + fidx);
+    const shortName = path.split('/').pop();
+    const isSource = currentImpact.startFiles.has(fidx);
+    nodes.push({{
+      id: fidx,
+      label: shortName,
+      title: path + '\n(' + (fileModules[fidx] || '?') + ')',
+      color: isSource
+        ? {{ background: '#da3633', border: '#f85149' }}
+        : info.depth === 1
+          ? {{ background: '#d29922', border: '#d29922' }}
+          : {{ background: '#1f6feb', border: '#58a6ff' }},
+      font: {{ color: '#fff', size: 10 }},
+      shape: isSource ? 'box' : 'dot',
+      size: isSource ? 16 : Math.max(6, 16 - info.depth * 2),
+    }});
+    if (info.parent !== null && info.parent !== undefined && seen.has(info.parent)) {{
+      edges.push({{
+        from: fidx,
+        to: info.parent,
+        arrows: 'to',
+        color: {{ color: '#58a6ff66' }},
+      }});
+    }}
+  }}
+
+  // Second pass to add edges for nodes whose parent was added later
+  for (const [fidx, info] of allImpacted) {{
+    if (info.parent !== null && info.parent !== undefined && seen.has(info.parent) && seen.has(fidx)) {{
+      if (!edges.some(e => e.from === fidx && e.to === info.parent)) {{
+        edges.push({{
+          from: fidx,
+          to: info.parent,
+          arrows: 'to',
+          color: {{ color: '#58a6ff66' }},
+        }});
+      }}
+    }}
+  }}
+
+  impactNetwork = new vis.Network(
+    document.getElementById('impact-net'),
+    {{ nodes: new vis.DataSet(nodes), edges: new vis.DataSet(edges) }},
+    {{
+      physics: {{ solver: 'forceAtlas2Based', forceAtlas2Based: {{ gravitationalConstant: -60 }} }},
+      interaction: {{ hover: true, navigationButtons: true }},
+      layout: {{ improvedLayout: true }},
+    }}
+  );
+
+  impactNetwork.on('click', params => {{
+    if (params.nodes.length > 0) {{
+      showChain(params.nodes[0]);
+    }}
+  }});
+}}
+
 // ─── Module graph (lazy init on tab switch) ───
 let graphInit = false;
 let network = null;
@@ -606,6 +843,144 @@ function initGraph() {{
 }}
 
 populate();
+populateAnalysis();
+
+function populateAnalysis() {{
+  // ─── Migration ───
+  const mig = document.getElementById('migration-content');
+  if (migrationData) {{
+    const m = migrationData;
+    const filled = Math.round(m.progress_pct * 0.4);
+    const bar = '█'.repeat(filled) + '░'.repeat(40 - filled);
+    let h = '<div class="impact-results">';
+    h += '<h3>Migration: ' + m.source_dir + ' → ' + m.target_dir + '</h3>';
+    h += '<div class="stats-row">';
+    h += 'Source: <b>' + m.source_files + '</b>';
+    h += 'Target: <b>' + m.target_files + '</b>';
+    h += 'Migrated: <b>' + m.migrated + '</b>';
+    h += 'Remaining: <b>' + m.remaining + '</b>';
+    h += '</div>';
+    h += '<div style="margin:16px 0;font-family:Consolas,monospace;font-size:14px"><span style="color:#3fb950">' + bar + '</span> <b>' + m.progress_pct + '%</b></div>';
+    if (m.top_directories && m.top_directories.length > 0) {{
+      h += '<h3 style="margin-top:16px">Remaining by directory</h3>';
+      h += '<table><thead><tr><th>Count</th><th>Directory</th></tr></thead><tbody>';
+      m.top_directories.forEach(d => {{
+        h += '<tr><td><b>' + d[1] + '</b></td><td class="mono">' + d[0] + '</td></tr>';
+      }});
+      h += '</tbody></table>';
+    }}
+    h += '</div>';
+    mig.innerHTML = h;
+  }} else {{
+    mig.innerHTML = '<div class="hint">No migration data. Run from a project with common/ and restructured/ directories.</div>';
+  }}
+
+  // ─── Boundary ───
+  const bnd = document.getElementById('boundary-content');
+  if (violationsData && violationsData.length > 0) {{
+    let h = '<div class="stats-row" style="margin-bottom:12px">Total cross-module edges: <b>' + violationsData.length + '</b></div>';
+    h += '<table><thead><tr><th>From</th><th>To</th><th>Count</th><th>Sample</th></tr></thead><tbody>';
+    violationsData.slice(0, 50).forEach(v => {{
+      const sample = (v.sample_files[0] || '').split(' → ');
+      const sampleStr = sample.length > 1 ? sample[0].split('/').pop() + ' → ' + sample[1].split('/').pop() : '';
+      h += '<tr>';
+      h += '<td class="mono"><b>' + v.from_module + '</b></td>';
+      h += '<td class="mono">' + v.to_module + '</td>';
+      h += '<td><b>' + v.count + '</b></td>';
+      h += '<td class="mono dim">' + sampleStr + '</td>';
+      h += '</tr>';
+    }});
+    h += '</tbody></table>';
+    if (violationsData.length > 50) h += '<div class="hint" style="margin-top:8px">... and ' + (violationsData.length - 50) + ' more</div>';
+    bnd.innerHTML = h;
+  }} else {{
+    bnd.innerHTML = '<div class="hint">No boundary violations detected.</div>';
+  }}
+
+  // ─── Cohesion ───
+  const coh = document.getElementById('cohesion-content');
+  if (cohesionData && cohesionData.length > 0) {{
+    let h = '<table><thead><tr><th>Module</th><th>Files</th><th>Internal</th><th>External</th><th>Cohesion</th><th>Top external deps</th></tr></thead><tbody>';
+    cohesionData.forEach(c => {{
+      const pct = (c.cohesion_ratio * 100).toFixed(0);
+      const barColor = c.cohesion_ratio > 0.7 ? '#3fb950' : c.cohesion_ratio > 0.4 ? '#d29922' : '#f85149';
+      const ext = (c.top_external || []).slice(0, 3).map(e => e[0] + ' (' + e[1] + ')').join(', ');
+      h += '<tr>';
+      h += '<td class="mono"><b>' + c.module + '</b></td>';
+      h += '<td>' + c.file_count + '</td>';
+      h += '<td>' + c.internal_imports + '</td>';
+      h += '<td>' + c.external_imports + '</td>';
+      h += '<td><div class="risk-bar" style="width:120px"><div class="fill" style="width:' + pct + '%;background:' + barColor + '"></div></div> ' + pct + '%</td>';
+      h += '<td class="mono dim">' + ext + '</td>';
+      h += '</tr>';
+    }});
+    h += '</tbody></table>';
+    coh.innerHTML = h;
+  }} else {{
+    coh.innerHTML = '<div class="hint">No cohesion data.</div>';
+  }}
+
+  // ─── Dead Code ───
+  const dc = document.getElementById('deadcode-content');
+  if (deadCodeData) {{
+    let h = '<div class="stats-row" style="margin-bottom:12px">';
+    h += 'Total files: <b>' + deadCodeData.total_files + '</b> ';
+    h += 'Imported: <b>' + deadCodeData.imported_files + '</b> ';
+    h += 'Unreferenced: <b>' + deadCodeData.dead_files.length + '</b>';
+    h += '</div>';
+    if (deadCodeData.by_directory && deadCodeData.by_directory.length > 0) {{
+      h += '<table><thead><tr><th>Count</th><th>Directory</th></tr></thead><tbody>';
+      deadCodeData.by_directory.forEach(d => {{
+        h += '<tr><td><b>' + d[1] + '</b></td><td class="mono">' + d[0] + '</td></tr>';
+      }});
+      h += '</tbody></table>';
+    }}
+    dc.innerHTML = h;
+  }} else {{
+    dc.innerHTML = '<div class="hint">No dead code data.</div>';
+  }}
+}}
+
+// ─── Wire up event handlers programmatically (bulletproof) ───
+document.addEventListener('DOMContentLoaded', wireUp);
+if (document.readyState !== 'loading') wireUp();
+
+function wireUp() {{
+  // Tabs
+  document.querySelectorAll('.tab').forEach(tab => {{
+    tab.addEventListener('click', () => {{
+      const name = tab.getAttribute('data-tab');
+      showTab(name, tab);
+    }});
+  }});
+
+  // Analyze button
+  const analyzeBtn = document.querySelector('#panel-impact button');
+  if (analyzeBtn) analyzeBtn.addEventListener('click', runImpact);
+
+  const queryInput = document.getElementById('impact-query');
+  if (queryInput) {{
+    queryInput.addEventListener('keydown', e => {{
+      if (e.key === 'Enter') runImpact();
+    }});
+  }}
+
+  // Delegate clicks on chain-link items
+  const resultsEl = document.getElementById('impact-results');
+  if (resultsEl) {{
+    resultsEl.addEventListener('click', e => {{
+      const link = e.target.closest('.chain-link');
+      if (link && link.dataset.fidx) {{
+        showChain(parseInt(link.dataset.fidx));
+      }}
+      if (e.target.matches('.visualize-btn')) {{
+        visualizeImpact();
+      }}
+    }});
+  }}
+
+  console.log('[Temper] Wired. searchIndex:', searchIndex.length, 'files:', filePaths.length);
+}}
 </script>
 </body>
 </html>"#,
@@ -623,5 +998,9 @@ populate();
         file_paths = file_paths,
         file_modules = file_modules,
         reverse_adj = reverse_adj,
+        migration_json = migration_json,
+        dead_code_json = dead_code_json,
+        violations_json = violations_json,
+        cohesion_json = cohesion_json,
     )
 }

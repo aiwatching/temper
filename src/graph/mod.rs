@@ -213,11 +213,20 @@ impl CodeGraph {
             }
         }
 
-        let extensions = [".ts", ".tsx", ".js", ".mjs", ".java", ".py", "/index.ts", "/index.js"];
+        let extensions = [".ts", ".tsx", ".js", ".mjs", ".java", ".py", ".rs", "/index.ts", "/index.js", "/mod.rs"];
 
         for edge in &mut self.edges {
             if node_ids.contains(&edge.to) {
                 continue;
+            }
+
+            // Rust: rewrite "crate/foo/bar" → "src/foo/bar"
+            if edge.to.starts_with("crate/") {
+                let rust_path = edge.to.replacen("crate/", "src/", 1);
+                // Strip anything after a `{` (use group)
+                let clean = rust_path.split_whitespace().next().unwrap_or(&rust_path)
+                    .split('{').next().unwrap_or(&rust_path).to_string();
+                edge.to = clean;
             }
 
             // Try direct extension resolution
@@ -226,6 +235,21 @@ impl CodeGraph {
                 if node_ids.contains(&candidate) {
                     edge.to = candidate;
                     break;
+                }
+            }
+
+            // Try stripping trailing segments for Rust paths (e.g. src/storage/embedding → src/storage/embedding.rs or src/storage/mod.rs)
+            if !node_ids.contains(&edge.to) && edge.to.starts_with("src/") {
+                // Try stripping last segment (it might be a struct name)
+                if let Some(pos) = edge.to.rfind('/') {
+                    let parent = &edge.to[..pos];
+                    for ext in &[".rs", "/mod.rs"] {
+                        let candidate = format!("{}{}", parent, ext);
+                        if node_ids.contains(&candidate) {
+                            edge.to = candidate;
+                            break;
+                        }
+                    }
                 }
             }
 

@@ -109,6 +109,48 @@ pub enum Command {
     /// Project architecture overview (for onboarding)
     Overview,
 
+    /// Compare directories to show migration progress
+    /// Use --source '*' to compare all top-level dirs against target
+    Diff {
+        /// Source directory, or '*' for all top-level dirs except target
+        #[arg(long, default_value = "*")]
+        source: String,
+        /// Target directory (e.g. restructured/)
+        #[arg(long, default_value = "restructured")]
+        target: String,
+    },
+
+    /// Check which files have upstream changes not synced to target
+    SyncCheck {
+        /// Source directory
+        #[arg(long, default_value = "common")]
+        source: String,
+        /// Target directory
+        #[arg(long, default_value = "restructured")]
+        target: String,
+    },
+
+    /// Show up/down call tree for a function or class
+    CallTree {
+        /// Symbol name
+        symbol: String,
+        /// Direction: up (callers), down (callees), both
+        #[arg(long, default_value = "both")]
+        direction: String,
+        /// Max depth
+        #[arg(long, default_value = "3")]
+        depth: u32,
+    },
+
+    /// Find dead code (files/functions with no incoming references)
+    DeadCode,
+
+    /// Show cross-module import violations (boundary checks)
+    Boundary,
+
+    /// Show module cohesion (internal vs external imports)
+    Cohesion,
+
     /// Export visualization
     Export {
         /// Output format
@@ -177,6 +219,12 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Impact { symbol, depth } => cmd_impact(&symbol, depth),
         Command::Risk { base } => cmd_risk(&base),
         Command::Overview => cmd_overview(),
+        Command::Diff { source, target } => cmd_diff(&source, &target),
+        Command::SyncCheck { source, target } => cmd_sync_check(&source, &target),
+        Command::CallTree { symbol, direction, depth } => cmd_call_tree(&symbol, &direction, depth),
+        Command::DeadCode => cmd_dead_code(),
+        Command::Boundary => cmd_boundary(),
+        Command::Cohesion => cmd_cohesion(),
         Command::Search { query } => cmd_search(&query),
         Command::Modules { name, dimension } => cmd_modules(name, dimension),
         Command::Knowledge { module, entry_type } => cmd_knowledge(module, entry_type),
@@ -1262,6 +1310,365 @@ fn cmd_overview() -> Result<()> {
     println!("  temper impact <symbol>    — analyze impact chain for a class/function");
     println!("  temper risk               — assess current uncommitted changes");
     println!("  temper export --open      — interactive HTML visualization");
+
+    Ok(())
+}
+
+fn cmd_diff(source: &str, target: &str) -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+
+    let report = match crate::analysis::migration_progress(&project_path, source, target) {
+        Some(r) => r,
+        None => {
+            eprintln!("Could not analyze migration (source or target not found)");
+            return Ok(());
+        }
+    };
+
+    let source_label = if source == "*" { "all sources" } else { source };
+    println!("# Migration Progress: {} → {}\n", source_label, target);
+
+    println!("## Summary");
+    println!("  Source files:    {}", report.source_files);
+    println!("  Target files:    {}", report.target_files);
+    println!("  Migrated:        {} ({}%)", report.migrated, report.progress_pct);
+    println!("  Remaining:       {}", report.remaining);
+
+    let bar_width = 40;
+    let filled = (report.progress_pct as usize * bar_width) / 100;
+    let bar: String = std::iter::repeat('█').take(filled)
+        .chain(std::iter::repeat('░').take(bar_width - filled))
+        .collect();
+    println!("\n  [{}] {}%", bar, report.progress_pct);
+
+    if !report.top_directories.is_empty() {
+        println!("\n## Top directories to migrate");
+        for (dir, count) in report.top_directories.iter().take(20) {
+            println!("  {:>5}  {}", count, dir);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_sync_check(source: &str, target: &str) -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+
+    println!("# Sync Check: {} → {}\n", source, target);
+
+    // Get recent commits on source dir
+    let output = std::process::Command::new("git")
+        .args([
+            "log",
+            "--name-only",
+            "--pretty=format:COMMIT %H %s",
+            "--since=1 month ago",
+            "--",
+            source,
+        ])
+        .current_dir(&project_path)
+        .output()?;
+
+    if !output.status.success() {
+        eprintln!("git log failed. Are you in a git repo?");
+        return Ok(());
+    }
+
+    let log_output = String::from_utf8_lossy(&output.stdout);
+
+    // Parse: collect list of (commit_hash, file) pairs for files in source/
+    let mut recent_changes: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut current_commit = String::new();
+
+    for line in log_output.lines() {
+        if let Some(rest) = line.strip_prefix("COMMIT ") {
+            let parts: Vec<&str> = rest.splitn(2, ' ').collect();
+            if !parts.is_empty() {
+                current_commit = parts[0].to_string();
+            }
+        } else if line.starts_with(&format!("{}/", source)) {
+            // Keep only the most recent commit per file
+            recent_changes
+                .entry(line.to_string())
+                .or_insert_with(|| current_commit.clone());
+        }
+    }
+
+    println!("## Files changed in {} recently: {}\n", source, recent_changes.len());
+
+    // For each changed source file, check if target has the same file and when it was last touched
+    let mut out_of_sync = Vec::new();
+    let mut no_target = Vec::new();
+
+    for (source_file, commit) in &recent_changes {
+        let basename = std::path::Path::new(source_file)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Find target file with same basename
+        let find_output = std::process::Command::new("find")
+            .args([target, "-name", &basename, "-type", "f"])
+            .current_dir(&project_path)
+            .output();
+
+        let target_path: Option<String> = match find_output {
+            Ok(out) if out.status.success() => {
+                let s = String::from_utf8_lossy(&out.stdout);
+                s.lines().next().map(String::from)
+            }
+            _ => None,
+        };
+
+        match target_path {
+            None => no_target.push((source_file.clone(), commit.clone())),
+            Some(tgt) => {
+                // Check if target file was modified AFTER the source commit
+                let tgt_log = std::process::Command::new("git")
+                    .args(["log", "-1", "--pretty=format:%H", "--", &tgt])
+                    .current_dir(&project_path)
+                    .output();
+
+                if let Ok(lo) = tgt_log {
+                    let tgt_commit = String::from_utf8_lossy(&lo.stdout).trim().to_string();
+                    // Simple heuristic: if target commit is same or ancestor, it's out of sync
+                    let ancestor_check = std::process::Command::new("git")
+                        .args(["merge-base", "--is-ancestor", commit, &tgt_commit])
+                        .current_dir(&project_path)
+                        .output();
+
+                    let is_synced = ancestor_check
+                        .map(|o| o.status.success())
+                        .unwrap_or(false);
+
+                    if !is_synced {
+                        out_of_sync.push((source_file.clone(), tgt, commit.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    if !out_of_sync.is_empty() {
+        println!("## ⚠️  Out of sync ({}) — source was modified, target may be stale", out_of_sync.len());
+        for (src, tgt, commit) in out_of_sync.iter().take(20) {
+            println!("  {} (commit {})", src, &commit[..7.min(commit.len())]);
+            println!("    → {}", tgt);
+        }
+        if out_of_sync.len() > 20 {
+            println!("  ... and {} more", out_of_sync.len() - 20);
+        }
+    }
+
+    if !no_target.is_empty() {
+        println!("\n## 🆕 New in source, not migrated yet ({})", no_target.len());
+        for (src, commit) in no_target.iter().take(20) {
+            println!("  {} (commit {})", src, &commit[..7.min(commit.len())]);
+        }
+        if no_target.len() > 20 {
+            println!("  ... and {} more", no_target.len() - 20);
+        }
+    }
+
+    if out_of_sync.is_empty() && no_target.is_empty() {
+        println!("✅ All recent source changes are synced or migrated.");
+    }
+
+    Ok(())
+}
+
+fn cmd_call_tree(symbol: &str, direction: &str, max_depth: u32) -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let graph_path = temper.join("graph.json");
+
+    if !graph_path.exists() {
+        eprintln!("No graph found. Run `temper init` first.");
+        return Ok(());
+    }
+
+    let graph = CodeGraph::load(&graph_path)?;
+
+    // Find the symbol node
+    let matches: Vec<&crate::graph::CodeNode> = graph.nodes.iter()
+        .filter(|n| n.name == symbol || n.id.ends_with(&format!("::{}", symbol)))
+        .collect();
+
+    if matches.is_empty() {
+        println!("No symbol found: {}", symbol);
+        return Ok(());
+    }
+
+    println!("# Call tree for '{}'\n", symbol);
+
+    for m in matches.iter().take(5) {
+        println!("## {} ({}:{}, {})",
+            m.name,
+            m.file_path,
+            m.line.unwrap_or(0),
+            m.node_type
+        );
+
+        // Build adjacency: "calls" edges
+        let mut calls_out: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        let mut calls_in: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for e in &graph.edges {
+            if e.edge_type == crate::graph::EdgeType::Calls {
+                calls_out.entry(e.from.clone()).or_default().push(e.to.clone());
+                calls_in.entry(e.to.clone()).or_default().push(e.from.clone());
+            }
+        }
+
+        if direction == "down" || direction == "both" {
+            println!("\n  Calls (downstream):");
+            print_tree(&graph, &m.id, &calls_out, max_depth, 0, "  ");
+        }
+        if direction == "up" || direction == "both" {
+            println!("\n  Called by (upstream):");
+            print_tree(&graph, &m.id, &calls_in, max_depth, 0, "  ");
+        }
+        println!();
+    }
+
+    if matches.len() > 5 {
+        println!("... and {} more matches", matches.len() - 5);
+    }
+
+    Ok(())
+}
+
+fn print_tree(
+    graph: &CodeGraph,
+    node_id: &str,
+    adj: &std::collections::HashMap<String, Vec<String>>,
+    max_depth: u32,
+    depth: u32,
+    prefix: &str,
+) {
+    if depth >= max_depth {
+        return;
+    }
+    if let Some(children) = adj.get(node_id) {
+        for (i, child_id) in children.iter().take(10).enumerate() {
+            let is_last = i == children.len() - 1 || i == 9;
+            let connector = if is_last { "└─" } else { "├─" };
+
+            if let Some(node) = graph.nodes.iter().find(|n| &n.id == child_id) {
+                let file_short = node.file_path.rsplit('/').next().unwrap_or(&node.file_path);
+                println!(
+                    "{}{} {} — {}{}",
+                    prefix,
+                    connector,
+                    node.name,
+                    file_short,
+                    node.line.map(|l| format!(":{}", l)).unwrap_or_default()
+                );
+            } else {
+                println!("{}{} {}", prefix, connector, child_id);
+            }
+
+            let new_prefix = format!("{}{}", prefix, if is_last { "   " } else { "│  " });
+            print_tree(graph, child_id, adj, max_depth, depth + 1, &new_prefix);
+        }
+        if children.len() > 10 {
+            println!("{}   ... and {} more", prefix, children.len() - 10);
+        }
+    }
+}
+
+fn cmd_dead_code() -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let graph_path = temper.join("graph.json");
+
+    if !graph_path.exists() {
+        eprintln!("No graph found. Run `temper init` first.");
+        return Ok(());
+    }
+
+    let graph = CodeGraph::load(&graph_path)?;
+    let registry = ModuleRegistry::new(&temper, graph.files.clone());
+
+    // Only analyze files inside defined modules
+    let report = crate::analysis::dead_code(&graph, Some(&registry));
+
+    println!("# Dead code analysis (scoped to defined modules)\n");
+    println!("Files in modules:     {}", report.total_files);
+    println!("Files with imports:   {}", report.imported_files);
+    println!("Unreferenced:         {}\n", report.dead_files.len());
+
+    if report.dead_files.is_empty() {
+        println!("✅ No dead files found in defined modules.");
+        return Ok(());
+    }
+
+    println!("## Unreferenced files by directory");
+    for (dir, count) in report.by_directory.iter().take(20) {
+        println!("  {:>5}  {}", count, dir);
+    }
+
+    Ok(())
+}
+
+fn cmd_boundary() -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let graph = CodeGraph::load(&temper.join("graph.json"))?;
+    let registry = ModuleRegistry::new(&temper, graph.files.clone());
+
+    let violations = crate::analysis::boundary_violations(&graph, &registry);
+
+    println!("# Module Boundary Violations\n");
+    println!("Cross-module imports: {}\n", violations.len());
+
+    if violations.is_empty() {
+        println!("✅ No cross-module imports detected.");
+        return Ok(());
+    }
+
+    println!("## Top violations (by import count)\n");
+    println!("{:<40} {:<40} {:>6}", "From", "To", "Count");
+    println!("{}", "-".repeat(90));
+
+    for v in violations.iter().take(30) {
+        println!("{:<40} {:<40} {:>6}", v.from_module, v.to_module, v.count);
+    }
+
+    if violations.len() > 30 {
+        println!("\n... and {} more violation pairs", violations.len() - 30);
+    }
+
+    Ok(())
+}
+
+fn cmd_cohesion() -> Result<()> {
+    let project_path = resolve_project_path(PathBuf::from("."))?;
+    let temper = temper_dir(&project_path);
+    let graph = CodeGraph::load(&temper.join("graph.json"))?;
+    let registry = ModuleRegistry::new(&temper, graph.files.clone());
+
+    let cohesion = crate::analysis::module_cohesion(&graph, &registry);
+
+    println!("# Module Cohesion\n");
+    println!("Ratio = internal imports / (internal + external)");
+    println!("Higher = more self-contained, lower = more coupled\n");
+
+    println!("{:<35} {:>5} {:>10} {:>10} {:>8}",
+        "Module", "Files", "Internal", "External", "Ratio");
+    println!("{}", "-".repeat(75));
+
+    for c in &cohesion {
+        let bar_width = 20;
+        let filled = (c.cohesion_ratio * bar_width as f32) as usize;
+        let bar: String = std::iter::repeat('█').take(filled)
+            .chain(std::iter::repeat('░').take(bar_width - filled))
+            .collect();
+
+        println!("{:<35} {:>5} {:>10} {:>10} {:>7.1}% {}",
+            c.module, c.file_count, c.internal_imports, c.external_imports,
+            c.cohesion_ratio * 100.0, bar);
+    }
 
     Ok(())
 }
