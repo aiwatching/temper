@@ -156,48 +156,60 @@ impl Scanner {
         Ok(())
     }
 
-    /// Get HEAD commit hash.
+    /// Get HEAD commit hash (via `git rev-parse`).
     pub fn head_commit(&self) -> Option<String> {
-        let repo = git2::Repository::open(&self.project_path).ok()?;
-        let head = repo.head().ok()?;
-        let commit = head.peel_to_commit().ok()?;
-        Some(commit.id().to_string()[..12].to_string())
+        let out = std::process::Command::new("git")
+            .args(["rev-parse", "--short=12", "HEAD"])
+            .current_dir(&self.project_path)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
     }
 
-    /// Get files changed since a given commit.
-    pub fn get_changed_files(&self, since_commit: Option<&str>) -> Result<Vec<String>> {
+    /// Files changed since a given commit (via `git diff --name-only`).
+    /// Returns all files in repo if `since_commit` is None and repo is clean,
+    /// or an empty list if not in a git repo.
+    pub fn changed_files_since(&self, since_commit: Option<&str>) -> Vec<String> {
         let since = match since_commit {
             Some(c) => c,
-            None => return Ok(Vec::new()),
+            None => return Vec::new(),
         };
-
-        let repo = git2::Repository::open(&self.project_path)
-            .context("Not a git repository")?;
-
-        let old_oid = repo
-            .revparse_single(since)
-            .context("Failed to resolve commit")?
-            .id();
-        let old_commit = repo.find_commit(old_oid)?;
-        let old_tree = old_commit.tree()?;
-
-        let head = repo.head()?.peel_to_commit()?.tree()?;
-        let diff = repo.diff_tree_to_tree(Some(&old_tree), Some(&head), None)?;
-
-        let mut files = Vec::new();
-        diff.foreach(
-            &mut |delta, _| {
-                if let Some(path) = delta.new_file().path() {
-                    files.push(path.to_string_lossy().to_string());
+        let out = std::process::Command::new("git")
+            .args(["diff", "--name-only", since, "HEAD"])
+            .current_dir(&self.project_path)
+            .output();
+        let output = match out {
+            Ok(o) if o.status.success() => o,
+            _ => return Vec::new(),
+        };
+        let committed: Vec<String> = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(|s| s.to_string())
+            .collect();
+        // Also include uncommitted (staged + unstaged) changes.
+        let porcelain = std::process::Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&self.project_path)
+            .output();
+        let mut files = committed;
+        if let Ok(p) = porcelain {
+            if p.status.success() {
+                for line in String::from_utf8_lossy(&p.stdout).lines() {
+                    // Format: "XY path"
+                    let trimmed = line.trim_start();
+                    if let Some(rest) = trimmed.get(3..) {
+                        files.push(rest.to_string());
+                    }
                 }
-                true
-            },
-            None,
-            None,
-            None,
-        )?;
-
-        Ok(files)
+            }
+        }
+        files.sort();
+        files.dedup();
+        files
     }
 }
 

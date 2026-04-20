@@ -5,7 +5,6 @@ use std::path::Path;
 
 use crate::graph::{CodeGraph, EdgeType, NodeType};
 use crate::modules::ModuleRegistry;
-use crate::storage::{KnowledgeStore, LocalStorage, RecallQuery};
 
 /// Generate a self-contained interactive HTML dashboard.
 pub fn export_html(project_path: &Path, output_dir: &Path) -> Result<()> {
@@ -16,18 +15,6 @@ pub fn export_html(project_path: &Path, output_dir: &Path) -> Result<()> {
 
     let registry = ModuleRegistry::new(&temper_dir, graph.files.clone());
     let modules = registry.list_modules()?;
-
-    let db_path = temper_dir.join("knowledge.db");
-    let knowledge = if db_path.exists() {
-        let store = LocalStorage::open(&db_path)?;
-        store.recall(RecallQuery {
-            include_stale: true,
-            ..Default::default()
-        })?
-    } else {
-        Vec::new()
-    };
-
     let stats = graph.stats();
 
     // --- Build file-to-module lookup ---
@@ -186,36 +173,17 @@ pub fn export_html(project_path: &Path, output_dir: &Path) -> Result<()> {
         .iter()
         .map(|m| {
             let file_count = registry.file_count(m);
-            let knowledge_count = knowledge
-                .iter()
-                .filter(|k| k.module.as_deref() == Some(&m.name))
-                .count();
             json!({
                 "name": m.name,
                 "description": m.description,
                 "files": file_count,
-                "knowledge": knowledge_count,
                 "tags": m.tags.join(", "),
             })
         })
         .collect();
 
-    // --- Knowledge rows ---
-    let knowledge_rows: Vec<serde_json::Value> = knowledge
-        .iter()
-        .map(|k| {
-            json!({
-                "id": k.id,
-                "type": k.entry_type,
-                "title": k.title,
-                "content": k.content,
-                "module": k.module,
-                "file": k.file,
-                "status": k.status,
-                "tags": k.tags.join(", "),
-            })
-        })
-        .collect();
+    // Knowledge store removed in v2; keep placeholder to preserve HTML template.
+    let knowledge_rows: Vec<serde_json::Value> = Vec::new();
 
     // --- Analysis data for new tabs ---
     let migration = crate::analysis::migration_progress(project_path, "*", "restructured");

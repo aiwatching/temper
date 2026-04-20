@@ -3,13 +3,11 @@
 mod analysis;
 mod cli;
 mod config;
+mod constraint;
 mod export;
 mod graph;
-mod mcp;
-mod memory;
 mod modules;
 mod parser;
-mod storage;
 
 use anyhow::Result;
 use clap::Parser;
