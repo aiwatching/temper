@@ -8,6 +8,7 @@ pub enum Status {
     Ok,
     Dangling { symbols: Vec<String> },
     Contradicted { patterns: Vec<String> },
+    Banned { tokens: Vec<String> },
     Stale { reason: String },
 }
 
@@ -18,6 +19,7 @@ pub struct ConstraintCheck {
     pub title: String,
     pub symbols: Vec<String>,
     pub forbidden_patterns: Vec<String>,
+    pub banned_tokens: Vec<String>,
     pub statuses: Vec<Status>,
 }
 
@@ -44,6 +46,7 @@ impl CheckReport {
         let mut ok = 0;
         let mut dangling = 0;
         let mut contradicted = 0;
+        let mut banned_hits = 0;
 
         for c in &self.checks {
             let mut tags: Vec<String> = Vec::new();
@@ -58,6 +61,10 @@ impl CheckReport {
                         contradicted += 1;
                         tags.push(format!("CONTRADICTED({})", patterns.join(" | ")));
                     }
+                    Status::Banned { tokens } => {
+                        banned_hits += 1;
+                        tags.push(format!("BANNED-TOKEN-IN-CODE({})", tokens.join(",")));
+                    }
                     Status::Stale { reason } => {
                         tags.push(format!("STALE({})", reason));
                     }
@@ -67,7 +74,9 @@ impl CheckReport {
         }
 
         println!("\n---");
-        println!("Total: {}  OK: {}  Dangling: {}  Contradicted: {}",
-            self.checks.len(), ok, dangling, contradicted);
+        println!(
+            "Total: {}  OK: {}  Dangling: {}  Contradicted: {}  BannedInCode: {}",
+            self.checks.len(), ok, dangling, contradicted, banned_hits
+        );
     }
 }

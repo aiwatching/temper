@@ -27,6 +27,7 @@ pub fn run(project_path: &Path) -> Result<CheckReport> {
         let mut statuses: Vec<Status> = Vec::new();
         let mut dangling_symbols = Vec::new();
         let mut contradicting_patterns = Vec::new();
+        let mut banned_in_code = Vec::new();
 
         // --- Symbol existence ---
         for sym in &pc.symbols {
@@ -52,6 +53,31 @@ pub fn run(project_path: &Path) -> Result<CheckReport> {
             });
         }
 
+        // --- Ban lexicon: "Do NOT use X" / "X is banned" phrases whose X
+        //     shows up in the constraint's own file (outside the comment
+        //     block itself). A constraint that sits next to code which
+        //     still uses the banned token is either stale or being violated.
+        //
+        //     Scope is the file the constraint lives in, not the whole
+        //     project — most "Do not import/inject/use X" phrasing really
+        //     means "here in this file", and a project-wide ban needs a
+        //     different mechanism (lint / CI).
+        let own_file_body = project_text
+            .get(&pc.raw.file_path)
+            .cloned()
+            .unwrap_or_default();
+        let code_only = strip_comment_block(&own_file_body, pc.raw.line);
+        for token in &pc.banned_tokens {
+            if token_in_text(&code_only, token) {
+                banned_in_code.push(token.clone());
+            }
+        }
+        if !banned_in_code.is_empty() {
+            statuses.push(Status::Banned {
+                tokens: banned_in_code.clone(),
+            });
+        }
+
         if statuses.is_empty() {
             statuses.push(Status::Ok);
         }
@@ -62,6 +88,7 @@ pub fn run(project_path: &Path) -> Result<CheckReport> {
             title: pc.raw.title.clone(),
             symbols: pc.symbols.clone(),
             forbidden_patterns: pc.forbidden_patterns.clone(),
+            banned_tokens: pc.banned_tokens.clone(),
             statuses,
         });
     }
@@ -146,6 +173,61 @@ fn pattern_appears(project_text: &HashMap<String, String>, pattern: &str, skip_f
 
 fn normalize_pattern(pat: &str) -> String {
     pat.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Does the banned token appear in the given text (already scoped / stripped)?
+fn token_in_text(text: &str, token: &str) -> bool {
+    if token.contains('.') {
+        text.contains(token)
+    } else {
+        contains_as_token(text, token)
+    }
+}
+
+/// Remove a /** ... */ block whose opening `/**` or `/*` sits at or before
+/// `anchor_line` (1-based). Keeps everything else intact so the remaining
+/// text is "code only" for the containing file.
+fn strip_comment_block(text: &str, anchor_line: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if anchor_line == 0 || anchor_line > lines.len() {
+        return text.to_string();
+    }
+
+    // Walk backwards from anchor to find the comment opener (first line
+    // starting with /** or /* or """). Java-like comments are the main
+    // target; """ is kept for Python.
+    let anchor_idx = anchor_line - 1;
+    let mut start = anchor_idx;
+    loop {
+        let t = lines[start].trim_start();
+        if t.starts_with("/**") || t.starts_with("/*") || t.starts_with("\"\"\"") {
+            break;
+        }
+        if start == 0 {
+            return text.to_string();
+        }
+        start -= 1;
+    }
+
+    // Walk forward from anchor to find the closer.
+    let mut end = anchor_idx;
+    while end < lines.len() {
+        let t = lines[end].trim();
+        if t.ends_with("*/") || t == "\"\"\"" {
+            break;
+        }
+        end += 1;
+    }
+
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        if i >= start && i <= end {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
 }
 
 /// Word-boundary containment: `symbol` must be bounded by non-identifier

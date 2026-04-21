@@ -17,6 +17,10 @@ pub struct ParsedConstraint {
     pub symbols: Vec<String>,
     /// Forbidden code patterns (roughly `Foo<..., Bar>` or fully-qualified names).
     pub forbidden_patterns: Vec<String>,
+    /// Tokens the constraint explicitly bans via "Do NOT use X" / "X is banned"
+    /// style prose. If any of these appear in the codebase the constraint is
+    /// likely stale or being violated.
+    pub banned_tokens: Vec<String>,
 }
 
 static SYMBOL_RE: Lazy<Regex> = Lazy::new(|| {
@@ -28,6 +32,25 @@ static SYMBOL_RE: Lazy<Regex> = Lazy::new(|| {
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| {
     // Java generics shape: Identifier< ... >
     Regex::new(r"([A-Z][A-Za-z0-9]+\s*<[^>\n]{0,80}>)").unwrap()
+});
+
+// "Ban lexicon" — prose cues that explicitly forbid a named token.
+// Each regex captures the token in group 1.
+static BAN_PHRASES: Lazy<Vec<Regex>> = Lazy::new(|| {
+    let patterns = [
+        // English imperatives
+        r"(?i)do\s*not\s+use\s+([A-Za-z0-9_.*]+)",
+        r"(?i)don[\u2019']t\s+use\s+([A-Za-z0-9_.*]+)",
+        r"(?i)do\s*not\s+(?:import|extend|inject|call|reference|invoke)\s+([A-Za-z0-9_.*]+)",
+        r"(?i)do\s*not\s+use\s+the\s+([A-Za-z0-9_.*]+)",
+        // Declarative
+        r"([A-Za-z0-9_.]+)\s+is\s+(?:banned|prohibited|forbidden|deprecated)",
+        r"(?i)banned\s*[:\-\u2014]\s*([A-Za-z0-9_.*]+)",
+        // Chinese (light coverage — main constraints are still English)
+        r"禁止(?:使用|引入|调用|扩展)?\s*([A-Za-z0-9_.*]+)",
+        r"不要(?:使用|用|引入|调用|扩展)\s*([A-Za-z0-9_.*]+)",
+    ];
+    patterns.iter().map(|p| Regex::new(p).unwrap()).collect()
 });
 
 /// Noise symbols we don't want in the symbol-existence check.
@@ -55,6 +78,8 @@ pub fn parse(raw: RawConstraint) -> ParsedConstraint {
     forbidden_patterns.sort();
     forbidden_patterns.dedup();
 
+    let banned_tokens = extract_banned_tokens(&raw.body);
+
     ParsedConstraint {
         raw,
         what,
@@ -63,7 +88,50 @@ pub fn parse(raw: RawConstraint) -> ParsedConstraint {
         escape,
         symbols,
         forbidden_patterns,
+        banned_tokens,
     }
+}
+
+/// Scan the body for prose like "Do NOT use X" / "X is banned" and collect X.
+/// Only tokens that look like code identifiers are kept (ASCII-start,
+/// contains a dot or has a capital letter) — filters out matches on common
+/// English words like "this", "that".
+fn extract_banned_tokens(body: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for re in BAN_PHRASES.iter() {
+        for caps in re.captures_iter(body) {
+            if let Some(m) = caps.get(1) {
+                let raw = m.as_str().trim_end_matches(&['.', ',', ';', ':', ')'][..]);
+                let token = raw.trim_end_matches(".*").to_string();
+                if looks_like_code_identifier(&token) && !is_ban_noise(&token) {
+                    out.push(token);
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn looks_like_code_identifier(token: &str) -> bool {
+    if token.len() < 3 {
+        return false;
+    }
+    let has_upper = token.chars().any(|c| c.is_ascii_uppercase());
+    let has_dot = token.contains('.');
+    let has_underscore = token.contains('_');
+    has_upper || has_dot || has_underscore
+}
+
+/// Words that the phrase regex picks up but are not real banned tokens.
+fn is_ban_noise(token: &str) -> bool {
+    const NOISE: &[&str] = &[
+        "This", "That", "These", "Those", "Any", "All",
+        "TEMPER-CONSTRAINT", "TEMPER", "CONSTRAINT",
+        "INC", "MIG", "PR", "TODO", "FIXME",
+    ];
+    NOISE.contains(&token)
 }
 
 /// Split the body into What / Why / Rule / Escape sections.
