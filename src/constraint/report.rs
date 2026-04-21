@@ -9,7 +9,14 @@ pub enum Status {
     Dangling { symbols: Vec<String> },
     Contradicted { patterns: Vec<String> },
     Banned { tokens: Vec<String> },
-    Stale { reason: String },
+    Stale {
+        last_verified: Option<String>,
+        file_last_commit: Option<String>,
+        reason: String,
+    },
+    UnverifiedAge {
+        age_days: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -47,6 +54,7 @@ impl CheckReport {
         let mut dangling = 0;
         let mut contradicted = 0;
         let mut banned_hits = 0;
+        let mut stale_hits = 0;
 
         for c in &self.checks {
             let mut tags: Vec<String> = Vec::new();
@@ -65,8 +73,14 @@ impl CheckReport {
                         banned_hits += 1;
                         tags.push(format!("BANNED-TOKEN-IN-CODE({})", tokens.join(",")));
                     }
-                    Status::Stale { reason } => {
-                        tags.push(format!("STALE({})", reason));
+                    Status::Stale { last_verified, file_last_commit, reason } => {
+                        stale_hits += 1;
+                        let v = last_verified.as_deref().unwrap_or("?");
+                        let c = file_last_commit.as_deref().unwrap_or("?");
+                        tags.push(format!("STALE({}; verified={} file={})", reason, v, c));
+                    }
+                    Status::UnverifiedAge { age_days } => {
+                        tags.push(format!("NO-LAST-VERIFIED(file-age={}d)", age_days));
                     }
                 }
             }
@@ -75,8 +89,8 @@ impl CheckReport {
 
         println!("\n---");
         println!(
-            "Total: {}  OK: {}  Dangling: {}  Contradicted: {}  BannedInCode: {}",
-            self.checks.len(), ok, dangling, contradicted, banned_hits
+            "Total: {}  OK: {}  Dangling: {}  Contradicted: {}  BannedInCode: {}  Stale: {}",
+            self.checks.len(), ok, dangling, contradicted, banned_hits, stale_hits
         );
     }
 }

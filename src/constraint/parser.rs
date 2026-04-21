@@ -21,6 +21,9 @@ pub struct ParsedConstraint {
     /// style prose. If any of these appear in the codebase the constraint is
     /// likely stale or being violated.
     pub banned_tokens: Vec<String>,
+    /// Optional `Last-Verified: YYYY-MM-DD` header — author's assertion that
+    /// the constraint was reviewed against the code on that date.
+    pub last_verified: Option<String>,
 }
 
 static SYMBOL_RE: Lazy<Regex> = Lazy::new(|| {
@@ -32,6 +35,12 @@ static SYMBOL_RE: Lazy<Regex> = Lazy::new(|| {
 static PATTERN_RE: Lazy<Regex> = Lazy::new(|| {
     // Java generics shape: Identifier< ... >
     Regex::new(r"([A-Z][A-Za-z0-9]+\s*<[^>\n]{0,80}>)").unwrap()
+});
+
+// Captures a `Last-Verified: YYYY-MM-DD` (or ISO datetime) header.
+static LAST_VERIFIED_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)Last[-\s]?Verified\s*[:\-]\s*(\d{4}-\d{2}-\d{2}(?:[T\s][\d:+\-Z]+)?)")
+        .unwrap()
 });
 
 // "Ban lexicon" — prose cues that explicitly forbid a named token.
@@ -80,6 +89,10 @@ pub fn parse(raw: RawConstraint) -> ParsedConstraint {
 
     let banned_tokens = extract_banned_tokens(&raw.body);
 
+    let last_verified = LAST_VERIFIED_RE
+        .captures(&raw.body)
+        .and_then(|c| c.get(1).map(|m| m.as_str().trim().to_string()));
+
     ParsedConstraint {
         raw,
         what,
@@ -89,6 +102,7 @@ pub fn parse(raw: RawConstraint) -> ParsedConstraint {
         symbols,
         forbidden_patterns,
         banned_tokens,
+        last_verified,
     }
 }
 

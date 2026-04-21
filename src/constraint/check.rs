@@ -14,6 +14,11 @@ use crate::constraint::parser::{parse, ParsedConstraint};
 use crate::constraint::report::{CheckReport, ConstraintCheck, Status};
 use crate::constraint::scanner::scan_project;
 
+/// A constraint without `Last-Verified:` whose file is older than this many
+/// days gets an `UnverifiedAge` warning. The choice is conservative — most
+/// production constraint comments should be re-verified at least twice a year.
+const UNVERIFIED_AGE_WARN_DAYS: i64 = 180;
+
 pub fn run(project_path: &Path) -> Result<CheckReport> {
     let raws = scan_project(project_path)?;
     let parsed: Vec<ParsedConstraint> = raws.into_iter().map(parse).collect();
@@ -21,6 +26,8 @@ pub fn run(project_path: &Path) -> Result<CheckReport> {
     // Build a single in-memory index of the whole project's text so we can
     // answer "does symbol X appear?" and "does pattern P appear?" cheaply.
     let project_text = load_project_text(project_path)?;
+
+    let in_git_repo = is_git_repo(project_path);
 
     let mut checks = Vec::new();
     for pc in parsed {
@@ -76,6 +83,35 @@ pub fn run(project_path: &Path) -> Result<CheckReport> {
             statuses.push(Status::Banned {
                 tokens: banned_in_code.clone(),
             });
+        }
+
+        // --- Git-timestamp staleness ---
+        //   Last-Verified: YYYY-MM-DD in the body vs the file's most recent
+        //   commit. If the file moved since the verification date, the
+        //   constraint may no longer match the code it guards.
+        if in_git_repo {
+            let file_last_commit = file_last_commit_date(project_path, &pc.raw.file_path);
+            match (pc.last_verified.as_deref(), file_last_commit.as_deref()) {
+                (Some(verified), Some(committed)) => {
+                    if committed_after(committed, verified) {
+                        statuses.push(Status::Stale {
+                            last_verified: Some(verified.to_string()),
+                            file_last_commit: Some(committed.to_string()),
+                            reason: "file modified after Last-Verified".to_string(),
+                        });
+                    }
+                }
+                (None, Some(committed)) => {
+                    // No Last-Verified header. Warn if the file itself is old enough
+                    // that the author almost certainly never came back to re-check.
+                    if let Some(age) = days_since(committed) {
+                        if age >= UNVERIFIED_AGE_WARN_DAYS {
+                            statuses.push(Status::UnverifiedAge { age_days: age });
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
 
         if statuses.is_empty() {
@@ -251,4 +287,52 @@ fn contains_as_token(haystack: &str, symbol: &str) -> bool {
 
 fn is_ident_char(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
+}
+
+// --- git helpers ---
+
+fn is_git_repo(project_path: &Path) -> bool {
+    std::process::Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(project_path)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// ISO-8601 timestamp of the file's most recent commit, or None if the file
+/// has no history (untracked / just added).
+fn file_last_commit_date(project_path: &Path, file_rel: &str) -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%cI", "--", file_rel])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Compare a committed timestamp (ISO-8601, possibly with offset) against a
+/// verification date (YYYY-MM-DD). Returns true if the commit is strictly
+/// after the end of the verification day.
+fn committed_after(committed_iso: &str, verified_date: &str) -> bool {
+    let committed = chrono::DateTime::parse_from_rfc3339(committed_iso).ok();
+    let verified_end = chrono::NaiveDate::parse_from_str(verified_date, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(23, 59, 59))
+        .map(|ndt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(ndt, chrono::Utc));
+    match (committed, verified_end) {
+        (Some(c), Some(v)) => c > v,
+        _ => false,
+    }
+}
+
+fn days_since(iso_timestamp: &str) -> Option<i64> {
+    let ts = chrono::DateTime::parse_from_rfc3339(iso_timestamp).ok()?;
+    let now = chrono::Utc::now();
+    let duration = now.signed_duration_since(ts.with_timezone(&chrono::Utc));
+    Some(duration.num_days())
 }
