@@ -1,6 +1,6 @@
 # @aion0/temper
 
-Forged memory for your code — persistent memory and code understanding for AI coding agents.
+Constraint lifecycle for source code — place, verify, and monitor `TEMPER-CONSTRAINT` comments so AI coding agents (and humans) can't quietly undo the lessons your team has already paid for.
 
 ## Install
 
@@ -8,58 +8,83 @@ Forged memory for your code — persistent memory and code understanding for AI 
 npm install -g @aion0/temper
 ```
 
-## Quick Start
+Supported platforms: macOS arm64. Other platforms will need to build from source (see [cargo install](#install-from-source)).
+
+## Why
+
+Claude Code forgets every session. Four rounds of A/B benchmarking (48 `claude -p` runs) showed the only integration path that reliably shaped Claude's behavior was a structured comment embedded in the source file itself — producing +75pp WIN rate across three unrelated constraint types.
+
+```java
+/**
+ * TEMPER-CONSTRAINT: Do NOT cache full Entity objects — only cache entity IDs.
+ *   Reason: 2024/03 INC-1247, stale caches broke policy eval for 1247 endpoints.
+ *   Rule:
+ *     - No Map<..., Entity>, WeakHashMap, Caffeine, or any field holding an Entity.
+ *     - TTL-invalidated ID caching is fine.
+ *   If full-object caching is required, talk to the platform team first.
+ *   Last-Verified: 2026-04-20
+ */
+public class EntityCache { ... }
+```
+
+Claude reads the file when it edits the file — that's the one channel it can't ignore. Temper manages the rest of the lifecycle.
+
+## Commands
+
+```
+temper check [PATH] [--staged] [--format text|json]
+  Verify every TEMPER-CONSTRAINT in the project.
+  Five status classes: OK / DANGLING / CONTRADICTED / BANNED-TOKEN-IN-CODE / STALE.
+  Exits non-zero if any problems are found.
+
+temper constraint list [PATH]
+  List every TEMPER-CONSTRAINT block with file:line and title.
+
+temper constraint add --target FILE --incident TEXT \
+                      [--detail TEXT] [--apply] [--model MODEL]
+  Draft a 4-part constraint (What / Why / Rule / Escape) via `claude -p`.
+  Stamps today's Last-Verified. --apply inserts above the first class
+  declaration.
+
+temper hook install | uninstall
+  Install or remove a git pre-commit hook that runs `temper check --staged`
+  and blocks commits containing stale / dangling / contradicted constraints.
+
+temper config
+  Print the active configuration.
+```
+
+## Typical new-project flow
 
 ```bash
-cd your-project
-temper init          # Scan project + suggest modules
-temper serve         # Start MCP server (Claude Code calls this automatically)
+cd /path/to/your-project
+
+# For each high-risk file (5–20 hotspots per project is normal):
+temper constraint add \
+  --target src/path/Hotspot.java \
+  --incident "INC-1247: cache-Entity-object → stale eval" \
+  --detail "attributes update frequently; only cache IDs" \
+  --apply
+
+# Sanity check
+temper check
+
+# Guard future commits
+temper hook install
+
+git add . && git commit -m "guard hotspots with TEMPER-CONSTRAINT"
 ```
 
-## Configure with Claude Code
+Requires `git` on PATH. The `constraint add` subcommand additionally needs `claude` (Claude Code CLI) on PATH.
+
+## Install from source
 
 ```bash
-claude mcp add temper -- temper serve .
+git clone https://github.com/aiwatching/temper
+cd temper
+cargo install --path .
 ```
 
-## Configure with Forge
+## Status
 
-Add to your project's `.forge/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "temper": {
-      "command": "temper",
-      "args": ["serve", "."]
-    }
-  }
-}
-```
-
-## What it does
-
-Temper gives AI coding agents persistent memory:
-
-- **Code Graph**: tree-sitter AST analysis with incremental updates
-- **Module Registry**: define module boundaries, auto-suggest on init
-- **Knowledge Store**: constraints, design decisions, causal chains, experiences
-- **17 MCP Tools**: search_code, get_module, remember, recall, find_causal_chain, etc.
-
-## CLI Commands
-
-```
-temper init       Scan project + suggest modules
-temper serve      Start MCP server (stdio)
-temper scan       Rescan code graph
-temper modules    List modules
-temper search     Search code
-temper knowledge  List knowledge entries
-temper history    View temporal history
-temper status     Project overview
-temper export     Export HTML dashboard
-```
-
-## Philosophy
-
-Precise persistent memory, not simulated human memory. What's recorded is exact — no decay, no forgetting. Knowledge can only be marked stale or expired, never automatically deleted.
+Version 0.2.0 is a product pivot from v0.1.x — see [RELEASE_NOTES.md](https://github.com/aiwatching/temper/blob/main/RELEASE_NOTES.md) for the full story of why the MCP server, code graph, and tree-sitter machinery were removed.

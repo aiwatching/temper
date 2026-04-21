@@ -1,7 +1,7 @@
 {
   "name": "@aion0/temper",
-  "version": "0.1.6",
-  "description": "Forged memory for your code — persistent memory and code understanding for AI coding agents",
+  "version": "0.2.0",
+  "description": "Constraint lifecycle for source code — place, verify, and monitor TEMPER-CONSTRAINT comments so AI coding agents can't quietly undo your team's lessons",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -19,17 +19,16 @@
     "postinstall": "node scripts/postinstall.js"
   },
   "optionalDependencies": {
-    "@aion0/temper-darwin-arm64": "0.1.6",
-    "@aion0/temper-darwin-x64": "0.1.6",
-    "@aion0/temper-linux-x64": "0.1.6"
+    "@aion0/temper-darwin-arm64": "0.2.0"
   },
   "keywords": [
     "ai",
-    "code",
-    "memory",
-    "mcp",
     "claude",
-    "tree-sitter",
-    "ast"
+    "claude-code",
+    "constraint",
+    "pre-commit",
+    "code-quality",
+    "source-comments",
+    "ai-safety"
   ]
 }
