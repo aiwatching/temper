@@ -20,8 +20,23 @@ use crate::constraint::scanner::scan_project;
 const UNVERIFIED_AGE_WARN_DAYS: i64 = 180;
 
 pub fn run(project_path: &Path) -> Result<CheckReport> {
+    run_filtered(project_path, None)
+}
+
+/// Like `run` but only processes constraints whose file is in `only_files`
+/// (when provided). Used by `temper check --staged` to narrow the scan to
+/// files a pre-commit hook is about to commit.
+pub fn run_filtered(project_path: &Path, only_files: Option<&[String]>) -> Result<CheckReport> {
     let raws = scan_project(project_path)?;
-    let parsed: Vec<ParsedConstraint> = raws.into_iter().map(parse).collect();
+    let parsed: Vec<ParsedConstraint> = raws
+        .into_iter()
+        .filter(|r| {
+            only_files
+                .map(|list| list.iter().any(|f| f == &r.file_path))
+                .unwrap_or(true)
+        })
+        .map(parse)
+        .collect();
 
     // Build a single in-memory index of the whole project's text so we can
     // answer "does symbol X appear?" and "does pattern P appear?" cheaply.
@@ -316,18 +331,20 @@ fn file_last_commit_date(project_path: &Path, file_rel: &str) -> Option<String> 
 }
 
 /// Compare a committed timestamp (ISO-8601, possibly with offset) against a
-/// verification date (YYYY-MM-DD). Returns true if the commit is strictly
-/// after the end of the verification day.
+/// verification date (YYYY-MM-DD). Returns true if the commit's local date
+/// is strictly after the verification date. We compare date-to-date so the
+/// author's "I verified today" assertion works regardless of UTC offset.
 fn committed_after(committed_iso: &str, verified_date: &str) -> bool {
-    let committed = chrono::DateTime::parse_from_rfc3339(committed_iso).ok();
-    let verified_end = chrono::NaiveDate::parse_from_str(verified_date, "%Y-%m-%d")
-        .ok()
-        .and_then(|d| d.and_hms_opt(23, 59, 59))
-        .map(|ndt| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(ndt, chrono::Utc));
-    match (committed, verified_end) {
-        (Some(c), Some(v)) => c > v,
-        _ => false,
-    }
+    let committed_dt = match chrono::DateTime::parse_from_rfc3339(committed_iso) {
+        Ok(dt) => dt,
+        Err(_) => return false,
+    };
+    let verified = match chrono::NaiveDate::parse_from_str(verified_date, "%Y-%m-%d") {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+    // Use the commit's local date (respecting its tz offset).
+    committed_dt.date_naive() > verified
 }
 
 fn days_since(iso_timestamp: &str) -> Option<i64> {

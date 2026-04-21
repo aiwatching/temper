@@ -52,6 +52,9 @@ pub enum Command {
         path: PathBuf,
         #[arg(long, value_enum, default_value = "text")]
         format: CheckFormat,
+        /// Only check constraints in files currently staged in git
+        #[arg(long)]
+        staged: bool,
     },
 
     /// List all TEMPER-CONSTRAINT comments in the project
@@ -60,8 +63,28 @@ pub enum Command {
         path: PathBuf,
     },
 
+    /// Manage git pre-commit hook
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+
     /// Show configuration
     Config,
+}
+
+#[derive(Subcommand)]
+pub enum HookAction {
+    /// Install `.git/hooks/pre-commit` that runs `temper check --staged`
+    Install {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Remove the temper pre-commit hook
+    Uninstall {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
 }
 
 #[derive(clap::ValueEnum, Clone, Debug)]
@@ -77,8 +100,9 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Modules { name } => cmd_modules(name),
         Command::Graph => cmd_graph(),
         Command::Export { output, open } => cmd_export(output, open),
-        Command::Check { path, format } => cmd_check(path, format),
+        Command::Check { path, format, staged } => cmd_check(path, format, staged),
         Command::Constraints { path } => cmd_constraints(path),
+        Command::Hook { action } => cmd_hook(action),
         Command::Config => cmd_config(),
     }
 }
@@ -296,9 +320,22 @@ fn cmd_export(output: Option<PathBuf>, open: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_check(path: PathBuf, format: CheckFormat) -> Result<()> {
+fn cmd_check(path: PathBuf, format: CheckFormat, staged: bool) -> Result<()> {
     let project_path = resolve_project_path(path)?;
-    let report = crate::constraint::check::run(&project_path)?;
+    let filter = if staged {
+        let files = staged_files(&project_path)?;
+        if files.is_empty() {
+            if matches!(format, CheckFormat::Text) {
+                eprintln!("No staged files. Nothing to check.");
+            }
+            return Ok(());
+        }
+        Some(files)
+    } else {
+        None
+    };
+
+    let report = crate::constraint::check::run_filtered(&project_path, filter.as_deref())?;
 
     match format {
         CheckFormat::Text => report.print_text(),
@@ -311,6 +348,21 @@ fn cmd_check(path: PathBuf, format: CheckFormat) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+fn staged_files(project_path: &Path) -> Result<Vec<String>> {
+    let out = std::process::Command::new("git")
+        .args(["diff", "--cached", "--name-only", "--diff-filter=ACMR"])
+        .current_dir(project_path)
+        .output()?;
+    if !out.status.success() {
+        return Ok(Vec::new());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .collect())
 }
 
 fn cmd_constraints(path: PathBuf) -> Result<()> {
@@ -330,5 +382,98 @@ fn cmd_constraints(path: PathBuf) -> Result<()> {
 fn cmd_config() -> Result<()> {
     let cfg = GlobalConfig::load_or_default()?;
     println!("{}", serde_yaml::to_string(&cfg)?);
+    Ok(())
+}
+
+// --- Hook management ---
+
+const HOOK_MARKER: &str = "# temper-managed pre-commit hook";
+const HOOK_BODY: &str = r#"#!/bin/sh
+# temper-managed pre-commit hook
+# Blocks commits that leave any TEMPER-CONSTRAINT in a stale / dangling /
+# contradicted / banned-token state. Run `temper check --staged` manually
+# to reproduce. To bypass once, use `git commit --no-verify`.
+exec temper check --staged
+"#;
+
+fn cmd_hook(action: HookAction) -> Result<()> {
+    match action {
+        HookAction::Install { path } => {
+            let project_path = resolve_project_path(path)?;
+            install_pre_commit_hook(&project_path)
+        }
+        HookAction::Uninstall { path } => {
+            let project_path = resolve_project_path(path)?;
+            uninstall_pre_commit_hook(&project_path)
+        }
+    }
+}
+
+fn pre_commit_path(project_path: &Path) -> Result<PathBuf> {
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", "hooks/pre-commit"])
+        .current_dir(project_path)
+        .output()
+        .context("Failed to run `git rev-parse` — is this a git repo?")?;
+    if !out.status.success() {
+        anyhow::bail!("Not inside a git repository");
+    }
+    let rel = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    let path = if std::path::Path::new(&rel).is_absolute() {
+        PathBuf::from(rel)
+    } else {
+        project_path.join(rel)
+    };
+    Ok(path)
+}
+
+fn install_pre_commit_hook(project_path: &Path) -> Result<()> {
+    let hook = pre_commit_path(project_path)?;
+    if let Some(parent) = hook.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    if hook.exists() {
+        let existing = std::fs::read_to_string(&hook).unwrap_or_default();
+        if existing.contains(HOOK_MARKER) {
+            eprintln!("Temper hook already installed at {}", hook.display());
+            return Ok(());
+        }
+        anyhow::bail!(
+            "Refusing to overwrite existing pre-commit hook at {}. \
+             Inspect it and remove it manually if you want temper's version.",
+            hook.display()
+        );
+    }
+
+    std::fs::write(&hook, HOOK_BODY)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&hook)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&hook, perms)?;
+    }
+    println!("Installed pre-commit hook at {}", hook.display());
+    println!("Runs `temper check --staged` before every commit.");
+    Ok(())
+}
+
+fn uninstall_pre_commit_hook(project_path: &Path) -> Result<()> {
+    let hook = pre_commit_path(project_path)?;
+    if !hook.exists() {
+        println!("No pre-commit hook to remove.");
+        return Ok(());
+    }
+    let existing = std::fs::read_to_string(&hook).unwrap_or_default();
+    if !existing.contains(HOOK_MARKER) {
+        anyhow::bail!(
+            "Pre-commit hook at {} is not managed by temper. \
+             Remove it manually if you really want to.",
+            hook.display()
+        );
+    }
+    std::fs::remove_file(&hook)?;
+    println!("Removed temper pre-commit hook.");
     Ok(())
 }
