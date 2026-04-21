@@ -52,8 +52,15 @@ pub fn run_filtered(project_path: &Path, only_files: Option<&[String]>) -> Resul
         let mut banned_in_code = Vec::new();
 
         // --- Symbol existence ---
+        //   Look across every source file. For the constraint's own file
+        //   we strip out the constraint comment block first so the regex
+        //   doesn't match itself.
+        let own_code_only = project_text
+            .get(&pc.raw.file_path)
+            .map(|t| strip_comment_block(t, pc.raw.line))
+            .unwrap_or_default();
         for sym in &pc.symbols {
-            if !symbol_exists(&project_text, sym, &pc.raw.file_path) {
+            if !symbol_exists_anywhere(&project_text, &pc.raw.file_path, &own_code_only, sym) {
                 dangling_symbols.push(sym.clone());
             }
         }
@@ -190,16 +197,24 @@ fn load_project_text(project_path: &Path) -> Result<HashMap<String, String>> {
     Ok(map)
 }
 
-/// Does `symbol` appear in any file other than `skip_file` as a class/interface-
-/// like token? We treat it as present if it appears standalone (not as part of
-/// a longer identifier).
-fn symbol_exists(project_text: &HashMap<String, String>, symbol: &str, skip_file: &str) -> bool {
-    let needle_word_boundary = format!("{}", symbol);
+/// Does `symbol` appear as a standalone token anywhere across the project?
+/// The constraint's own file is checked with its comment block stripped
+/// (`own_code_only`), so the symbol inside the constraint comment won't
+/// self-match.
+fn symbol_exists_anywhere(
+    project_text: &HashMap<String, String>,
+    own_file: &str,
+    own_code_only: &str,
+    symbol: &str,
+) -> bool {
+    if contains_as_token(own_code_only, symbol) {
+        return true;
+    }
     for (path, text) in project_text {
-        if path == skip_file {
+        if path == own_file {
             continue;
         }
-        if contains_as_token(text, &needle_word_boundary) {
+        if contains_as_token(text, symbol) {
             return true;
         }
     }
