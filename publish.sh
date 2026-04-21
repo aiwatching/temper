@@ -47,7 +47,7 @@ echo "Updating versions..."
 sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEW_VERSION\"/" Cargo.toml
 
 # npm packages
-for PKG in npm/temper/package.json npm/temper-darwin-arm64/package.json npm/temper-darwin-x64/package.json npm/temper-linux-x64/package.json; do
+for PKG in npm/temper/package.json npm/temper-darwin-arm64/package.json; do
   if [ -f "$PKG" ]; then
     sed -i '' "s/\"version\": \"$CURRENT\"/\"version\": \"$NEW_VERSION\"/" "$PKG"
   fi
@@ -86,52 +86,48 @@ echo ""
 LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 RELEASE_NOTES_FILE="RELEASE_NOTES.md"
 
-echo "# Temper v$NEW_VERSION" > "$RELEASE_NOTES_FILE"
-echo "" >> "$RELEASE_NOTES_FILE"
-echo "Released: $(date +%Y-%m-%d)" >> "$RELEASE_NOTES_FILE"
-echo "" >> "$RELEASE_NOTES_FILE"
+# Only auto-generate release notes if the file doesn't exist, or if the user
+# passes --regen-notes. Hand-written RELEASE_NOTES.md is preserved by default
+# so accidental rerunning doesn't clobber carefully worded release copy.
+REGEN_NOTES=false
+for arg in "$@"; do
+  [ "$arg" = "--regen-notes" ] && REGEN_NOTES=true
+done
 
-if [ -n "$LAST_TAG" ]; then
-  echo "## Changes since $LAST_TAG" >> "$RELEASE_NOTES_FILE"
-  echo "" >> "$RELEASE_NOTES_FILE"
-
-  FEATURES=$(git log --oneline "$LAST_TAG"..HEAD --no-merges --grep="feat:" --format="- %s" 2>/dev/null)
-  if [ -n "$FEATURES" ]; then
-    echo "### Features" >> "$RELEASE_NOTES_FILE"
-    echo "$FEATURES" >> "$RELEASE_NOTES_FILE"
-    echo "" >> "$RELEASE_NOTES_FILE"
-  fi
-
-  FIXES=$(git log --oneline "$LAST_TAG"..HEAD --no-merges --grep="fix:" --format="- %s" 2>/dev/null)
-  if [ -n "$FIXES" ]; then
-    echo "### Bug Fixes" >> "$RELEASE_NOTES_FILE"
-    echo "$FIXES" >> "$RELEASE_NOTES_FILE"
-    echo "" >> "$RELEASE_NOTES_FILE"
-  fi
-
-  OTHER=$(git log --oneline "$LAST_TAG"..HEAD --no-merges --format="%s" 2>/dev/null | grep -v -E "^(feat|fix|perf|refactor|docs|chore|test|ci):" | sed 's/^/- /')
-  if [ -n "$OTHER" ]; then
-    echo "### Other" >> "$RELEASE_NOTES_FILE"
-    echo "$OTHER" >> "$RELEASE_NOTES_FILE"
-    echo "" >> "$RELEASE_NOTES_FILE"
-  fi
+if [ "$REGEN_NOTES" = "true" ] || [ ! -f "$RELEASE_NOTES_FILE" ]; then
+  echo "Generating $RELEASE_NOTES_FILE..."
+  {
+    echo "# Temper v$NEW_VERSION"
+    echo ""
+    echo "Released: $(date +%Y-%m-%d)"
+    echo ""
+    if [ -n "$LAST_TAG" ]; then
+      echo "## Changes since $LAST_TAG"
+      echo ""
+      FEATURES=$(git log --oneline "$LAST_TAG"..HEAD --no-merges --grep="feat:" --format="- %s" 2>/dev/null)
+      if [ -n "$FEATURES" ]; then
+        echo "### Features"
+        echo "$FEATURES"
+        echo ""
+      fi
+      FIXES=$(git log --oneline "$LAST_TAG"..HEAD --no-merges --grep="fix:" --format="- %s" 2>/dev/null)
+      if [ -n "$FIXES" ]; then
+        echo "### Bug Fixes"
+        echo "$FIXES"
+        echo ""
+      fi
+      OTHER=$(git log --oneline "$LAST_TAG"..HEAD --no-merges --format="%s" 2>/dev/null | grep -v -E "^(feat|fix|perf|refactor|docs|chore|test|ci):" | sed 's/^/- /')
+      if [ -n "$OTHER" ]; then
+        echo "### Other"
+        echo "$OTHER"
+        echo ""
+      fi
+    fi
+    echo "**Full Changelog**: https://github.com/aiwatching/temper/compare/${LAST_TAG:-main}...v${NEW_VERSION}"
+  } > "$RELEASE_NOTES_FILE"
 else
-  echo "Initial release" >> "$RELEASE_NOTES_FILE"
-  echo "" >> "$RELEASE_NOTES_FILE"
-  echo "### Features" >> "$RELEASE_NOTES_FILE"
-  echo "- Code Graph: tree-sitter Java AST analysis with incremental updates" >> "$RELEASE_NOTES_FILE"
-  echo "- Module Registry: define module boundaries with glob patterns, auto-suggest on init" >> "$RELEASE_NOTES_FILE"
-  echo "- Knowledge Store: SQLite with causal chains, experiences, full temporal history" >> "$RELEASE_NOTES_FILE"
-  echo "- 17 MCP Tools: search_code, get_module, remember, recall, find_causal_chain, etc." >> "$RELEASE_NOTES_FILE"
-  echo "- Semantic Search: external embedding API + cosine similarity" >> "$RELEASE_NOTES_FILE"
-  echo "- Interface Map: REST endpoint + public method extraction" >> "$RELEASE_NOTES_FILE"
-  echo "- HTML Dashboard: temper export for visualization" >> "$RELEASE_NOTES_FILE"
-  echo "- On-demand graph refresh via git status" >> "$RELEASE_NOTES_FILE"
-  echo "- Proactive constraint injection in get_file_context" >> "$RELEASE_NOTES_FILE"
+  echo "Using existing $RELEASE_NOTES_FILE (pass --regen-notes to overwrite)."
 fi
-
-echo "" >> "$RELEASE_NOTES_FILE"
-echo "**Full Changelog**: https://github.com/aiwatching/temper/compare/${LAST_TAG:-main}...v${NEW_VERSION}" >> "$RELEASE_NOTES_FILE"
 
 echo "Release notes:"
 cat "$RELEASE_NOTES_FILE"
@@ -148,11 +144,15 @@ echo "Pushing..."
 git push origin main
 git push origin "v$NEW_VERSION"
 
-# GitHub Release
+# GitHub Release (attach macOS arm64 binary)
 if command -v gh &> /dev/null; then
   echo ""
   echo "Creating GitHub Release..."
-  gh release create "v$NEW_VERSION" --title "v$NEW_VERSION" --notes-file "$RELEASE_NOTES_FILE" || echo "(release creation skipped)"
+  gh release create "v$NEW_VERSION" \
+    --title "v$NEW_VERSION" \
+    --notes-file "$RELEASE_NOTES_FILE" \
+    target/release/temper \
+    || echo "(release creation skipped)"
 fi
 
 # ─── npm publish ───
