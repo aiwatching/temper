@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Service status</h2>
+  <p>Live snapshot of the dependencies the service needs.</p>
+  <table id="health-table">
+    <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+      <tr><td colspan="3"><em>Loading…</em></td></tr>
+    </tbody>
+  </table>
+  <p><button id="refresh">Refresh</button></p>
+</section>
+
+<section class="card">
+  <h2>Coming soon</h2>
+  <ul>
+    <li><strong>Users</strong> — list, search, create, manage API keys (Phase 1.2)</li>
+    <li><strong>Episodes</strong> — browse stored memories per namespace (Phase 1.5–1.6)</li>
+    <li><strong>Permissions</strong> — view who can read/write each namespace (Phase 1.4)</li>
+  </ul>
+</section>
+
+<script>
+  async function refreshHealth() {
+    const tbody = document.querySelector("#health-table tbody");
+    tbody.innerHTML = "<tr><td colspan='3'><em>Loading…</em></td></tr>";
+    try {
+      const res = await fetch("/v1/health");
+      const data = await res.json();
+      const rows = Object.entries(data.checks).map(([name, info]) =>
+        `<tr>
+          <td>${name}</td>
+          <td class="${info.ok ? 'ok' : 'bad'}">${info.ok ? "OK" : "DOWN"}</td>
+          <td>${info.detail ?? ""}</td>
+        </tr>`).join("");
+      tbody.innerHTML = rows +
+        `<tr><td><strong>overall</strong></td>
+             <td class="${data.status === 'ok' ? 'ok' : 'bad'}">${data.status}</td>
+             <td>env=${data.env} · v${data.version}</td></tr>`;
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan='3' class='bad'>Failed to reach /v1/health: ${err}</td></tr>`;
+    }
+  }
+  document.getElementById("refresh").addEventListener("click", refreshHealth);
+  refreshHealth();
+</script>
+{% endblock %}

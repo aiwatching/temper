@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title or "Memory Service" }}</title>
+  <link rel="stylesheet" href="/admin/static/style.css">
+</head>
+<body>
+  <header>
+    <h1><a href="/admin">Memory Service</a></h1>
+    <nav>
+      <a href="/admin">Dashboard</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/episodes">Episodes</a>
+      <a href="/docs" target="_blank">API docs</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>
+    <small>v0.1.0 · Phase 1.x scaffold</small>
+  </footer>
+</body>
+</html>
