@@ -1,7 +1,0 @@
-Done. Removed the version comparison logic:
-
-- **Deleted** the `StreamMessageId` import
-- **Deleted** the version check block (lines 38-49) that parsed stream IDs and skipped stale requests
-- **Deleted** the two private helper methods `safeParseStreamId` and `compareStreamMessageId`
-
-The existing tests don't need changes — they never exercised the version check path (the mock `req` and `entity` had null versions, so the check was always skipped via the null guard).

@@ -1,8 +1,0 @@
-**Nothing outside of `core_business_v2/ingestion/` depends on it.**
-
-- No other module's `pom.xml` declares `<artifactId>ingestion</artifactId>` as a dependency.
-- No Java file outside `core_business_v2/ingestion/` imports `com.fortinet.nac.ingestion.*`.
-- The only external reference is a mention in `core_business_v2/README.txt` (documentation) and the parent `core_business_v2/pom.xml` listing it as a `<module>`.
-- The `classification` module's pom.xml has a comment mentioning ingestion, but that's about classification producing a library JAR *for* ingestion to consume — the dependency goes the other direction (ingestion depends on classification, not vice versa).
-
-The ingestion module is a leaf/standalone Spring Boot application with no downstream dependents.

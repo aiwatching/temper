@@ -1,9 +1,0 @@
-Only the config file itself references it — no other consumers. The `NettyOffLoadThreadPoolConfig` and `NamedThreadFactory` are now dead code. Want me to delete them, or leave them in case you plan to use the executor elsewhere?
-
-**Summary of changes:**
-
-1. **`IngestionController.java`** — `ingestEvent()` now returns `ResultDTO<?>` directly instead of `Mono<ResultDTO<?>>`. Uses `future.get(timeout, SECONDS)` with try-catch for timeout/error handling. Removed `nettyOffloadExecutor`, `Mono`, `Schedulers` imports, and the `logThreadPoolStats` debug method.
-
-2. **`IngestionControllerTest.java`** — Switched from `@WebFluxTest` + `WebTestClient` to `@WebMvcTest` + `MockMvc`. Removed the `TestConfiguration` for `nettyOffloadExecutor`. All 5 test cases preserved with identical assertions.
-
-3. **`NettyOffLoadThreadPoolConfig.java`** — Now unused (no references). Can be deleted if not needed elsewhere.

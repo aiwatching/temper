@@ -1,5 +1,0 @@
-I don't see any version comparison or `StreamMessageId` logic in this file. The handler compares fingerprints (not versions/message IDs) and delegates to a `FingerprintHandler`. There's no "skip processing if the incoming StreamMessageId is older" logic here.
-
-Are you sure you're referring to the right file or the right logic? The fingerprint comparison (`sameFingerprint`) isn't skipping processing — it's used to determine *which* handler to dispatch to via `FingerprintCase.of()`. Both the same-fingerprint and different-fingerprint cases are handled.
-
-Could you clarify what specifically you'd like removed?

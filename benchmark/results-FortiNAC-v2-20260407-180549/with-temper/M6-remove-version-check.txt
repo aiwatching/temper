@@ -1,7 +1,0 @@
-Done. Removed:
-
-- The `StreamMessageId` import
-- The version comparison block (lines 38-49) that parsed and compared stream IDs to skip "stale" requests
-- The `safeParseStreamId` and `compareStreamMessageId` private methods
-
-The handler now goes straight from entity lookup to fingerprint comparison and handler dispatch. The existing tests don't need changes since none of them were testing the version check path (they used default `null` versions which bypassed the check anyway).

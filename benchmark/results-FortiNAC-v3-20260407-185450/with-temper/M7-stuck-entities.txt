@@ -1,8 +1,0 @@
-## Summary
-
-| Issue | Root Cause | Effect | Fix |
-|-------|-----------|--------|-----|
-| NPE in LabelService | `__labels__` is null when no rules match | StageExecutor catches → SYSTEM_ERROR → 3 retries → all fail → stuck | `getOrDefault("__labels__", Map.of())` |
-| Stage advances on failure | Line 209 unconditionally sets `nextStage` | Failed entities written as LABELED instead of PENDING; recovery can't re-run the correct stage | Only call `setProcessingStage(nextStage)` when `serviceSuccess == true` |
-
-After fix #2, entities that fail labeling will stay in `PENDING` with an error code, making it clear they need labeling retried (not policy evaluation). Existing stuck entities in LABELED with non-zero codes should be reset to `PENDING` with `processingCode=0` to re-enter the pipeline.

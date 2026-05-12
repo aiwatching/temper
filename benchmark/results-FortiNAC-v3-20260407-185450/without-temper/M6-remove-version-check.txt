@@ -1,7 +1,0 @@
-Done. Removed the version comparison logic:
-
-- **Deleted**: `safeParseStreamId()` and `compareStreamMessageId()` private methods (~45 lines)
-- **Deleted**: The early-return block (lines 39-49) that skipped processing for "stale" requests
-- **Removed**: The `org.redisson.api.StreamMessageId` import
-
-The handler now goes straight from entity lookup to fingerprint comparison, which is where the real dispatch logic lives. Existing tests pass unchanged since none of them exercised the version check path.
