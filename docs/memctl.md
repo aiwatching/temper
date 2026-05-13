@@ -90,6 +90,27 @@ Wipe with `memctl logout`.
 | `memctl group member ls SLUG` | List group members |
 | `memctl group member rm SLUG USER_ID` | Remove (or self-leave) |
 
+### Graph inspection (direct FalkorDB)
+
+These talk to FalkorDB directly (`localhost:6380` by default), bypassing
+the service. Useful for debugging "where did my data go?" / "did the
+LLM extract any edges?". They're read-only by construction (`ro_query`).
+
+| Command | Purpose |
+|---|---|
+| `memctl graph list` | All graphs in FalkorDB with node/edge counts |
+| `memctl graph summary [-n NS]` | Per-label counts for a namespace's graph |
+| `memctl graph nodes [-n NS] [--label LABEL] [--limit N]` | Walk through nodes (Episodic, Entity, Community) |
+| `memctl graph edges [-n NS] [--limit N]` | Walk through RELATES_TO edges (facts) |
+| `memctl graph cypher [-n NS] 'CYPHER'` | Arbitrary read-only Cypher query |
+
+Override the FalkorDB target with `--falkordb-host` / `--falkordb-port`
+flags or `FALKORDB_HOST` / `FALKORDB_PORT` env vars. `--namespace`
+defaults to `user:me`.
+
+For a visual interface, the FalkorDB image bundles a Browser UI at
+http://localhost:3000/ (published by `scripts/start_falkordb.sh`).
+
 ## Scripting
 
 Every command takes `--json` to emit the raw API response instead of a

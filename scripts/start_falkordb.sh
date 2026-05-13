@@ -22,6 +22,10 @@ IMAGE="${FALKORDB_IMAGE:-falkordb/falkordb:latest}"
 get() { grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'"; }
 HOST="$(get FALKORDB_HOST)";       HOST="${HOST:-localhost}"
 PORT="$(get FALKORDB_PORT)";       PORT="${PORT:-6380}"
+# FalkorDB image bundles a Browser UI on container port 3000. Publish it
+# on the host (FALKORDB_BROWSER_PORT, default 3000) so you can click
+# through the graph at http://localhost:3000/. Set to 0 to disable.
+BROWSER_PORT="$(get FALKORDB_BROWSER_PORT)"; BROWSER_PORT="${BROWSER_PORT:-3000}"
 # Probe graph is hardcoded — the runtime healthcheck uses the same name
 # (`adapters/falkordb.py`). We never write data here.
 GRAPH="_healthcheck"
@@ -66,14 +70,24 @@ fi
 if docker ps --format '{{.Names}}' | grep -qx "$CONTAINER_NAME"; then
   ok "container '$CONTAINER_NAME' running"
 else
-  say "starting $IMAGE on host port $PORT (container: $CONTAINER_NAME)..."
+  browser_arg=()
+  if [ "$BROWSER_PORT" != "0" ]; then
+    browser_arg=(-p "${BROWSER_PORT}:3000")
+    say "starting $IMAGE on host port $PORT (RESP) + $BROWSER_PORT (browser UI)..."
+  else
+    say "starting $IMAGE on host port $PORT (browser UI disabled)..."
+  fi
   docker run -d \
     --name "$CONTAINER_NAME" \
     --restart unless-stopped \
     -p "${PORT}:6379" \
+    "${browser_arg[@]}" \
     -v "memory-service-falkor-data:/var/lib/falkordb/data" \
     "$IMAGE" >/dev/null
   ok "container started"
+  if [ "$BROWSER_PORT" != "0" ]; then
+    ok "FalkorDB Browser: http://localhost:${BROWSER_PORT}/"
+  fi
 fi
 
 # Wait up to 10s for GRAPH.QUERY to come up.

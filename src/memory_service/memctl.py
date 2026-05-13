@@ -438,6 +438,156 @@ def cmd_group_member_rm(args: argparse.Namespace) -> None:
     print(f"  removed {args.user_id} from group {args.slug}")
 
 
+# --- graph (direct FalkorDB inspection) ------------------------------
+#
+# Talks directly to FalkorDB rather than going through the service. This
+# is meant for inspection / debugging — it bypasses our namespace permission
+# layer, so trust boundary is "whoever can reach localhost:6380." For local
+# dev that's the same person already running `redis-cli`.
+
+
+def _encode_namespace(raw: str) -> str:
+    """Mirror core.namespaces.Namespace.as_graphiti_group_id without
+    importing the server side (keeps memctl independent of DB models)."""
+    return raw.replace(":", "__").replace("-", "_")
+
+
+def _falkordb(args: argparse.Namespace):  # type: ignore[no-untyped-def]
+    import falkordb  # local import — only graph subcommands need it
+
+    host = (
+        getattr(args, "falkordb_host", None)
+        or os.environ.get("FALKORDB_HOST")
+        or "localhost"
+    )
+    port = int(
+        getattr(args, "falkordb_port", None)
+        or os.environ.get("FALKORDB_PORT")
+        or 6380
+    )
+    return falkordb.FalkorDB(host=host, port=port)
+
+
+def _resolve_graph_name(args: argparse.Namespace) -> str:
+    """Figure out which FalkorDB graph (encoded group_id) to talk to.
+
+    `--namespace user:me` → fetch /v1/auth/me to learn the caller's UUID.
+    `--namespace user:<id>` or `group:<slug>` etc. → encode literally.
+    No --namespace → default to user:me.
+    """
+    raw = args.namespace or "user:me"
+    if raw == "user:me":
+        me = _request(args, "GET", "/v1/auth/me")
+        raw = f"user:{me['id']}"
+    return _encode_namespace(raw)
+
+
+def _rows_from(result) -> list[dict[str, Any]]:  # type: ignore[no-untyped-def]
+    """Turn a FalkorDB QueryResult into a list of {column: value} dicts."""
+    headers = [h[1] for h in result.header]
+    out: list[dict[str, Any]] = []
+    for row in result.result_set:
+        rec: dict[str, Any] = {}
+        for h, v in zip(headers, row):
+            # Node / Edge instances have a `.properties` dict; flatten them
+            # to a one-line repr for the table view, dump as JSON otherwise.
+            if hasattr(v, "properties"):
+                rec[h] = json.dumps(v.properties, default=str)
+            elif isinstance(v, list):
+                rec[h] = ", ".join(str(x) for x in v)
+            else:
+                rec[h] = v
+        out.append(rec)
+    return out
+
+
+def cmd_graph_list(args: argparse.Namespace) -> None:
+    db = _falkordb(args)
+    graphs = db.list_graphs()
+    if getattr(args, "json", False):
+        _dump_json(graphs)
+        return
+    # Annotate each with size + label breakdown so the user can tell which
+    # ones are alive and which are just leftover empty shells.
+    rows: list[dict[str, Any]] = []
+    for name in graphs:
+        try:
+            r = db.select_graph(name).ro_query(
+                "MATCH (n) RETURN count(n) AS nodes"
+            )
+            nodes = r.result_set[0][0] if r.result_set else 0
+        except Exception:
+            nodes = "?"
+        try:
+            r = db.select_graph(name).ro_query(
+                "MATCH ()-[r]->() RETURN count(r) AS edges"
+            )
+            edges = r.result_set[0][0] if r.result_set else 0
+        except Exception:
+            edges = "?"
+        rows.append({"graph": name, "nodes": nodes, "edges": edges})
+    emit(args, rows, columns=["graph", "nodes", "edges"])
+
+
+def cmd_graph_summary(args: argparse.Namespace) -> None:
+    db = _falkordb(args)
+    g = db.select_graph(_resolve_graph_name(args))
+    nodes_by_label = _rows_from(
+        g.ro_query(
+            "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count "
+            "ORDER BY count DESC"
+        )
+    )
+    edges_by_type = _rows_from(
+        g.ro_query(
+            "MATCH ()-[r]->() RETURN type(r) AS type, count(r) AS count "
+            "ORDER BY count DESC"
+        )
+    )
+    if getattr(args, "json", False):
+        _dump_json({"nodes": nodes_by_label, "edges": edges_by_type})
+        return
+    print(f"  graph: {g.name}\n")
+    print("  nodes:")
+    emit(args, nodes_by_label, columns=["label", "count"])
+    print("\n  edges:")
+    emit(args, edges_by_type, columns=["type", "count"])
+
+
+def cmd_graph_nodes(args: argparse.Namespace) -> None:
+    db = _falkordb(args)
+    g = db.select_graph(_resolve_graph_name(args))
+    where = f"WHERE n:{args.label}" if args.label else ""
+    q = (
+        f"MATCH (n) {where} "
+        "RETURN labels(n)[0] AS label, n.name AS name, n.summary AS summary, "
+        "       n.content AS content "
+        f"ORDER BY n.created_at DESC LIMIT {args.limit}"
+    )
+    rows = _rows_from(g.ro_query(q))
+    emit(args, rows, columns=["label", "name", "summary", "content"])
+
+
+def cmd_graph_edges(args: argparse.Namespace) -> None:
+    db = _falkordb(args)
+    g = db.select_graph(_resolve_graph_name(args))
+    q = (
+        "MATCH (a)-[r:RELATES_TO]->(b) "
+        "RETURN a.name AS source, r.name AS rel, b.name AS target, r.fact AS fact "
+        f"ORDER BY r.created_at DESC LIMIT {args.limit}"
+    )
+    rows = _rows_from(g.ro_query(q))
+    emit(args, rows, columns=["source", "rel", "target", "fact"])
+
+
+def cmd_graph_cypher(args: argparse.Namespace) -> None:
+    db = _falkordb(args)
+    g = db.select_graph(_resolve_graph_name(args))
+    # `ro_query` rejects writes server-side — safer for an inspection tool.
+    rows = _rows_from(g.ro_query(args.query))
+    emit(args, rows)
+
+
 # ---------- argparse glue ----------------------------------------------
 
 
@@ -446,6 +596,15 @@ def _add_common_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--key", help="API key for this invocation only")
     p.add_argument("--token", help="JWT for this invocation only")
     p.add_argument("--json", action="store_true", help="Emit raw API JSON")
+    p.add_argument(
+        "--falkordb-host",
+        help="FalkorDB host for `graph` subcommands (env: FALKORDB_HOST)",
+    )
+    p.add_argument(
+        "--falkordb-port",
+        type=int,
+        help="FalkorDB port for `graph` subcommands (env: FALKORDB_PORT, default 6380)",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -570,6 +729,30 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("slug")
     sp.add_argument("user_id")
     sp.set_defaults(func=cmd_group_member_rm)
+
+    # graph (FalkorDB inspection)
+    graph = sub.add_parser(
+        "graph", help="Inspect the FalkorDB graph directly"
+    ).add_subparsers(dest="subcmd", required=True)
+    graph.add_parser("list", help="All graphs in FalkorDB with node/edge counts").set_defaults(
+        func=cmd_graph_list
+    )
+    sp = graph.add_parser("summary", help="Per-label counts for a namespace's graph")
+    sp.add_argument("-n", "--namespace", help="user:me (default) | user:<id> | group:<slug> | ...")
+    sp.set_defaults(func=cmd_graph_summary)
+    sp = graph.add_parser("nodes", help="List nodes in a namespace's graph")
+    sp.add_argument("-n", "--namespace")
+    sp.add_argument("--label", help="Filter (Episodic | Entity | Community)")
+    sp.add_argument("--limit", type=int, default=20)
+    sp.set_defaults(func=cmd_graph_nodes)
+    sp = graph.add_parser("edges", help="List RELATES_TO edges (facts) in a namespace")
+    sp.add_argument("-n", "--namespace")
+    sp.add_argument("--limit", type=int, default=20)
+    sp.set_defaults(func=cmd_graph_edges)
+    sp = graph.add_parser("cypher", help="Run an arbitrary read-only Cypher query")
+    sp.add_argument("query")
+    sp.add_argument("-n", "--namespace")
+    sp.set_defaults(func=cmd_graph_cypher)
 
     return p
 
