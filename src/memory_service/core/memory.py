@@ -17,11 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from memory_service.adapters.graphiti_client import get_graphiti
 from memory_service.core.namespaces import (
     Namespace,
+    NamespaceError,
     can_read,
     can_write,
     default_namespace_for,
     parse,
     readable_namespaces_for,
+    resolve,
 )
 from memory_service.models import EpisodeMetadata, User
 
@@ -44,6 +46,10 @@ class NotFoundError(MemoryError):
 
 class BackendUnavailableError(MemoryError):
     http_status = 503
+
+
+class InvalidRequestError(MemoryError):
+    http_status = 400
 
 
 @dataclass
@@ -124,10 +130,14 @@ async def add_episode(
     req: WriteRequest,
     db: AsyncSession,
 ) -> WriteResult:
-    ns = parse(req.namespace) if req.namespace else default_namespace_for(user)
+    try:
+        ns = resolve(req.namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
     if not await can_write(user, ns, db):
         raise PermissionDeniedError(
-            f"User '{user.email}' cannot write to namespace '{ns.raw}'"
+            f"User '{user.email}' cannot write to namespace '{ns.raw}'. "
+            f"Your own namespace is 'user:{user.id}' (or just leave it blank / use 'user:me')."
         )
 
     client = _require_client()
@@ -197,7 +207,10 @@ async def search(
         return []
 
     if namespaces:
-        parsed = [parse(n) for n in namespaces]
+        try:
+            parsed = [resolve(n, user) for n in namespaces]
+        except NamespaceError as exc:
+            raise InvalidRequestError(str(exc)) from exc
         # Drop any the caller can't read.
         readable = [n for n in parsed if await can_read(user, n, db)]
         if not readable:
@@ -286,12 +299,15 @@ async def list_episodes(
     stmt = select(EpisodeMetadata).order_by(EpisodeMetadata.created_at.desc())
 
     if namespace:
-        ns = parse(namespace)
+        try:
+            ns = resolve(namespace, user)
+        except NamespaceError as exc:
+            raise InvalidRequestError(str(exc)) from exc
         if not await can_read(user, ns, db):
             raise PermissionDeniedError(
-                f"User '{user.email}' cannot read namespace '{namespace}'"
+                f"User '{user.email}' cannot read namespace '{ns.raw}'"
             )
-        stmt = stmt.where(EpisodeMetadata.namespace == namespace)
+        stmt = stmt.where(EpisodeMetadata.namespace == ns.raw)
     else:
         readable = await readable_namespaces_for(user, db)
         stmt = stmt.where(EpisodeMetadata.namespace.in_([n.raw for n in readable]))

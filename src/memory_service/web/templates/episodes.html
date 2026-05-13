@@ -4,7 +4,7 @@
   <h2>Write a memory</h2>
   <form id="write-form" class="stacked">
     <label>Namespace
-      <input type="text" name="namespace" placeholder="user:&lt;your-id&gt;  (leave blank for your own)">
+      <input type="text" name="namespace" placeholder="leave blank, or use 'user:me' / 'public' / 'group:&lt;slug&gt;'">
     </label>
     <label>Content
       <textarea name="content" rows="4" placeholder="e.g. Jerry's new English teacher is Sarah. They meet on Tuesdays at 9am." required style="font:inherit;padding:8px 10px;border:1px solid #e5e7eb;border-radius:4px;"></textarea>
@@ -31,7 +31,7 @@
       <input type="text" name="query" placeholder="Who is Jerry's English teacher?" required>
     </label>
     <label>Namespaces (comma-separated, optional)
-      <input type="text" name="namespaces" placeholder="leave blank to search everything readable">
+      <input type="text" name="namespaces" placeholder="blank = all readable.  e.g. 'user:me, public'">
     </label>
     <label>Limit
       <input type="number" name="limit" min="1" max="50" value="10">

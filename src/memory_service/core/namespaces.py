@@ -61,15 +61,37 @@ def parse(raw: str) -> Namespace:
         return Namespace(raw=raw, kind="public", value="")
     if ":" not in raw:
         raise NamespaceError(
-            f"namespace must be 'public' or '<kind>:<id>', got: {raw!r}"
+            f"namespace must be one of: 'public', 'user:<id>', 'group:<slug>', "
+            f"'org:<slug>', or 'user:me' for self. Got: {raw!r}"
         )
     kind, _, value = raw.partition(":")
     if kind not in ("user", "group", "org"):
-        raise NamespaceError(f"unknown namespace kind: {kind!r}")
+        raise NamespaceError(
+            f"unknown namespace kind {kind!r}. Valid: user, group, org, public."
+        )
     value = value.strip()
     if not value:
         raise NamespaceError(f"empty {kind} id in namespace: {raw!r}")
     return Namespace(raw=raw, kind=kind, value=value)  # type: ignore[arg-type]
+
+
+def resolve(raw: str | None, caller: User) -> Namespace:
+    """High-level namespace resolution for callers.
+
+    - None / "" → caller's own namespace
+    - "user:me"  → caller's own namespace (handy for agents that don't
+                   want to look up their own UUID first)
+    - anything else → parse() normally
+
+    Use this from API layers; reserve plain `parse()` for cases where
+    the caller has already been resolved.
+    """
+    if not raw or not raw.strip():
+        return default_namespace_for(caller)
+    cleaned = raw.strip()
+    if cleaned == "user:me":
+        return parse(f"user:{caller.id}")
+    return parse(cleaned)
 
 
 def default_namespace_for(user: User) -> Namespace:
