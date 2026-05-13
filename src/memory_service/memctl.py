@@ -595,6 +595,14 @@ def cmd_graph_edges(args: argparse.Namespace) -> None:
     emit(args, rows, columns=["source", "rel", "target", "fact"])
 
 
+def cmd_admin_build_communities(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    data = _request(args, "POST", "/v1/admin/communities/build", params=params)
+    emit(args, data)
+
+
 def cmd_entity_show(args: argparse.Namespace) -> None:
     data = _request(args, "GET", f"/v1/entities/{args.uuid}")
     emit(args, data)
@@ -809,6 +817,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("query")
     sp.add_argument("-n", "--namespace")
     sp.set_defaults(func=cmd_graph_cypher)
+
+    # admin (graph maintenance jobs)
+    admin = sub.add_parser("admin", help="Graph maintenance jobs").add_subparsers(
+        dest="subcmd", required=True
+    )
+    communities = admin.add_parser(
+        "communities", help="Entity-cluster (Community) management"
+    ).add_subparsers(dest="comm_cmd", required=True)
+    sp = communities.add_parser(
+        "build", help="Run Graphiti's clustering on a namespace's entities"
+    )
+    sp.add_argument("-n", "--namespace", help="Target namespace (default user:me)")
+    sp.set_defaults(func=cmd_admin_build_communities)
 
     # entity / fact lookup by uuid
     sp = sub.add_parser("entity", help="Show one entity by UUID")

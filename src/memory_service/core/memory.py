@@ -396,11 +396,11 @@ async def search(
     def _to_raw(group_id: str) -> str:
         return group_id_to_raw.get(group_id, group_id)
 
-    hits: list[SearchHit] = []
+    edge_hits: list[SearchHit] = []
     for edge in results.edges:
         if as_of is not None and not _active_at(edge, as_of):
             continue
-        hits.append(
+        edge_hits.append(
             SearchHit(
                 kind="fact",
                 fact=edge.fact,
@@ -411,15 +411,18 @@ async def search(
                 score=None,
             )
         )
+
     # When time-travel is requested, entity-node summaries (which have no
     # validity semantics) would mix "what we believed then" with "everything
     # we ever knew about this entity" — confusingly. Drop them in that mode.
+    node_hits: list[SearchHit] = []
+    community_hits: list[SearchHit] = []
     if as_of is None:
         for node in results.nodes:
             text = (getattr(node, "summary", None) or node.name or "").strip()
             if not text:
                 continue
-            hits.append(
+            node_hits.append(
                 SearchHit(
                     kind="entity",
                     fact=text,
@@ -430,7 +433,38 @@ async def search(
                     score=None,
                 )
             )
-    return hits[:limit]
+        for comm in getattr(results, "communities", None) or []:
+            text = (getattr(comm, "summary", None) or comm.name or "").strip()
+            if not text:
+                continue
+            community_hits.append(
+                SearchHit(
+                    kind="community",
+                    fact=text,
+                    namespace=_to_raw(comm.group_id),
+                    source_episode_ids=[],
+                    valid_at=None,
+                    invalid_at=None,
+                    score=None,
+                )
+            )
+
+    # Round-robin merge across the three result streams: each kind's
+    # internal rank is preserved, but no kind monopolizes the slice
+    # when the caller's `limit` is smaller than the total candidate
+    # count. Edges first so a single-kind query (no entities, no
+    # communities yet) still degrades to "all facts."
+    merged: list[SearchHit] = []
+    iters = [iter(edge_hits), iter(node_hits), iter(community_hits)]
+    while iters and len(merged) < limit:
+        for it in iters[:]:
+            try:
+                merged.append(next(it))
+                if len(merged) >= limit:
+                    break
+            except StopIteration:
+                iters.remove(it)
+    return merged
 
 
 def _active_at(edge: Any, as_of: datetime) -> bool:
@@ -626,6 +660,46 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
             }
             for e in edges
         ],
+    }
+
+
+async def build_communities(
+    user: User, raw_namespace: str | None, db: AsyncSession
+) -> dict[str, Any]:
+    """Run Graphiti's clustering pass on a namespace, creating Community
+    nodes that summarize related-entity neighborhoods.
+
+    Requires write permission on the target namespace (Communities mutate
+    the graph). Returns the count of created nodes + edges; the actual
+    nodes show up under `kind="Community"` in subsequent /v1/graph and
+    /v1/search calls.
+    """
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_write(user, ns, db):
+        raise PermissionDeniedError(_write_denied_hint(user, ns))
+
+    client = _require_client()
+    encoded = ns.as_graphiti_group_id()
+    # Graphiti's handle_multiple_group_ids decorator only clones the driver
+    # when len(group_ids) > 1; with a single id it falls through to
+    # self.driver (pinned to `default_db`, empty). Pass the cloned driver
+    # explicitly so we hit the right per-namespace graph.
+    driver = _driver_for_namespace(client, ns)
+    try:
+        nodes, edges = await client.build_communities(
+            group_ids=[encoded], driver=driver
+        )
+    except Exception as exc:
+        _logger.exception("build_communities failed for %s", ns.raw)
+        raise BackendUnavailableError(f"build_communities failed: {exc}") from exc
+
+    return {
+        "namespace": ns.raw,
+        "communities_created": len(nodes),
+        "community_edges_created": len(edges),
     }
 
 
