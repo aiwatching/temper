@@ -3,22 +3,24 @@
 Per PRD §4.2 namespaces are flat strings of four shapes:
 
   user:{user_id}        owned by one user
-  group:{group_slug}    owned by a group
+  group:{group_slug}    owned by a group within an org
   org:{org_slug}        owned by an organization
   public                everyone-authenticated readable
 
-This file implements the **minimum** set of checks needed for Phase 1.5
-(episode write/read). Phase 1.4 will replace it with the full matrix
-once orgs/groups CRUD exists. Behaviour in this minimal version:
+Permission matrix (Phase 1.4):
 
-  user:self        rw  for the user, deny for others.
-  user:other       deny for everyone except super_admin.
-  group:*          deny except super_admin until membership exists.
-  org:*            deny except super_admin until membership exists.
-  public           read for any authenticated user; write for super_admin.
+  user:self       rw  for the user.
+  user:other      ro/wo only for super_admin.
+  group:slug      rw  for any group member; super_admin and the group's
+                  org_admin can write/manage without joining.
+  org:slug        ro  for any member; write for that org's admin only;
+                  super_admin always.
+  public          read for any authenticated user; write for super_admin.
 
-The point is to fail safely now and tighten later. We deliberately do
-not silently grant access we'd later want to take away.
+Group-membership writes flow through `UserGroupMembership`; org
+membership is the single `User.org_id` column; org-admin is the
+`User.is_org_admin` bool (scoped implicitly to the user's current org —
+moving orgs forfeits the role).
 """
 from __future__ import annotations
 
@@ -130,9 +132,8 @@ async def can_write(user: User, ns: Namespace, db: AsyncSession) -> bool:
     if ns.kind == "group":
         return await _is_group_member(user, ns.value, db)
     if ns.kind == "org":
-        # Writing to org-level needs org-admin role. Until Phase 1.3 ships
-        # that, deny outright.
-        return False
+        # Org admin of THIS org may write. Plain members read but don't write.
+        return user.is_org_admin and await _is_in_org(user, ns.value, db)
     return False
 
 

@@ -85,9 +85,8 @@ Tips:
 - Leave the field blank when writing — defaults to `user:me`.
 - `user:me` is a convenience alias; agents don't have to look up their
   own UUID first.
-- `group:` and `org:` need Phase 1.3 (org/group CRUD) to be useful;
-  pre-1.3 they exist in the schema but no one is a member, so writes
-  fail with 403 and reads return nothing.
+- `group:<slug>` and `org:<slug>` work once you wire up members via
+  `/v1/orgs` and `/v1/groups` (see §10).
 
 ---
 
@@ -241,3 +240,45 @@ service, so per-component status is the truth.
   before responding).
 - **Permissions deep-dive**: `docs/permissions.md`.
 - **Swagger**: `http://localhost:8000/docs`.
+
+---
+
+## 10. Orgs and groups
+
+Orgs and groups give you shared `org:<slug>` / `group:<slug>` namespaces
+on top of the per-user default. Quick flow:
+
+```bash
+# (super_admin only) create an org
+curl -X POST http://localhost:8000/v1/orgs \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"slug":"acme","name":"Acme Corp"}'
+
+# add a user to it; pass is_org_admin=true if they should manage the org
+curl -X POST http://localhost:8000/v1/orgs/acme/members \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"user_id":"<uuid>","is_org_admin":false}'
+
+# any org member can create a group; creator becomes group admin
+curl -X POST http://localhost:8000/v1/groups \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"slug":"engineers","name":"Engineering"}'
+
+# group admins (or org admin / super_admin) invite others
+curl -X POST http://localhost:8000/v1/groups/engineers/members \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"user_id":"<uuid>","role":"member"}'
+```
+
+Once seated, write into the shared namespace:
+
+```bash
+curl -X POST http://localhost:8000/v1/episodes \
+  -H "X-API-Key: $KEY" \
+  -d '{"namespace":"group:engineers","content":"Our service uses Redis 7."}'
+```
+
+Permission rules in one sentence: any group member can write to
+`group:<slug>`; only org admins can write to `org:<slug>`; everyone in
+the org can read both. Full matrix in `docs/permissions.md`.

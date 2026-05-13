@@ -22,4 +22,9 @@ class User(Base, UUIDPKMixin, TimestampMixin):
         String(36), ForeignKey("organizations.id", ondelete="SET NULL"), default=None, index=True
     )
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Per the 1-user-1-org constraint (org_id is a single FK), org_admin is a
+    # bool, not a per-org membership row. Super_admin or another org_admin in
+    # the same org promotes/demotes. Setting org_id=NULL is what "removes
+    # someone from the org" — is_org_admin should be cleared at the same time.
+    is_org_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

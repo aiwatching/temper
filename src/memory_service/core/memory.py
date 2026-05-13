@@ -127,6 +127,38 @@ def _episode_type(raw: str):  # type: ignore[no-untyped-def]
     }.get(raw, EpisodeType.text)
 
 
+def _write_denied_hint(user: User, ns) -> str:  # type: ignore[no-untyped-def]
+    """Human-readable explanation of why a write was rejected.
+
+    Each namespace kind has its own typical fix; a one-size message would
+    just send users back to the docs.
+    """
+    base = f"User '{user.email}' cannot write to namespace '{ns.raw}'."
+    if ns.kind == "user":
+        return (
+            f"{base} You can only write to your own namespace "
+            f"'user:{user.id}' (or just leave it blank / use 'user:me')."
+        )
+    if ns.kind == "group":
+        return (
+            f"{base} You must be a member of group '{ns.value}'. "
+            "Ask a group admin to add you via "
+            f"POST /v1/groups/{ns.value}/members."
+        )
+    if ns.kind == "org":
+        return (
+            f"{base} Writing to an org namespace requires org_admin role in "
+            f"that org. Ask a super_admin or another org_admin to promote you "
+            f"via PATCH /v1/orgs/{ns.value}/members/{{user_id}}."
+        )
+    if ns.kind == "public":
+        return (
+            f"{base} Only super_admin may write to 'public'. Pick your own "
+            "user/group/org namespace instead."
+        )
+    return base
+
+
 # ---------- public ops ----------
 
 
@@ -141,10 +173,7 @@ async def add_episode(
     except NamespaceError as exc:
         raise InvalidRequestError(str(exc)) from exc
     if not await can_write(user, ns, db):
-        raise PermissionDeniedError(
-            f"User '{user.email}' cannot write to namespace '{ns.raw}'. "
-            f"Your own namespace is 'user:{user.id}' (or just leave it blank / use 'user:me')."
-        )
+        raise PermissionDeniedError(_write_denied_hint(user, ns))
 
     client = _require_client()
     reference_time = req.reference_time or datetime.now(UTC)

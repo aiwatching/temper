@@ -37,36 +37,54 @@ never see that translation; the API surface uses the raw form.
 
 ## Write matrix
 
-| Caller \ Target | `user:self` | `user:other` | `group:my-X` | `group:other-X` | `org:my-Y` | `public` |
-|---|---|---|---|---|---|---|
-| user            | ✓ | ✗ | ✓ (Phase 1.3) | ✗ | ✗ | ✗ |
-| group admin     | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ |
-| org admin       | ✓ | ✗ | ✓ | ✗ | ✓ | ✗ |
-| super_admin     | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Caller \ Target            | `user:self` | `user:other` | `group:my-X` | `group:other-X` | `org:my-Y` | `org:other-Y` | `public` |
+|---|---|---|---|---|---|---|---|
+| user, no org               | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| org member                 | ✓ | ✗ | (if in group) | ✗ | ✗ | ✗ | ✗ |
+| group member               | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ | ✗ |
+| org admin (`is_org_admin`) | ✓ | ✗ | ✓ (any group in org) | ✗ | ✓ | ✗ | ✗ |
+| super_admin                | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Notes:
+
+- `is_org_admin` is a per-user bool. Because the schema constrains a
+  user to a single org (`User.org_id`), the role is implicitly scoped to
+  that org — switching orgs forfeits it.
+- `org admin` can manage all groups inside their org (rename, delete,
+  membership changes), even ones they're not personally a member of.
 
 ## Read matrix
 
-| Caller \ Target | `user:self` | `user:other` | `group:my-X` | `group:other-X` | `org:my-Y` | `public` |
-|---|---|---|---|---|---|---|
-| anonymous       | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
-| authenticated   | ✓ | ✗ | ✓ | ✗ | ✓ | ✓ |
-| super_admin     | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Caller \ Target | `user:self` | `user:other` | `group:my-X` | `group:other-X` | `org:my-Y` | `org:other-Y` | `public` |
+|---|---|---|---|---|---|---|---|
+| anonymous       | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| authenticated   | ✓ | ✗ | (if member) | ✗ | (if in org) | ✗ | ✓ |
+| super_admin     | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ---
 
-## MVP gaps and what they mean today
+## Org / group management
 
-- **`group:<x>` writes** are blocked by Phase 1.3 not being implemented.
-  The data model knows about groups + memberships; the API to *put
-  someone in* a group doesn't ship yet. So in practice today,
-  `group:*` is a "drawer that exists but no key cuts it" — super_admin
-  excepted.
-- **`org:<x>` writes** require an org_admin role that we model with
-  `UserGroupMembership.role = "admin"` but, again, no CRUD endpoint
-  ships in Phase 1.2. Same situation as groups.
+- Orgs are created only by super_admin (`POST /v1/orgs`). Slugs are
+  global — squatting risk if we ever opened this up.
+- Org admins (or super_admin) add members via
+  `POST /v1/orgs/{slug}/members`. Users belong to at most one org.
+- Any org member can create groups in their own org
+  (`POST /v1/groups`). The creator is auto-added as that group's admin.
+- Group admins manage their group's members
+  (`POST/PATCH/DELETE /v1/groups/{slug}/members`). Org admins can do
+  the same across every group in their org.
+- Removing a user from an org also drops their group memberships in
+  groups belonging to that org — keeps read access consistent with org
+  membership.
+
+## What's still out of scope
+
 - **`public` writes** are super_admin-only by design. Promote yourself
   via `BOOTSTRAP_SUPER_ADMIN_EMAIL` if you legitimately need to put
   shared knowledge there.
+- **Multi-org-per-user** would need a `UserOrgMembership` table; we
+  punted because nothing in v0.5 needs it.
 - **Per-fact / per-entity ACLs** — explicitly out of scope. Namespace
   is the only privacy boundary.
 
