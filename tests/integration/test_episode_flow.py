@@ -228,3 +228,65 @@ async def test_episodes_require_auth(client) -> None:  # type: ignore[no-untyped
     assert r.status_code == 401
     r = await client.get("/v1/search?query=x")
     assert r.status_code == 401
+    r = await client.get("/v1/graph")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_graph_endpoint_shapes_response(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
+    """End-to-end smoke for /v1/graph: stub the driver to return one
+    Episodic + one Entity + one RELATES_TO edge, assert the API translates
+    that into the documented JSON shape."""
+    token = await _register_and_login(client)
+
+    class _FakeRecord(dict):
+        pass
+
+    fake_nodes = [
+        _FakeRecord(
+            uuid="ep-1",
+            kind="Episodic",
+            name=None,
+            summary=None,
+            content="Sarah lives in Toronto.",
+        ),
+        _FakeRecord(uuid="e-1", kind="Entity", name="Sarah", summary="Lives in Toronto", content=None),
+        _FakeRecord(uuid="e-2", kind="Entity", name="Toronto", summary="City", content=None),
+    ]
+    fake_edges = [
+        _FakeRecord(source="e-1", target="e-2", type="RELATES_TO", name="LIVES_IN", fact="Sarah lives in Toronto"),
+        _FakeRecord(source="ep-1", target="e-1", type="MENTIONS", name=None, fact=None),
+    ]
+
+    class _Driver:
+        async def execute_query(self, q, **kw):  # type: ignore[no-untyped-def]
+            return (fake_nodes if "MATCH (n)" in q else fake_edges, None, None)
+
+        def clone(self, database):  # type: ignore[no-untyped-def]
+            return self
+
+    mock_graphiti.driver = _Driver()
+    r = await client.get(
+        "/v1/graph?namespace=user:me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["namespace"].startswith("user:")
+    assert "__" not in body["namespace"]
+    assert len(body["nodes"]) == 3
+    assert {n["kind"] for n in body["nodes"]} == {"Episodic", "Entity"}
+    assert len(body["edges"]) == 2
+    fact = next(e for e in body["edges"] if e["type"] == "RELATES_TO")
+    assert fact["fact"] == "Sarah lives in Toronto"
+    assert fact["name"] == "LIVES_IN"
+
+
+@pytest.mark.asyncio
+async def test_graph_denies_unreadable_namespace(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
+    token = await _register_and_login(client, "rando@example.com")
+    r = await client.get(
+        "/v1/graph?namespace=user:00000000-0000-0000-0000-000000000000",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 403

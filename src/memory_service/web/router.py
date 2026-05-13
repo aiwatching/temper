@@ -35,3 +35,8 @@ async def admin_me(request: Request) -> HTMLResponse:
 @router.get("/admin/episodes", response_class=HTMLResponse, include_in_schema=False)
 async def admin_episodes(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "episodes.html", {"title": "Episodes"})
+
+
+@router.get("/admin/graph", response_class=HTMLResponse, include_in_schema=False)
+async def admin_graph(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "graph.html", {"title": "Graph"})

@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .graph-layout { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+  #graph-canvas {
+    border: 1px solid #e5e7eb; border-radius: 4px; background: #fff;
+    height: 640px; min-height: 400px;
+  }
+  #node-detail {
+    border: 1px solid #e5e7eb; border-radius: 4px; padding: 12px;
+    background: #fafafa; font-size: 13px; min-height: 200px;
+  }
+  #node-detail dt { color: #57606a; font-size: 11px; text-transform: uppercase; margin-top: 8px; }
+  #node-detail dd { margin: 2px 0 0 0; padding: 0; word-break: break-word; }
+  #node-detail pre {
+    background: #fff; padding: 6px 8px; border-radius: 3px;
+    white-space: pre-wrap; margin: 0; font-size: 12px;
+  }
+  .ns-chip {
+    display: inline-block; margin-right: 6px; margin-bottom: 4px;
+    padding: 3px 10px; border: 1px solid #d0d7de; border-radius: 999px;
+    cursor: pointer; font-size: 12px; background: #fff;
+  }
+  .ns-chip:hover { background: #f6f8fa; }
+  .ns-chip.active { background: #0969da; color: #fff; border-color: #0969da; }
+  .legend { display:flex; gap:14px; font-size:12px; align-items:center; flex-wrap:wrap; }
+  .legend .swatch { display:inline-block; width:12px; height:12px; border-radius:3px; margin-right:5px; vertical-align:middle; }
+  @media (max-width: 900px) { .graph-layout { grid-template-columns: 1fr; } }
+</style>
+
+<section class="card">
+  <h2>Graph viewer</h2>
+  <p>Pick a namespace you can read. Episodes (raw memories) are blue,
+     entities are orange, and labelled black edges between entities are
+     the facts <code>/v1/search</code> returns. Dashed gray edges are
+     <code>MENTIONS</code> — episode→entity bookkeeping.</p>
+
+  <div style="margin-top:8px;">
+    <strong style="font-size:12px;color:#57606a;">Quick pick:</strong>
+    <div id="ns-chips" style="margin-top:6px;">
+      <span class="ns-chip active" data-ns="user:me">user:me</span>
+      <span class="ns-chip" data-ns="public">public</span>
+    </div>
+  </div>
+  <form id="ns-form" style="display:flex; gap:8px; margin-top:8px; align-items:end;">
+    <label style="flex:1;">Namespace
+      <input type="text" id="namespace" placeholder="user:me, group:<slug>, org:<slug>, public" style="width:100%;">
+    </label>
+    <label>Limit
+      <input type="number" id="limit" value="200" min="10" max="2000" style="width:90px;">
+    </label>
+    <button type="submit">Load</button>
+  </form>
+
+  <div id="status" style="margin-top:8px; min-height:22px;"></div>
+
+  <div class="graph-layout" style="margin-top:12px;">
+    <div id="graph-canvas"></div>
+    <aside id="node-detail">
+      <em>Click a node or edge to see its full properties.</em>
+      <hr style="margin:12px 0;border:0;border-top:1px solid #e5e7eb;">
+      <div class="legend">
+        <span><span class="swatch" style="background:#54aeff;"></span>Episodic</span>
+        <span><span class="swatch" style="background:#fd8c73;"></span>Entity</span>
+        <span><span class="swatch" style="background:#bf8cff;"></span>Community</span>
+        <span style="margin-left:6px;color:#57606a;">edges: <strong>RELATES_TO</strong> (solid, labelled) · <em>MENTIONS</em> (dashed gray)</span>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script>
+  const token = localStorage.getItem("ms_token");
+  if (!token) { location.href = "/admin/login"; }
+  const auth = { "Authorization": `Bearer ${token}` };
+
+  const COLORS = {
+    Episodic: "#54aeff",
+    Entity:   "#fd8c73",
+    Community:"#bf8cff",
+    Unknown:  "#9ca3af",
+  };
+
+  let network = null;
+  let nodesById = new Map();
+  let edgesByKey = new Map();
+
+  function setStatus(html, kind) {
+    const s = document.getElementById("status");
+    if (!html) { s.textContent = ""; s.className = ""; return; }
+    s.innerHTML = `<div class="msg ${kind || "ok"}">${html}</div>`;
+  }
+
+  function highlightChip(raw) {
+    document.querySelectorAll(".ns-chip").forEach(c => {
+      c.classList.toggle("active", c.dataset.ns === raw);
+    });
+  }
+
+  async function loadOrgGroupChips() {
+    // Pre-populate chips for every org/group the caller is in — saves typing.
+    try {
+      const [orgs, groups] = await Promise.all([
+        fetch("/v1/orgs",   { headers: auth }).then(r => r.ok ? r.json() : []),
+        fetch("/v1/groups", { headers: auth }).then(r => r.ok ? r.json() : []),
+      ]);
+      const wrap = document.getElementById("ns-chips");
+      for (const o of orgs)   addChip(wrap, `org:${o.slug}`);
+      for (const g of groups) addChip(wrap, `group:${g.slug}`);
+    } catch (e) { /* non-fatal */ }
+  }
+
+  function addChip(wrap, raw) {
+    const chip = document.createElement("span");
+    chip.className = "ns-chip";
+    chip.dataset.ns = raw;
+    chip.textContent = raw;
+    chip.addEventListener("click", () => load(raw));
+    wrap.appendChild(chip);
+  }
+
+  document.querySelectorAll(".ns-chip").forEach(c => {
+    c.addEventListener("click", () => load(c.dataset.ns));
+  });
+
+  document.getElementById("ns-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const ns = document.getElementById("namespace").value.trim() || "user:me";
+    load(ns);
+  });
+
+  async function load(ns) {
+    document.getElementById("namespace").value = ns;
+    highlightChip(ns);
+    setStatus(`<em>Loading <code>${ns}</code>…</em>`);
+    const limit = document.getElementById("limit").value || 200;
+    const params = new URLSearchParams({ namespace: ns, limit });
+    const r = await fetch(`/v1/graph?${params}`, { headers: auth });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      setStatus(`Failed: ${err.detail || r.status}`, "bad");
+      return;
+    }
+    const data = await r.json();
+    renderGraph(data);
+    setStatus(`<code>${data.namespace}</code> — ${data.nodes.length} nodes, ${data.edges.length} edges.`);
+  }
+
+  function renderGraph(data) {
+    nodesById = new Map();
+    edgesByKey = new Map();
+
+    const nodes = data.nodes.map(n => {
+      nodesById.set(n.id, n);
+      const display = n.name || (n.kind === "Episodic" ? clip(n.content, 32) : n.id.slice(0, 8));
+      return {
+        id: n.id,
+        label: display || "?",
+        color: COLORS[n.kind] || COLORS.Unknown,
+        shape: n.kind === "Episodic" ? "box" : "dot",
+        size: n.kind === "Entity" ? 18 : 12,
+        font: { size: 13 },
+        title: tooltip(n),
+      };
+    });
+
+    const edges = data.edges.map((e, i) => {
+      const key = `${e.source}|${e.target}|${e.type}|${i}`;
+      edgesByKey.set(key, e);
+      const isFact = e.type === "RELATES_TO";
+      return {
+        id: key,
+        from: e.source,
+        to: e.target,
+        label: isFact ? (e.name || e.fact || "") : "",
+        color: { color: isFact ? "#1f2328" : "#b1bac4" },
+        dashes: !isFact,
+        arrows: "to",
+        font: { size: 11, color: "#1f2328", align: "middle" },
+        smooth: false,
+        title: tooltip(e),
+      };
+    });
+
+    const container = document.getElementById("graph-canvas");
+    const dataSet = { nodes, edges };
+    const options = {
+      physics: { stabilization: { iterations: 200 }, barnesHut: { gravitationalConstant: -8000 } },
+      interaction: { hover: true, multiselect: false, tooltipDelay: 200 },
+      nodes: { borderWidth: 1, shadow: false },
+      edges: { width: 1.5 },
+    };
+    if (network) network.destroy();
+    network = new vis.Network(container, dataSet, options);
+
+    network.on("click", (ev) => {
+      if (ev.nodes && ev.nodes.length) showNode(nodesById.get(ev.nodes[0]));
+      else if (ev.edges && ev.edges.length) showEdge(edgesByKey.get(ev.edges[0]));
+      else showInitial();
+    });
+  }
+
+  function tooltip(item) {
+    if (item.kind) return `${item.kind}: ${item.name || ""}`;
+    if (item.fact) return item.fact;
+    return item.type;
+  }
+
+  function clip(s, n) { if (!s) return ""; s = String(s); return s.length <= n ? s : s.slice(0, n - 1) + "…"; }
+
+  function showNode(n) {
+    if (!n) return;
+    document.getElementById("node-detail").innerHTML = `
+      <strong>${n.kind}</strong> · <code style="font-size:11px;">${n.id.slice(0,12)}…</code>
+      <dl>
+        <dt>name</dt><dd>${escape(n.name) || "<em>—</em>"}</dd>
+        ${n.summary ? `<dt>summary</dt><dd><pre>${escape(n.summary)}</pre></dd>` : ""}
+        ${n.content ? `<dt>content</dt><dd><pre>${escape(n.content)}</pre></dd>` : ""}
+      </dl>
+    `;
+  }
+
+  function showEdge(e) {
+    if (!e) return;
+    const isFact = e.type === "RELATES_TO";
+    document.getElementById("node-detail").innerHTML = `
+      <strong>${e.type}</strong> ${isFact ? "(fact)" : "(bookkeeping)"}
+      <dl>
+        ${e.name ? `<dt>name</dt><dd>${escape(e.name)}</dd>` : ""}
+        ${e.fact ? `<dt>fact</dt><dd><pre>${escape(e.fact)}</pre></dd>` : ""}
+        <dt>source → target</dt>
+        <dd><code style="font-size:11px;">${e.source.slice(0,8)}…</code> → <code style="font-size:11px;">${e.target.slice(0,8)}…</code></dd>
+      </dl>
+    `;
+  }
+
+  function showInitial() {
+    document.getElementById("node-detail").innerHTML = `<em>Click a node or edge to see its full properties.</em>`;
+  }
+
+  function escape(s) {
+    if (s == null) return "";
+    return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+  }
+
+  loadOrgGroupChips();
+  load("user:me");
+</script>
+{% endblock %}

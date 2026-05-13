@@ -309,6 +309,31 @@ async def search(
     return hits[:limit]
 
 
+@dataclass
+class GraphNode:
+    id: str
+    kind: str  # "Episodic" | "Entity" | "Community"
+    name: str
+    summary: str | None
+    content: str | None
+
+
+@dataclass
+class GraphEdge:
+    source: str
+    target: str
+    type: str  # "MENTIONS" | "RELATES_TO" | ...
+    name: str | None  # only on RELATES_TO
+    fact: str | None  # only on RELATES_TO
+
+
+@dataclass
+class GraphView:
+    namespace: str
+    nodes: list[GraphNode]
+    edges: list[GraphEdge]
+
+
 def _driver_for_namespace(client: Any, ns: Namespace):  # type: ignore[no-untyped-def]
     """Return a Graphiti driver bound to the FalkorDB graph backing `ns`.
 
@@ -323,6 +348,92 @@ def _driver_for_namespace(client: Any, ns: Namespace):  # type: ignore[no-untype
     if getattr(client, "driver", None) is None:
         return None
     return client.driver.clone(database=ns.as_graphiti_group_id())
+
+
+async def get_graph(
+    user: User,
+    raw_namespace: str | None,
+    db: AsyncSession,
+    limit: int = 200,
+) -> GraphView:
+    """Return all nodes + edges in one namespace's FalkorDB graph.
+
+    Used by the admin graph viewer and any other tool that needs the
+    full graph picture. Respects the read-permission matrix; raises
+    PermissionDeniedError if the caller can't read `raw_namespace`.
+    """
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_read(user, ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' has no read access to namespace '{ns.raw}'"
+        )
+
+    client = _require_client()
+    driver = _driver_for_namespace(client, ns)
+    if driver is None:
+        return GraphView(namespace=ns.raw, nodes=[], edges=[])
+
+    # The driver clone exposes execute_query() which underpins both
+    # node-by-uuid lookups and arbitrary Cypher.
+    try:
+        node_records, _, _ = await driver.execute_query(
+            "MATCH (n) "
+            "RETURN n.uuid AS uuid, labels(n)[0] AS kind, "
+            "       n.name AS name, n.summary AS summary, "
+            "       n.content AS content "
+            f"LIMIT {int(limit)}"
+        )
+        edge_records, _, _ = await driver.execute_query(
+            "MATCH (a)-[r]->(b) "
+            "RETURN a.uuid AS source, b.uuid AS target, type(r) AS type, "
+            "       r.name AS name, r.fact AS fact "
+            f"LIMIT {int(limit) * 4}"
+        )
+    except Exception as exc:
+        _logger.exception("Graph dump failed for %s", ns.raw)
+        raise BackendUnavailableError(f"graph read failed: {exc}") from exc
+
+    nodes = [
+        GraphNode(
+            id=_rec_get(r, "uuid") or "",
+            kind=_rec_get(r, "kind") or "Unknown",
+            name=_rec_get(r, "name") or "",
+            summary=_rec_get(r, "summary"),
+            content=_rec_get(r, "content"),
+        )
+        for r in node_records
+    ]
+    valid_ids = {n.id for n in nodes if n.id}
+    edges = [
+        GraphEdge(
+            source=_rec_get(r, "source") or "",
+            target=_rec_get(r, "target") or "",
+            type=_rec_get(r, "type") or "",
+            name=_rec_get(r, "name"),
+            fact=_rec_get(r, "fact"),
+        )
+        for r in edge_records
+    ]
+    # Drop dangling edges so vis-network doesn't create implicit phantom
+    # nodes for endpoints we trimmed by `limit`.
+    edges = [e for e in edges if e.source in valid_ids and e.target in valid_ids]
+    return GraphView(namespace=ns.raw, nodes=nodes, edges=edges)
+
+
+def _rec_get(rec: Any, key: str) -> Any:
+    """FalkorDB/Neo4j drivers return Record-like objects; some support
+    item access, some only `.get()`. Try both."""
+    try:
+        return rec[key]
+    except Exception:
+        pass
+    try:
+        return rec.get(key)
+    except Exception:
+        return None
 
 
 async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str, Any]:

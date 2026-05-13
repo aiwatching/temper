@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from memory_service.api.v1 import auth as v1_auth
 from memory_service.api.v1 import episodes as v1_episodes
+from memory_service.api.v1 import graph as v1_graph
 from memory_service.api.v1 import groups as v1_groups
 from memory_service.api.v1 import orgs as v1_orgs
 from memory_service.api.v1 import search as v1_search
@@ -83,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_search.router, prefix="/v1")
     app.include_router(v1_orgs.router, prefix="/v1")
     app.include_router(v1_groups.router, prefix="/v1")
+    app.include_router(v1_graph.router, prefix="/v1")
 
     # Admin page + static
     app.include_router(admin_router)
