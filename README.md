@@ -27,36 +27,34 @@ backed by [Graphiti](https://github.com/getzep/graphiti) on FalkorDB.
 
 ## Quick start
 
-### With Docker Compose (recommended)
+### One-shot (recommended for local dev)
 
 ```bash
 cp .env.example .env
-# Edit .env: put a real OPENAI_API_KEY and SECRET_KEY
+# Edit .env: put your LLM provider keys and SECRET_KEY
+scripts/dev.sh
+```
+
+`scripts/dev.sh` is idempotent — it creates `.venv` if missing, installs
+deps only when `pyproject.toml` changes, brings up the local embedding
+backend via `scripts/start_embedding.sh`, and starts uvicorn with an
+auto-managed SQLite dev DB. Re-run as often as you want.
+
+Once started, the browser opens automatically at `http://localhost:8000/admin`.
+
+### With Docker Compose (full stack including Postgres + FalkorDB)
+
+```bash
+cp .env.example .env
 docker compose up --build
 ```
 
-Once everything is healthy:
+### Postgres parity for dev
 
 ```bash
-curl http://localhost:8000/v1/health
-open http://localhost:8000/admin   # simple management page
-```
-
-### Local development (without Docker)
-
-You still need PostgreSQL and FalkorDB available locally. Easiest:
-
-```bash
-docker compose up -d db falkordb
-```
-
-Then:
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-cp .env.example .env
-uvicorn memory_service.main:app --reload
+docker compose up -d db
+DATABASE_URL="postgresql+asyncpg://memory:memory@localhost:5432/memory_service" \
+  scripts/dev.sh
 ```
 
 ## Layout
