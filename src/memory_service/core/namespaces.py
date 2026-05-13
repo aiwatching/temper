@@ -43,12 +43,16 @@ class Namespace:
     def as_graphiti_group_id(self) -> str:
         """The string Graphiti uses as `group_id`.
 
-        FalkorDB rejects characters outside `[A-Za-z0-9_-]` in group_id, so
-        we encode the `:` separator as `__` (double underscore — single
-        underscores stay legal inside ids). The mapping is reversible if
-        we ever need it: split on `__` for kind/value.
+        FalkorDB itself accepts `[A-Za-z0-9_-]` in group_id, but Graphiti's
+        internal fulltext-search builds RediSearch queries that include the
+        group_id verbatim, and RediSearch treats `:` as a field operator
+        and `-` as NOT. Both fire syntax errors on a UUID like
+        `user:23b42337-f1b6-...` once the graph has any data to dedup
+        against. We encode both to underscores. One-way mapping is fine
+        — we keep the raw form in EpisodeMetadata.namespace for the API
+        surface, and translate only when talking to Graphiti.
         """
-        return self.raw.replace(":", "__")
+        return self.raw.replace(":", "__").replace("-", "_")
 
 
 class NamespaceError(ValueError):
