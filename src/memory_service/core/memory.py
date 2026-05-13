@@ -127,6 +127,25 @@ def _episode_type(raw: str):  # type: ignore[no-untyped-def]
     }.get(raw, EpisodeType.text)
 
 
+def _type_filter(
+    *, edge_types: list[str] | None, node_labels: list[str] | None
+):  # type: ignore[no-untyped-def]
+    """Build SearchFilters for the relation/label string filters.
+
+    Returns None when both inputs are empty, so we don't pay for a noop
+    WHERE clause. Unlike date filters these lower to plain equality
+    predicates and FalkorDB handles them correctly.
+    """
+    if not edge_types and not node_labels:
+        return None
+    from graphiti_core.search.search_filters import SearchFilters
+
+    return SearchFilters(
+        edge_types=list(edge_types) if edge_types else None,
+        node_labels=list(node_labels) if node_labels else None,
+    )
+
+
 def _as_of_filter(as_of: datetime):  # type: ignore[no-untyped-def]
     """Build a SearchFilters that returns only facts active at `as_of`.
 
@@ -271,13 +290,18 @@ async def search(
     limit: int,
     db: AsyncSession,
     as_of: datetime | None = None,
+    edge_types: list[str] | None = None,
+    node_labels: list[str] | None = None,
 ) -> list[SearchHit]:
     """Search across the caller's readable namespaces.
 
-    `as_of` is the time-travel knob: when set, only facts that were
-    active at that moment are returned — `valid_at <= as_of` AND
-    (`invalid_at IS NULL` OR `invalid_at > as_of`). Useful for replaying
-    "what did the system believe last Tuesday?" style queries.
+    Filters:
+      - `as_of`: only facts active at that moment — `valid_at <= as_of` AND
+        (`invalid_at IS NULL` OR `invalid_at > as_of`). Time-travel.
+      - `edge_types`: only RELATES_TO edges whose `name` is in this list
+        (e.g. ["LIVES_IN", "TEACHES"]). Pushed down to Graphiti.
+      - `node_labels`: only entity nodes with these labels (e.g.
+        ["Person", "Place"]). Applied to entity-hit search results too.
     """
     if not query.strip():
         return []
@@ -311,12 +335,11 @@ async def search(
     config = COMBINED_HYBRID_SEARCH_RRF.model_copy(deep=True)
     config.limit = limit
 
-    # NOTE on as_of: we do not push the time filter into Graphiti's
-    # SearchFilters, because FalkorDB's Cypher engine compares ISO-8601
-    # date strings at year granularity only (verified: `valid_at <= "2026-01-01"`
-    # matches every 2026-something row). We post-filter the result set in
-    # Python instead; this preserves correct semantics at the cost of
-    # over-fetching when many candidates are time-irrelevant.
+    # Push the type-based filters into Graphiti's SearchFilters; they
+    # lower to plain string-equality Cypher predicates and work reliably.
+    # Time filters (as_of) stay in Python post-processing because FalkorDB
+    # compares date strings at year granularity only — see _as_of_filter.
+    search_filter = _type_filter(edge_types=edge_types, node_labels=node_labels)
     over_fetch = limit * 4 if as_of is not None else limit
     config.limit = over_fetch
 
@@ -325,6 +348,7 @@ async def search(
             query=query,
             config=config,
             group_ids=group_ids,
+            search_filter=search_filter,
         )
     except Exception as exc:
         _logger.exception("Graphiti search failed")

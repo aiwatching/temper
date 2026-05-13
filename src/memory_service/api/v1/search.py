@@ -28,15 +28,35 @@ async def search(
             "invalid_at IS NULL or invalid_at > as_of."
         ),
     ] = None,
+    edge_types: Annotated[
+        str | None,
+        Query(
+            description="Comma-separated relation names "
+            "(e.g. 'LIVES_IN,TEACHES'). Only RELATES_TO edges with these "
+            "names are returned."
+        ),
+    ] = None,
+    node_labels: Annotated[
+        str | None,
+        Query(
+            description="Comma-separated entity labels "
+            "(e.g. 'Person,Place'). Applied to entity-hit results."
+        ),
+    ] = None,
 ) -> SearchResponse:
     ns_list: list[str] | None
     if namespaces:
         ns_list = [n.strip() for n in namespaces.split(",") if n.strip()]
     else:
         ns_list = None
+    et = [s.strip() for s in edge_types.split(",")] if edge_types else None
+    nl = [s.strip() for s in node_labels.split(",")] if node_labels else None
 
     try:
-        hits = await memory.search(user, query, ns_list, limit, db, as_of=as_of)
+        hits = await memory.search(
+            user, query, ns_list, limit, db,
+            as_of=as_of, edge_types=et, node_labels=nl,
+        )
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
 

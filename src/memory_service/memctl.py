@@ -274,6 +274,10 @@ def cmd_search(args: argparse.Namespace) -> None:
         params["namespaces"] = args.namespace
     if args.as_of:
         params["as_of"] = args.as_of
+    if args.edge_types:
+        params["edge_types"] = args.edge_types
+    if args.node_labels:
+        params["node_labels"] = args.node_labels
     data = _request(args, "GET", "/v1/search", params=params)
     if getattr(args, "json", False):
         _dump_json(data)
@@ -651,6 +655,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--as-of",
         dest="as_of",
         help="ISO-8601 instant; returns only facts active at that time",
+    )
+    sp.add_argument(
+        "--edge-types",
+        dest="edge_types",
+        help="Comma-separated RELATES_TO names, e.g. LIVES_IN,TEACHES",
+    )
+    sp.add_argument(
+        "--node-labels",
+        dest="node_labels",
+        help="Comma-separated entity labels, e.g. Person,Place",
     )
     sp.set_defaults(func=cmd_search)
 
