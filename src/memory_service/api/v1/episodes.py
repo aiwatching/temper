@@ -55,6 +55,7 @@ async def create_episode(
         source_description=payload.source_description or "",
         reference_time=payload.reference_time,
         tags=payload.tags or [],
+        saga=payload.saga,
     )
     try:
         result = await memory.add_episode(user, agent_name, req, db)
@@ -110,7 +111,7 @@ async def create_episodes_bulk(
     ]
     try:
         result = await memory.add_episodes_bulk(
-            user, agent_name, payload.namespace, items, db
+            user, agent_name, payload.namespace, items, db, saga=payload.saga,
         )
     except memory.MemoryError as exc:
         raise _to_http(exc) from exc

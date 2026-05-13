@@ -251,6 +251,8 @@ def cmd_write(args: argparse.Namespace) -> None:
         body["namespace"] = args.namespace
     if args.tags:
         body["tags"] = args.tags
+    if args.saga:
+        body["saga"] = args.saga
     data = _request(args, "POST", "/v1/episodes", json=body)
     if getattr(args, "json", False):
         emit(args, data)
@@ -292,6 +294,8 @@ def cmd_write_bulk(args: argparse.Namespace) -> None:
     body: dict[str, Any] = {"items": items}
     if args.namespace:
         body["namespace"] = args.namespace
+    if args.saga:
+        body["saga"] = args.saga
     data = _request(args, "POST", "/v1/episodes/bulk", json=body)
     if getattr(args, "json", False):
         _dump_json(data)
@@ -678,6 +682,33 @@ def cmd_fact_rm(args: argparse.Namespace) -> None:
     print(f"  deleted fact {args.uuid}")
 
 
+def cmd_saga_ls(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    data = _request(args, "GET", "/v1/sagas", params=params)
+    if getattr(args, "json", False):
+        _dump_json(data)
+        return
+    print(f"  namespace: {data['namespace']}  sagas: {len(data['sagas'])}")
+    emit(args, data["sagas"], columns=["name", "episode_count", "created_at", "uuid"])
+
+
+def cmd_saga_show(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    data = _request(args, "GET", f"/v1/sagas/{args.name_or_uuid}", params=params)
+    if getattr(args, "json", False):
+        _dump_json(data)
+        return
+    saga = data["saga"]
+    print(f"  saga: {saga['name']}  ({saga['uuid']})")
+    print(f"  episodes: {len(data['episodes'])}")
+    if data["episodes"]:
+        emit(args, data["episodes"], columns=["created_at", "content", "uuid"])
+
+
 def cmd_graph_cypher(args: argparse.Namespace) -> None:
     db = _falkordb(args)
     g = db.select_graph(_resolve_graph_name(args))
@@ -734,6 +765,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-n", "--namespace", help="user:me | group:<slug> | org:<slug>")
     sp.add_argument("--source", default="text", choices=["text", "message", "json"])
     sp.add_argument("--tags", nargs="*", help="Free-form tags")
+    sp.add_argument("--saga", help="Saga name to chain this episode into")
     sp.set_defaults(func=cmd_write)
 
     sp = sub.add_parser(
@@ -747,6 +779,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-n", "--namespace")
     sp.add_argument("--source", default="text", choices=["text", "message", "json"])
     sp.add_argument("--tags", nargs="*")
+    sp.add_argument("--saga", help="Saga name to chain all items into")
     sp.set_defaults(func=cmd_write_bulk)
 
     sp = sub.add_parser("search", help="Semantic search")
@@ -934,6 +967,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("entity", help="Show one entity by UUID")
     sp.add_argument("uuid")
     sp.set_defaults(func=cmd_entity_show)
+
+    saga = sub.add_parser("saga", help="Inspect saga groupings").add_subparsers(
+        dest="saga_cmd", required=True
+    )
+    sp = saga.add_parser("ls", help="List sagas in a namespace")
+    sp.add_argument("-n", "--namespace")
+    sp.set_defaults(func=cmd_saga_ls)
+    sp = saga.add_parser("show", help="Show a saga + its episode chain")
+    sp.add_argument("name_or_uuid")
+    sp.add_argument("-n", "--namespace")
+    sp.set_defaults(func=cmd_saga_show)
 
     fact = sub.add_parser(
         "fact", help="Operate on one RELATES_TO fact by UUID"

@@ -60,6 +60,9 @@ class WriteRequest:
     source_description: str = ""
     reference_time: datetime | None = None
     tags: list[str] | None = None
+    # Optional saga name — episodes sharing a name get chained via
+    # NEXT_EPISODE edges. Graphiti creates the SagaNode on first use.
+    saga: str | None = None
 
 
 @dataclass
@@ -238,6 +241,7 @@ async def add_episode(
             source_description=req.source_description or agent_name,
             reference_time=reference_time,
             group_id=ns.as_graphiti_group_id(),
+            saga=req.saga,
         )
     except Exception as exc:
         _logger.exception("Graphiti add_episode failed")
@@ -306,6 +310,7 @@ async def add_episodes_bulk(
     namespace: str | None,
     items: list[BulkWriteItem],
     db: AsyncSession,
+    saga: str | None = None,
 ) -> BulkWriteResult:
     """Write many episodes in one Graphiti pass — faster than looping
     add_episode for the same N items because entity/edge dedup happens
@@ -343,7 +348,9 @@ async def add_episodes_bulk(
 
     try:
         result = await client.add_episode_bulk(
-            bulk_episodes=raws, group_id=ns.as_graphiti_group_id()
+            bulk_episodes=raws,
+            group_id=ns.as_graphiti_group_id(),
+            saga=saga,
         )
     except Exception as exc:
         _logger.exception("add_episode_bulk failed")
@@ -864,6 +871,80 @@ async def run_cypher(
                 rec[h] = v
         rows.append(rec)
     return rows
+
+
+async def list_sagas(
+    user: User, raw_namespace: str | None, db: AsyncSession
+) -> dict[str, Any]:
+    """List Saga nodes in a namespace with episode counts."""
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_read(user, ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' has no read access to namespace '{ns.raw}'"
+        )
+    rows = await run_cypher(
+        user,
+        ns.raw,
+        "MATCH (s:Saga) "
+        "OPTIONAL MATCH (s)-[:HAS_EPISODE]->(e:Episodic) "
+        "RETURN s.uuid AS uuid, s.name AS name, s.summary AS summary, "
+        "       s.created_at AS created_at, count(e) AS episode_count "
+        "ORDER BY s.created_at DESC",
+        params=None,
+        db=db,
+    )
+    return {"namespace": ns.raw, "sagas": rows}
+
+
+async def get_saga(
+    user: User, raw_namespace: str | None, name_or_uuid: str, db: AsyncSession
+) -> dict[str, Any] | None:
+    """Get one Saga by name OR uuid + its episode chain in order."""
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_read(user, ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' has no read access to namespace '{ns.raw}'"
+        )
+    # Try both: name match and uuid match. We use $key in both predicates
+    # rather than two queries — FalkorDB filters out the non-match.
+    saga_rows = await run_cypher(
+        user,
+        ns.raw,
+        "MATCH (s:Saga) WHERE s.name = $key OR s.uuid = $key "
+        "RETURN s.uuid AS uuid, s.name AS name, s.summary AS summary, "
+        "       s.created_at AS created_at, "
+        "       s.first_episode_uuid AS first_episode_uuid, "
+        "       s.last_episode_uuid AS last_episode_uuid "
+        "LIMIT 1",
+        params={"key": name_or_uuid},
+        db=db,
+    )
+    if not saga_rows:
+        return None
+    saga = saga_rows[0]
+
+    # Walk the NEXT_EPISODE chain so episodes come back in insertion order.
+    episode_rows = await run_cypher(
+        user,
+        ns.raw,
+        "MATCH (s:Saga {uuid: $uuid})-[:HAS_EPISODE]->(e:Episodic) "
+        "RETURN e.uuid AS uuid, e.content AS content, "
+        "       e.created_at AS created_at "
+        "ORDER BY e.created_at ASC",
+        params={"uuid": saga["uuid"]},
+        db=db,
+    )
+    return {
+        "namespace": ns.raw,
+        "saga": saga,
+        "episodes": episode_rows,
+    }
 
 
 async def get_entity(

@@ -33,6 +33,12 @@ class CreateEpisodeRequest(BaseModel):
     source_description: str | None = None
     reference_time: datetime | None = None
     tags: list[str] | None = None
+    saga: str | None = Field(
+        default=None,
+        description="Optional saga name. Episodes sharing a name in the "
+        "same namespace get chained via NEXT_EPISODE edges — useful for "
+        "importing chat transcripts as one logical conversation.",
+    )
 
 
 class CreateEpisodeResponse(BaseModel):
@@ -55,6 +61,10 @@ class BulkEpisodesRequest(BaseModel):
     namespace: str | None = Field(
         default=None,
         description="Shared namespace for all items. Defaults to user:me.",
+    )
+    saga: str | None = Field(
+        default=None,
+        description="Shared saga name across all items in this batch.",
     )
     items: list[BulkEpisodeItem] = Field(min_length=1, max_length=200)
 
