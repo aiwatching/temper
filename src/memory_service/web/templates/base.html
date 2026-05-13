@@ -5,39 +5,54 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or "Memory Service" }}</title>
   <link rel="stylesheet" href="/admin/static/style.css">
-  <!-- Alpine.js for tiny reactive bits — zero build step, ~15KB. -->
   <script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
 </head>
-<body>
-  <header>
-    <h1><a href="/admin">Memory Service</a></h1>
-    <nav>
-      <span class="nav-group">
-        <a href="/admin">Dashboard</a>
-        <a href="/admin/episodes">Episodes</a>
-        <a href="/admin/search">Search</a>
-        <a href="/admin/graph">Graph</a>
-      </span>
-      <span class="nav-group">
-        <a href="/admin/sagas">Sagas</a>
-        <a href="/admin/schemas">Schemas</a>
-        <a href="/admin/communities">Communities</a>
-      </span>
-      <span class="nav-group">
-        <a href="/admin/orgs">Orgs</a>
-        <a href="/admin/groups">Groups</a>
-        <a href="/admin/cypher">Cypher</a>
-      </span>
-      <span class="nav-group">
-        <a href="/admin/me">Account</a>
-        <a href="/docs" target="_blank">API</a>
-      </span>
+<body class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <a href="/admin">
+        <span class="logo">●</span>
+        <span class="brand-text">Memory<br><small>Service</small></span>
+      </a>
+    </div>
+
+    <nav class="side-nav">
+      <div class="nav-section">
+        <h4>Memory</h4>
+        <a href="/admin"            data-path="/admin">Dashboard</a>
+        <a href="/admin/episodes"   data-path="/admin/episodes">Episodes</a>
+        <a href="/admin/search"     data-path="/admin/search">Search</a>
+        <a href="/admin/graph"      data-path="/admin/graph">Graph viewer</a>
+      </div>
+
+      <div class="nav-section">
+        <h4>Knowledge</h4>
+        <a href="/admin/sagas"       data-path="/admin/sagas">Sagas</a>
+        <a href="/admin/schemas"     data-path="/admin/schemas">Entity schemas</a>
+        <a href="/admin/communities" data-path="/admin/communities">Communities</a>
+      </div>
+
+      <div class="nav-section">
+        <h4>Tenancy</h4>
+        <a href="/admin/orgs"   data-path="/admin/orgs">Orgs</a>
+        <a href="/admin/groups" data-path="/admin/groups">Groups</a>
+      </div>
+
+      <div class="nav-section">
+        <h4>Ops</h4>
+        <a href="/admin/cypher" data-path="/admin/cypher">Cypher console</a>
+        <a href="/docs" target="_blank">API docs ↗</a>
+      </div>
     </nav>
-    <span class="auth-status" id="auth-status"></span>
-  </header>
+
+    <div class="sidebar-foot">
+      <a href="/admin/me" class="me-link" id="me-link"><span>Account</span></a>
+      <span id="auth-status" class="auth-status"></span>
+    </div>
+  </aside>
+
   <script>
-    // Tiny shared helper: every admin page reaches the v1 API through `ms.fetch`.
-    // Reads ms_token from localStorage. Redirects to login on 401.
+    // Shared API helper used by every page's Alpine component.
     window.ms = {
       token() { return localStorage.getItem("ms_token"); },
       email() { return localStorage.getItem("ms_email"); },
@@ -66,13 +81,25 @@
       },
     };
 
-    // Header: render "signed in as X" or a Login link.
+    // Highlight the nav link matching the current path.
+    (function () {
+      const path = location.pathname;
+      document.querySelectorAll(".side-nav a[data-path]").forEach(a => {
+        if (a.dataset.path === path) a.classList.add("active");
+      });
+      const me = document.getElementById("me-link");
+      if (me && path === "/admin/me") me.classList.add("active");
+    })();
+
+    // Auth status footer block.
     (function () {
       const el = document.getElementById("auth-status");
       const token = localStorage.getItem("ms_token");
       const email = localStorage.getItem("ms_email");
       if (token && email) {
-        el.innerHTML = `Signed in as <strong>${email}</strong> · <a href="#" id="logout">Logout</a>`;
+        el.innerHTML = `
+          <span class="who" title="${email}">${email}</span>
+          <a href="#" id="logout">Sign out</a>`;
         document.getElementById("logout").addEventListener("click", (e) => {
           e.preventDefault();
           localStorage.removeItem("ms_token");
@@ -80,15 +107,19 @@
           location.href = "/admin";
         });
       } else {
-        el.innerHTML = `<a href="/admin/login">Login</a> · <a href="/admin/login#register">Register</a>`;
+        el.innerHTML = `<a href="/admin/login">Sign in</a>`;
       }
     })();
   </script>
-  <main {% if wide %}class="wide"{% endif %}>
+
+  <main class="content {% if wide %}wide{% endif %}">
+    <header class="page-header">
+      <h1>{{ title or "Memory Service" }}</h1>
+    </header>
     {% block content %}{% endblock %}
+    <footer>
+      <small>v0.1.0 · Memory Service</small>
+    </footer>
   </main>
-  <footer>
-    <small>v0.1.0 · Memory Service</small>
-  </footer>
 </body>
 </html>
