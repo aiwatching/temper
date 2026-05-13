@@ -103,19 +103,56 @@ def _build_embedder(rp: ResolvedProvider):  # type: ignore[no-untyped-def]
         return None, ProviderStatus(rp.provider, False, f"init failed: {exc}")
 
 
-def _build_reranker(rp: ResolvedProvider):  # type: ignore[no-untyped-def]
-    """Construct a cross-encoder/reranker.
+class _NoopReranker:
+    """Cross-encoder that returns passages in original order with a flat score.
 
-    For openai/deepseek/ollama we reuse the chat-completions endpoint via
-    OpenAIRerankerClient + the same LLMConfig. For anthropic we don't have
-    a reusable reranker, so we return None and let Graphiti fall back to
-    its default (which needs OPENAI_API_KEY — documented as a known
-    limitation of the anthropic provider).
+    Used when no OpenAI-compatible chat endpoint is available to host the
+    real reranker (e.g. anthropic LLM + ollama embedding-only setup).
+    Search still works — results just aren't reordered against the query.
     """
-    if rp.provider == "anthropic":
-        return None
-    if rp.needs_api_key and not rp.api_key:
-        return None
+
+    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+        return [(p, 1.0) for p in passages]
+
+
+def _build_reranker(llm_rp: ResolvedProvider, emb_rp: ResolvedProvider):  # type: ignore[no-untyped-def]
+    """Construct a cross-encoder.
+
+    Graphiti's `OpenAIRerankerClient` calls a chat endpoint to score
+    passages. We point it at whichever provider speaks OpenAI chat:
+
+      - openai / deepseek LLM         → reuse LLM endpoint (chat-capable)
+      - ollama LLM                     → reuse LLM endpoint
+      - anthropic LLM + openai embed   → reuse EMBEDDING endpoint, only if
+                                          the embedding endpoint is the
+                                          same gateway that also serves
+                                          OpenAI-shaped chat
+      - anthropic LLM + ollama embed   → no chat-capable source available
+                                          (the embedder is `nomic-embed-text`
+                                          which can't do chat). Skip
+                                          reranking — return _NoopReranker.
+
+    The Noop path keeps the service usable without forcing a chat key the
+    user doesn't have; search returns the same set of facts, just not
+    relevance-rescored by the cross-encoder.
+    """
+    source: ResolvedProvider | None = None
+    if llm_rp.provider in ("openai", "deepseek", "ollama"):
+        source = llm_rp
+    elif llm_rp.provider == "anthropic" and emb_rp.provider == "openai":
+        # OpenAI-compatible embedding endpoint is typically a gateway that
+        # also serves chat. Worth trying.
+        source = emb_rp
+
+    if source is None or (source.needs_api_key and not source.api_key):
+        _logger.info(
+            "Using no-op reranker (no OpenAI-compatible chat endpoint available "
+            "for llm=%s + embedding=%s)",
+            llm_rp.provider,
+            emb_rp.provider,
+        )
+        return _NoopReranker()
+
     try:
         from graphiti_core.cross_encoder.openai_reranker_client import (
             OpenAIRerankerClient,
@@ -123,14 +160,14 @@ def _build_reranker(rp: ResolvedProvider):  # type: ignore[no-untyped-def]
         from graphiti_core.llm_client import LLMConfig
 
         config = LLMConfig(
-            api_key=rp.api_key or "ollama",
-            model=rp.model,
-            base_url=rp.base_url,
+            api_key=source.api_key or "ollama",
+            model=source.model,
+            base_url=source.base_url,
         )
         return OpenAIRerankerClient(config=config)
     except Exception as exc:  # pragma: no cover - defensive
-        _logger.warning("reranker init failed (%s); falling back to default", exc)
-        return None
+        _logger.warning("reranker init failed (%s); using no-op reranker", exc)
+        return _NoopReranker()
 
 
 def _build_graphiti(settings: Settings) -> tuple[object | None, GraphitiStatus]:
@@ -153,7 +190,7 @@ def _build_graphiti(settings: Settings) -> tuple[object | None, GraphitiStatus]:
             embedder=emb_status,
         )
 
-    cross_encoder = _build_reranker(llm_rp)
+    cross_encoder = _build_reranker(llm_rp, emb_rp)
 
     try:
         from graphiti_core import Graphiti  # type: ignore[import-untyped]
