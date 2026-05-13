@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -59,7 +60,9 @@ async def _run_bootstrap() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     settings = get_settings()
-    logging.basicConfig(level=settings.log_level)
+    from memory_service.logging_config import configure_logging
+
+    configure_logging(level=settings.log_level, fmt=settings.log_format)
     init_database(settings)
     await _ensure_schema_for_test()
     await _run_bootstrap()
@@ -79,6 +82,21 @@ def create_app() -> FastAPI:
         description="Multi-tenant central memory layer for AI agents.",
         lifespan=lifespan,
     )
+
+    # CORS: comma-separated allowlist from CORS_ALLOW_ORIGINS env. Disabled
+    # entirely if empty so we don't accidentally ship a permissive
+    # default. Pass "*" only for dev.
+    if settings.cors_allow_origins:
+        origins = [o.strip() for o in settings.cors_allow_origins.split(",") if o.strip()]
+        if origins:
+            app.add_middleware(
+                CORSMiddleware,
+                allow_origins=origins,
+                allow_credentials=True,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+            _logger.info("CORS enabled for origins: %s", origins)
 
     # v1 API
     app.include_router(v1_system.router, prefix="/v1")

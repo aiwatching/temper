@@ -58,7 +58,16 @@ class Settings(BaseSettings):
     # --- App ---
     app_env: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
+    # `text` for human-readable (dev / interactive), `json` for shipping
+    # to ELK / loki / datadog. Pick `json` in production env files.
+    log_format: Literal["text", "json"] = "text"
     secret_key: str = Field(default="dev-insecure-change-me", min_length=8)
+
+    # Comma-separated origin allowlist for CORS. Empty = no CORS middleware,
+    # which means browsers will block any cross-origin call (safe default).
+    # Use "*" only when iterating locally; production should list explicit
+    # origins so credentialed requests stay scoped.
+    cors_allow_origins: str = ""
 
     # --- PostgreSQL ---
     database_url: str = "postgresql+asyncpg://memory:memory@localhost:5432/memory_service"

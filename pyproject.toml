@@ -23,9 +23,10 @@ dependencies = [
 
   # Database
   "sqlalchemy[asyncio]>=2.0",
-  "asyncpg>=0.29",
+  "asyncpg>=0.29",         # async runtime driver
+  "psycopg2-binary>=2.9",  # sync driver alembic uses for migrations
   "alembic>=1.13",
-  "aiosqlite>=0.20",  # for local dev / tests without Postgres
+  "aiosqlite>=0.20",       # for local dev / tests without Postgres
 
   # Auth
   "bcrypt>=4.0",

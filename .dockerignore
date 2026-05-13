@@ -1,0 +1,31 @@
+# Don't bake secrets or large irrelevant content into the image.
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+.git/
+.gitignore
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local-dev artifacts
+.data/
+.forge/
+scripts/dev.sh
+
+# Tests + examples aren't needed in the runtime image
+tests/
+examples/
+docs/
+*.md
+!README.md
+
+# CI / IDE noise
+.github/
+.idea/
+.vscode/
