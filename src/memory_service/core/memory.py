@@ -283,6 +283,97 @@ async def add_episode(
     )
 
 
+@dataclass
+class BulkWriteItem:
+    content: str
+    source_type: str = "text"
+    source_description: str = ""
+    reference_time: datetime | None = None
+    tags: list[str] | None = None
+
+
+@dataclass
+class BulkWriteResult:
+    episode_ids: list[str]
+    namespace: str
+    total_entities: int
+    total_facts: int
+
+
+async def add_episodes_bulk(
+    user: User,
+    agent_name: str,
+    namespace: str | None,
+    items: list[BulkWriteItem],
+    db: AsyncSession,
+) -> BulkWriteResult:
+    """Write many episodes in one Graphiti pass — faster than looping
+    add_episode for the same N items because entity/edge dedup happens
+    once across the whole batch.
+
+    All items land in the SAME namespace (one Graphiti group_id per
+    bulk call). Permission check runs once.
+    """
+    if not items:
+        raise InvalidRequestError("items must be non-empty")
+    try:
+        ns = resolve(namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_write(user, ns, db):
+        raise PermissionDeniedError(_write_denied_hint(user, ns))
+
+    client = _require_client()
+    from graphiti_core.utils.bulk_utils import RawEpisode
+
+    now = datetime.now(UTC)
+    raws: list[RawEpisode] = []
+    metadatas: list[EpisodeMetadata] = []
+    for item in items:
+        ref_t = item.reference_time or now
+        raws.append(
+            RawEpisode(
+                name=f"{agent_name}-{int(ref_t.timestamp() * 1000)}-{len(raws)}",
+                content=item.content,
+                source=_episode_type(item.source_type),
+                source_description=item.source_description or agent_name,
+                reference_time=ref_t,
+            )
+        )
+
+    try:
+        result = await client.add_episode_bulk(
+            bulk_episodes=raws, group_id=ns.as_graphiti_group_id()
+        )
+    except Exception as exc:
+        _logger.exception("add_episode_bulk failed")
+        raise BackendUnavailableError(f"bulk write failed: {exc}") from exc
+
+    episode_ids: list[str] = []
+    for episodic_node, item in zip(result.episodes, items):
+        episode_ids.append(episodic_node.uuid)
+        metadatas.append(
+            EpisodeMetadata(
+                id=episodic_node.uuid,
+                namespace=ns.raw,
+                created_by_user_id=user.id,
+                created_by_agent=agent_name,
+                source_type=item.source_type,
+                tags=item.tags or [],
+                reference_time=item.reference_time or now,
+            )
+        )
+    db.add_all(metadatas)
+    await db.commit()
+
+    return BulkWriteResult(
+        episode_ids=episode_ids,
+        namespace=ns.raw,
+        total_entities=len(result.nodes),
+        total_facts=len(result.edges),
+    )
+
+
 async def search(
     user: User,
     query: str,

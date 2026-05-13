@@ -43,6 +43,29 @@ class CreateEpisodeResponse(BaseModel):
     created_at: datetime
 
 
+class BulkEpisodeItem(BaseModel):
+    content: str = Field(min_length=1, max_length=64_000)
+    source_type: Literal["message", "text", "json"] = "text"
+    source_description: str | None = None
+    reference_time: datetime | None = None
+    tags: list[str] | None = None
+
+
+class BulkEpisodesRequest(BaseModel):
+    namespace: str | None = Field(
+        default=None,
+        description="Shared namespace for all items. Defaults to user:me.",
+    )
+    items: list[BulkEpisodeItem] = Field(min_length=1, max_length=200)
+
+
+class BulkEpisodesResponse(BaseModel):
+    episode_ids: list[str]
+    namespace: str
+    total_entities: int
+    total_facts: int
+
+
 class EpisodeSummary(BaseModel):
     """Compact representation used in list endpoints."""
 

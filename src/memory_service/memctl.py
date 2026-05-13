@@ -268,6 +268,37 @@ def cmd_write(args: argparse.Namespace) -> None:
         print("  (LLM produced no entities or facts for this content)")
 
 
+def cmd_write_bulk(args: argparse.Namespace) -> None:
+    """Read newline-delimited text from --file (or stdin) and submit as bulk."""
+    if args.file == "-" or args.file is None:
+        source = sys.stdin
+        close = False
+    else:
+        source = open(args.file)  # noqa: SIM115
+        close = True
+    try:
+        lines = [ln.strip() for ln in source if ln.strip()]
+    finally:
+        if close:
+            source.close()
+    if not lines:
+        die("no non-empty lines to write")
+
+    items = [{"content": ln, "source_type": args.source} for ln in lines]
+    if args.tags:
+        for it in items:
+            it["tags"] = args.tags
+    body: dict[str, Any] = {"items": items}
+    if args.namespace:
+        body["namespace"] = args.namespace
+    data = _request(args, "POST", "/v1/episodes/bulk", json=body)
+    if getattr(args, "json", False):
+        _dump_json(data)
+        return
+    print(f"  wrote {len(data['episode_ids'])} episode(s) → {data['namespace']}")
+    print(f"  extracted {data['total_entities']} entities, {data['total_facts']} facts")
+
+
 def cmd_search(args: argparse.Namespace) -> None:
     params: dict[str, Any] = {"query": args.query, "limit": args.limit}
     if args.namespace:
@@ -687,6 +718,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--source", default="text", choices=["text", "message", "json"])
     sp.add_argument("--tags", nargs="*", help="Free-form tags")
     sp.set_defaults(func=cmd_write)
+
+    sp = sub.add_parser(
+        "write-bulk",
+        help="Bulk-write episodes (one per line of input)",
+    )
+    sp.add_argument(
+        "--file", "-f",
+        help="Path to a file of newline-separated content. '-' or omitted = stdin.",
+    )
+    sp.add_argument("-n", "--namespace")
+    sp.add_argument("--source", default="text", choices=["text", "message", "json"])
+    sp.add_argument("--tags", nargs="*")
+    sp.set_defaults(func=cmd_write_bulk)
 
     sp = sub.add_parser("search", help="Semantic search")
     sp.add_argument("query")

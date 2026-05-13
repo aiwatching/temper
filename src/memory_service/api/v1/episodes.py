@@ -11,6 +11,8 @@ from memory_service.api.deps import CurrentUser, DBDep
 from memory_service.core import memory
 from memory_service.models import APIKey
 from memory_service.schemas.episode import (
+    BulkEpisodesRequest,
+    BulkEpisodesResponse,
     CreateEpisodeRequest,
     CreateEpisodeResponse,
     EntityOut,
@@ -75,6 +77,49 @@ async def create_episode(
             for f in result.extracted_facts
         ],
         created_at=result.created_at,
+    )
+
+
+@router.post(
+    "/bulk",
+    status_code=status.HTTP_201_CREATED,
+    response_model=BulkEpisodesResponse,
+)
+async def create_episodes_bulk(
+    payload: BulkEpisodesRequest,
+    user: CurrentUser,
+    db: DBDep,
+) -> BulkEpisodesResponse:
+    """Write up to 200 episodes in one Graphiti pass.
+
+    Same write semantics as POST /v1/episodes for each item, but extraction
+    runs once over the whole batch — meaningfully faster than looping
+    POST /episodes when importing chat history or logs. All items land
+    in the same namespace; pass different namespaces in separate calls.
+    """
+    agent_name = await _agent_name_for(user.id, db)
+    items = [
+        memory.BulkWriteItem(
+            content=item.content,
+            source_type=item.source_type,
+            source_description=item.source_description or "",
+            reference_time=item.reference_time,
+            tags=item.tags or [],
+        )
+        for item in payload.items
+    ]
+    try:
+        result = await memory.add_episodes_bulk(
+            user, agent_name, payload.namespace, items, db
+        )
+    except memory.MemoryError as exc:
+        raise _to_http(exc) from exc
+
+    return BulkEpisodesResponse(
+        episode_ids=result.episode_ids,
+        namespace=result.namespace,
+        total_entities=result.total_entities,
+        total_facts=result.total_facts,
     )
 
 
