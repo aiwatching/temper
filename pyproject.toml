@@ -57,6 +57,7 @@ dev = [
 
 [project.scripts]
 memory-service = "memory_service.main:cli"
+memctl = "memory_service.memctl:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/memory_service"]

@@ -238,6 +238,8 @@ service, so per-component status is the truth.
 - **Examples**: `examples/english_agent_minimal.py` — a 60-line Python
   showing the full agent-side pattern (write on every turn, search
   before responding).
+- **CLI**: `docs/memctl.md` — `memctl` wraps everything in this guide
+  so you don't have to keep typing `-H "X-API-Key: ..."`.
 - **Permissions deep-dive**: `docs/permissions.md`.
 - **Swagger**: `http://localhost:8000/docs`.
 
