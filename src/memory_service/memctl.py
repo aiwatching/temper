@@ -682,6 +682,59 @@ def cmd_fact_rm(args: argparse.Namespace) -> None:
     print(f"  deleted fact {args.uuid}")
 
 
+def cmd_schema_create(args: argparse.Namespace) -> None:
+    """Register an entity schema. Fields are space-separated `name:type` tokens
+    (suffix `!` to mark required), e.g. `email:string! signup:datetime`.
+    """
+    fields = []
+    for tok in args.fields or []:
+        required = tok.endswith("!")
+        bare = tok[:-1] if required else tok
+        if ":" not in bare:
+            die(f"bad field {tok!r}: must be name:type[!]")
+        name, ftype = bare.split(":", 1)
+        fields.append({"name": name, "type": ftype, "required": required})
+    body = {"name": args.name, "description": args.description, "fields": fields}
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    data = _request(
+        args, "POST", "/v1/schemas/entity-types", json=body, params=params
+    )
+    emit(args, data)
+
+
+def cmd_schema_ls(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    data = _request(args, "GET", "/v1/schemas/entity-types", params=params)
+    if getattr(args, "json", False):
+        _dump_json(data)
+        return
+    emit(args, data, columns=["name", "description", "created_at", "id"])
+
+
+def cmd_schema_show(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    data = _request(
+        args, "GET", f"/v1/schemas/entity-types/{args.name}", params=params
+    )
+    emit(args, data)
+
+
+def cmd_schema_rm(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    _request(
+        args, "DELETE", f"/v1/schemas/entity-types/{args.name}", params=params
+    )
+    print(f"  deleted schema {args.name}")
+
+
 def cmd_saga_ls(args: argparse.Namespace) -> None:
     params: dict[str, Any] = {}
     if args.namespace:
@@ -967,6 +1020,32 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("entity", help="Show one entity by UUID")
     sp.add_argument("uuid")
     sp.set_defaults(func=cmd_entity_show)
+
+    schema = sub.add_parser(
+        "schema", help="Per-namespace entity-type schemas"
+    ).add_subparsers(dest="schema_cmd", required=True)
+    sp = schema.add_parser("create", help="Register or update an entity schema")
+    sp.add_argument("name")
+    sp.add_argument(
+        "fields",
+        nargs="*",
+        help="Field defs: name:type or name:type! for required. "
+        "Types: string, integer, number, boolean, datetime.",
+    )
+    sp.add_argument("--description")
+    sp.add_argument("-n", "--namespace")
+    sp.set_defaults(func=cmd_schema_create)
+    sp = schema.add_parser("ls", help="List schemas in a namespace")
+    sp.add_argument("-n", "--namespace")
+    sp.set_defaults(func=cmd_schema_ls)
+    sp = schema.add_parser("show", help="Show one schema")
+    sp.add_argument("name")
+    sp.add_argument("-n", "--namespace")
+    sp.set_defaults(func=cmd_schema_show)
+    sp = schema.add_parser("rm", help="Delete a schema")
+    sp.add_argument("name")
+    sp.add_argument("-n", "--namespace")
+    sp.set_defaults(func=cmd_schema_rm)
 
     saga = sub.add_parser("saga", help="Inspect saga groupings").add_subparsers(
         dest="saga_cmd", required=True

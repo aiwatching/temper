@@ -4,6 +4,7 @@ from memory_service.models.api_key import APIKey
 from memory_service.models.episode import EpisodeMetadata
 from memory_service.models.group import Group, UserGroupMembership
 from memory_service.models.org import Organization
+from memory_service.models.schema import EntitySchema
 from memory_service.models.user import User
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "UserGroupMembership",
     "APIKey",
     "EpisodeMetadata",
+    "EntitySchema",
 ]

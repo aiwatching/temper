@@ -233,6 +233,9 @@ async def add_episode(
     client = _require_client()
     reference_time = req.reference_time or datetime.now(UTC)
 
+    from memory_service.core.schemas import load_entity_types_for_namespace
+
+    entity_types = await load_entity_types_for_namespace(ns.raw, db)
     try:
         result = await client.add_episode(
             name=f"{agent_name}-{int(reference_time.timestamp() * 1000)}",
@@ -242,6 +245,7 @@ async def add_episode(
             reference_time=reference_time,
             group_id=ns.as_graphiti_group_id(),
             saga=req.saga,
+            entity_types=entity_types or None,
         )
     except Exception as exc:
         _logger.exception("Graphiti add_episode failed")
@@ -346,11 +350,15 @@ async def add_episodes_bulk(
             )
         )
 
+    from memory_service.core.schemas import load_entity_types_for_namespace
+
+    entity_types = await load_entity_types_for_namespace(ns.raw, db)
     try:
         result = await client.add_episode_bulk(
             bulk_episodes=raws,
             group_id=ns.as_graphiti_group_id(),
             saga=saga,
+            entity_types=entity_types or None,
         )
     except Exception as exc:
         _logger.exception("add_episode_bulk failed")
