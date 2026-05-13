@@ -1,8 +1,7 @@
 """Server-rendered admin page.
 
-Phase 1.x ships a static management surface — single Jinja2 page that
-calls the same /v1/* JSON endpoints via fetch(). No auth gating yet (added
-in Phase 1.2 once /v1/auth exists). Mounted at `/admin`.
+Pages are static HTML; the JS in each template calls /v1/* with the
+Bearer token (or no token, for /admin which is public).
 """
 from __future__ import annotations
 
@@ -21,3 +20,13 @@ router = APIRouter()
 @router.get("/admin", response_class=HTMLResponse, include_in_schema=False)
 async def admin_index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "index.html", {"title": "Memory Service"})
+
+
+@router.get("/admin/login", response_class=HTMLResponse, include_in_schema=False)
+async def admin_login(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "login.html", {"title": "Login"})
+
+
+@router.get("/admin/me", response_class=HTMLResponse, include_in_schema=False)
+async def admin_me(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "me.html", {"title": "Account"})

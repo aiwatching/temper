@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="tabs">
+    <button class="active" data-tab="login">Login</button>
+    <button data-tab="register">Register</button>
+  </div>
+
+  <form id="login-form" class="stacked">
+    <label>Email <input type="email" name="email" required></label>
+    <label>Password <input type="password" name="password" minlength="8" required></label>
+    <button type="submit">Sign in</button>
+  </form>
+
+  <form id="register-form" class="stacked" style="display:none">
+    <label>Email <input type="email" name="email" required></label>
+    <label>Display name (optional) <input type="text" name="display_name"></label>
+    <label>Password (≥ 8 chars) <input type="password" name="password" minlength="8" required></label>
+    <button type="submit">Create account</button>
+  </form>
+
+  <div id="msg"></div>
+</section>
+
+<script>
+  const msg = (text, cls="ok") => {
+    document.getElementById("msg").innerHTML = `<div class="msg ${cls}">${text}</div>`;
+  };
+
+  document.querySelectorAll(".tabs button").forEach(b => {
+    b.addEventListener("click", () => {
+      document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      const tab = b.dataset.tab;
+      document.getElementById("login-form").style.display    = tab === "login"    ? "" : "none";
+      document.getElementById("register-form").style.display = tab === "register" ? "" : "none";
+      document.getElementById("msg").innerHTML = "";
+    });
+  });
+  if (location.hash === "#register") document.querySelector('[data-tab="register"]').click();
+
+  document.getElementById("login-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = JSON.stringify(Object.fromEntries(fd));
+    const r = await fetch("/v1/auth/login", { method: "POST", headers: {"Content-Type":"application/json"}, body });
+    if (!r.ok) { msg(`Login failed (${r.status})`, "bad"); return; }
+    const data = await r.json();
+    localStorage.setItem("ms_token", data.access_token);
+    localStorage.setItem("ms_email", fd.get("email"));
+    location.href = "/admin/me";
+  });
+
+  document.getElementById("register-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = JSON.stringify(Object.fromEntries(fd));
+    const r = await fetch("/v1/auth/register", { method: "POST", headers: {"Content-Type":"application/json"}, body });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({detail: "unknown"}));
+      msg(`Registration failed: ${err.detail || r.status}`, "bad"); return;
+    }
+    msg("Account created. Switching to login…", "ok");
+    setTimeout(() => document.querySelector('[data-tab="login"]').click(), 600);
+  });
+</script>
+{% endblock %}

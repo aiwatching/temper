@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Account</h2>
+  <div id="me-block"><em>Loading…</em></div>
+</section>
+
+<section class="card">
+  <h2>API keys</h2>
+  <p>Used by agents to authenticate via <code>X-API-Key</code> header. The plaintext value is shown <strong>once</strong> — copy it now.</p>
+
+  <form id="key-form" class="stacked">
+    <label>Agent name <input type="text" name="agent_name" placeholder="english-agent" required></label>
+    <button type="submit">Create API key</button>
+  </form>
+  <div id="key-result"></div>
+
+  <h3>Existing keys</h3>
+  <table id="keys-table">
+    <thead><tr><th>Agent</th><th>Prefix</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+    <tbody><tr><td colspan="6"><em>Loading…</em></td></tr></tbody>
+  </table>
+</section>
+
+<script>
+  const token = localStorage.getItem("ms_token");
+  if (!token) { location.href = "/admin/login"; }
+  const authHeaders = { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" };
+
+  async function loadMe() {
+    const r = await fetch("/v1/auth/me", { headers: authHeaders });
+    if (r.status === 401) { location.href = "/admin/login"; return; }
+    const u = await r.json();
+    document.getElementById("me-block").innerHTML = `
+      <table>
+        <tr><th>Email</th><td>${u.email}</td></tr>
+        <tr><th>Display name</th><td>${u.display_name ?? '<em>(none)</em>'}</td></tr>
+        <tr><th>User ID</th><td><code>${u.id}</code></td></tr>
+        <tr><th>Super admin</th><td>${u.is_super_admin ? "yes" : "no"}</td></tr>
+        <tr><th>Created</th><td>${u.created_at}</td></tr>
+      </table>`;
+  }
+
+  async function loadKeys() {
+    const tbody = document.querySelector("#keys-table tbody");
+    tbody.innerHTML = `<tr><td colspan='6'><em>Loading…</em></td></tr>`;
+    const r = await fetch("/v1/users/me/api-keys", { headers: authHeaders });
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan='6' class='bad'>Failed (${r.status})</td></tr>`; return; }
+    const keys = await r.json();
+    if (keys.length === 0) {
+      tbody.innerHTML = "<tr><td colspan='6'><em>No keys yet.</em></td></tr>";
+      return;
+    }
+    tbody.innerHTML = keys.map(k => `
+      <tr>
+        <td>${k.agent_name}</td>
+        <td><code>${k.prefix}</code></td>
+        <td>${k.created_at}</td>
+        <td>${k.last_used_at ?? "<em>never</em>"}</td>
+        <td class="${k.revoked ? 'bad' : 'ok'}">${k.revoked ? "revoked" : "active"}</td>
+        <td>${k.revoked ? "" : `<button class='revoke' data-id='${k.id}'>Revoke</button>`}</td>
+      </tr>`).join("");
+    document.querySelectorAll("button.revoke").forEach(b => b.addEventListener("click", async () => {
+      if (!confirm(`Revoke key ${b.dataset.id}? This cannot be undone.`)) return;
+      const r = await fetch(`/v1/users/me/api-keys/${b.dataset.id}`, { method: "DELETE", headers: authHeaders });
+      if (r.status === 204) loadKeys();
+    }));
+  }
+
+  document.getElementById("key-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const agent_name = e.target.agent_name.value.trim();
+    const r = await fetch("/v1/users/me/api-keys", {
+      method: "POST", headers: authHeaders,
+      body: JSON.stringify({ agent_name }),
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      document.getElementById("key-result").innerHTML =
+        `<div class='msg bad'>Failed: ${err.detail || r.status}</div>`;
+      return;
+    }
+    const k = await r.json();
+    document.getElementById("key-result").innerHTML = `
+      <div class='msg ok'>
+        <strong>${k.agent_name}</strong> created. Copy this key now — it will not be shown again:
+        <code class="token">${k.key}</code>
+      </div>`;
+    e.target.reset();
+    loadKeys();
+  });
+
+  loadMe(); loadKeys();
+</script>
+{% endblock %}

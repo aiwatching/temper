@@ -18,7 +18,7 @@ dependencies = [
   "jinja2>=3.1",
 
   # Config and validation
-  "pydantic>=2.6",
+  "pydantic[email]>=2.6",
   "pydantic-settings>=2.2",
 
   # Database
@@ -28,7 +28,7 @@ dependencies = [
   "aiosqlite>=0.20",  # for local dev / tests without Postgres
 
   # Auth
-  "passlib[bcrypt]>=1.7",
+  "bcrypt>=4.0",
   "python-jose[cryptography]>=3.3",
 
   # Knowledge graph
@@ -53,7 +53,6 @@ dev = [
   "pytest-asyncio>=0.23",
   "pytest-cov>=5.0",
   "pre-commit>=3.7",
-  "types-passlib",
 ]
 
 [project.scripts]

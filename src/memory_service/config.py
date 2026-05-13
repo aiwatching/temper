@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     embedding_model: str | None = None
     embedding_dimensions: int | None = None  # auto from defaults
 
+    # --- Auth / sessions ---
+    # JWT signing algorithm and lifetime for /v1/auth/login tokens.
+    jwt_algorithm: str = "HS256"
+    session_lifetime_minutes: int = 60 * 24  # 1 day
+
     # --- Bootstrap ---
     bootstrap_super_admin_email: str | None = None
 

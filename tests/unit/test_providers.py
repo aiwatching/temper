@@ -7,9 +7,21 @@ from memory_service.config import EMBEDDING_DEFAULTS, LLM_DEFAULTS, Settings
 
 
 def _settings(**overrides: object) -> Settings:
-    """Build a fresh Settings instance, ignoring .env file in tests."""
-    base = {"secret_key": "test-secret-key", "app_env": "test"}
-    base.update(overrides)  # type: ignore[arg-type]
+    """Build a fresh Settings instance with all api keys forced to None.
+
+    conftest seeds OPENAI_API_KEY / LLM_API_KEY into the environment for
+    integration tests; these unit tests need to control exactly what each
+    slot resolves to, so we explicitly null them out unless the caller
+    overrides.
+    """
+    base: dict[str, object] = {
+        "secret_key": "test-secret-key",
+        "app_env": "test",
+        "openai_api_key": None,
+        "llm_api_key": None,
+        "embedding_api_key": None,
+    }
+    base.update(overrides)
     return Settings(_env_file=None, **base)  # type: ignore[arg-type]
 
 
