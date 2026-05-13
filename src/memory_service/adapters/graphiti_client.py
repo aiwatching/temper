@@ -71,12 +71,22 @@ def _build_llm_client(rp: ResolvedProvider):  # type: ignore[no-untyped-def]
             return OpenAIGenericClient(config=config), ProviderStatus(rp.provider, True, rp.model)
         if rp.provider == "anthropic":
             try:
+                import anthropic as anthropic_sdk
                 from graphiti_core.llm_client.anthropic_client import AnthropicClient
             except ImportError as exc:
                 return None, ProviderStatus(
                     rp.provider,
                     False,
                     f"anthropic extra not installed ({exc}); pip install graphiti-core[anthropic]",
+                )
+            # Standard API keys are `sk-ant-api03-…` and go in x-api-key.
+            # Claude Code / OAuth tokens are `sk-ant-oat01-…` and need
+            # Authorization: Bearer …, exposed by the SDK as `auth_token`.
+            if rp.api_key and rp.api_key.startswith("sk-ant-oat"):
+                sdk_client = anthropic_sdk.AsyncAnthropic(auth_token=rp.api_key)
+                return (
+                    AnthropicClient(config=config, client=sdk_client),
+                    ProviderStatus(rp.provider, True, rp.model),
                 )
             return AnthropicClient(config=config), ProviderStatus(rp.provider, True, rp.model)
 
