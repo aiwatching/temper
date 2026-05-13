@@ -50,6 +50,14 @@ async def search(
             "closer to this node in the graph score higher."
         ),
     ] = None,
+    bfs_origins: Annotated[
+        str | None,
+        Query(
+            description="Comma-separated node UUIDs to start a graph "
+            "BFS from. Walked alongside the semantic search."
+        ),
+    ] = None,
+    bfs_max_depth: Annotated[int, Query(ge=1, le=10)] = 3,
 ) -> SearchResponse:
     ns_list: list[str] | None
     if namespaces:
@@ -58,12 +66,14 @@ async def search(
         ns_list = None
     et = [s.strip() for s in edge_types.split(",")] if edge_types else None
     nl = [s.strip() for s in node_labels.split(",")] if node_labels else None
+    bfs = [s.strip() for s in bfs_origins.split(",")] if bfs_origins else None
 
     try:
         hits = await memory.search(
             user, query, ns_list, limit, db,
             as_of=as_of, edge_types=et, node_labels=nl,
             center_node_uuid=center,
+            bfs_origin_node_uuids=bfs, bfs_max_depth=bfs_max_depth,
         )
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc

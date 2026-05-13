@@ -293,10 +293,12 @@ async def search(
     edge_types: list[str] | None = None,
     node_labels: list[str] | None = None,
     center_node_uuid: str | None = None,
+    bfs_origin_node_uuids: list[str] | None = None,
+    bfs_max_depth: int = 3,
 ) -> list[SearchHit]:
     """Search across the caller's readable namespaces.
 
-    Filters / bias:
+    Filters / bias / traversal:
       - `as_of`: only facts active at that moment — `valid_at <= as_of` AND
         (`invalid_at IS NULL` OR `invalid_at > as_of`). Time-travel.
       - `edge_types`: only RELATES_TO edges whose `name` is in this list
@@ -305,6 +307,9 @@ async def search(
         ["Person", "Place"]). Applied to entity-hit search results too.
       - `center_node_uuid`: bias ranking toward facts/entities connected
         to this node ("relevant to Sarah" rather than globally relevant).
+      - `bfs_origin_node_uuids` + `bfs_max_depth`: walk the graph from
+        these nodes up to N hops and include any facts/entities reached.
+        Complements semantic search rather than replacing it.
     """
     if not query.strip():
         return []
@@ -349,6 +354,24 @@ async def search(
         if config.node_config is not None:
             config.node_config.reranker = NodeReranker.node_distance
 
+    # BFS isn't part of the default RRF recipe's search_methods, so just
+    # passing bfs_origin_node_uuids would do nothing. Enable BFS on both
+    # the edge and node searches when origins are supplied, and override
+    # the depth to what the caller asked for.
+    if bfs_origin_node_uuids:
+        from graphiti_core.search.search_config import (
+            EdgeSearchMethod,
+            NodeSearchMethod,
+        )
+
+        if EdgeSearchMethod.bfs not in config.edge_config.search_methods:
+            config.edge_config.search_methods.append(EdgeSearchMethod.bfs)
+        config.edge_config.bfs_max_depth = bfs_max_depth
+        if config.node_config is not None:
+            if NodeSearchMethod.bfs not in config.node_config.search_methods:
+                config.node_config.search_methods.append(NodeSearchMethod.bfs)
+            config.node_config.bfs_max_depth = bfs_max_depth
+
     # Push the type-based filters into Graphiti's SearchFilters; they
     # lower to plain string-equality Cypher predicates and work reliably.
     # Time filters (as_of) stay in Python post-processing because FalkorDB
@@ -364,6 +387,7 @@ async def search(
             group_ids=group_ids,
             search_filter=search_filter,
             center_node_uuid=center_node_uuid,
+            bfs_origin_node_uuids=bfs_origin_node_uuids,
         )
     except Exception as exc:
         _logger.exception("Graphiti search failed")
