@@ -272,11 +272,16 @@ def cmd_search(args: argparse.Namespace) -> None:
     params: dict[str, Any] = {"query": args.query, "limit": args.limit}
     if args.namespace:
         params["namespaces"] = args.namespace
+    if args.as_of:
+        params["as_of"] = args.as_of
     data = _request(args, "GET", "/v1/search", params=params)
     if getattr(args, "json", False):
         _dump_json(data)
         return
-    print(f"  query: {data['query']}  hits: {len(data['facts'])}")
+    header = f"  query: {data['query']}  hits: {len(data['facts'])}"
+    if args.as_of:
+        header += f"  (as_of {args.as_of})"
+    print(header)
     emit(args, data["facts"], columns=["kind", "fact", "namespace"])
 
 
@@ -642,6 +647,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("query")
     sp.add_argument("-n", "--namespace", help="Comma-separated list to pin search")
     sp.add_argument("--limit", type=int, default=10)
+    sp.add_argument(
+        "--as-of",
+        dest="as_of",
+        help="ISO-8601 instant; returns only facts active at that time",
+    )
     sp.set_defaults(func=cmd_search)
 
     sp = sub.add_parser("ls", help="List episodes")

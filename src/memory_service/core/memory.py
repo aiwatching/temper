@@ -127,6 +127,39 @@ def _episode_type(raw: str):  # type: ignore[no-untyped-def]
     }.get(raw, EpisodeType.text)
 
 
+def _as_of_filter(as_of: datetime):  # type: ignore[no-untyped-def]
+    """Build a SearchFilters that returns only facts active at `as_of`.
+
+    Not currently used: FalkorDB compares ISO-8601 date strings at year
+    granularity in WHERE clauses, so a `valid_at <= 2026-04-28` predicate
+    matches every 2026-something row regardless of month. We post-filter
+    in Python (see `_active_at`) until FalkorDB fixes the comparison
+    semantics or we add a Neo4j driver that handles native datetimes.
+
+    Kept here so the equivalent Cypher-side filter is one switch away.
+
+    Active = valid_at <= as_of AND (invalid_at > as_of OR invalid_at IS NULL).
+
+    Graphiti's shape is counter-intuitive: the **outer** list is OR'd,
+    the **inner** list is AND'd.
+    """
+    from graphiti_core.search.search_filters import (
+        ComparisonOperator,
+        DateFilter,
+        SearchFilters,
+    )
+
+    return SearchFilters(
+        valid_at=[
+            [DateFilter(date=as_of, comparison_operator=ComparisonOperator.less_than_equal)]
+        ],
+        invalid_at=[
+            [DateFilter(date=as_of, comparison_operator=ComparisonOperator.greater_than)],
+            [DateFilter(date=as_of, comparison_operator=ComparisonOperator.is_null)],
+        ],
+    )
+
+
 def _write_denied_hint(user: User, ns) -> str:  # type: ignore[no-untyped-def]
     """Human-readable explanation of why a write was rejected.
 
@@ -237,7 +270,15 @@ async def search(
     namespaces: list[str] | None,
     limit: int,
     db: AsyncSession,
+    as_of: datetime | None = None,
 ) -> list[SearchHit]:
+    """Search across the caller's readable namespaces.
+
+    `as_of` is the time-travel knob: when set, only facts that were
+    active at that moment are returned — `valid_at <= as_of` AND
+    (`invalid_at IS NULL` OR `invalid_at > as_of`). Useful for replaying
+    "what did the system believe last Tuesday?" style queries.
+    """
     if not query.strip():
         return []
 
@@ -269,8 +310,22 @@ async def search(
 
     config = COMBINED_HYBRID_SEARCH_RRF.model_copy(deep=True)
     config.limit = limit
+
+    # NOTE on as_of: we do not push the time filter into Graphiti's
+    # SearchFilters, because FalkorDB's Cypher engine compares ISO-8601
+    # date strings at year granularity only (verified: `valid_at <= "2026-01-01"`
+    # matches every 2026-something row). We post-filter the result set in
+    # Python instead; this preserves correct semantics at the cost of
+    # over-fetching when many candidates are time-irrelevant.
+    over_fetch = limit * 4 if as_of is not None else limit
+    config.limit = over_fetch
+
     try:
-        results = await client.search_(query=query, config=config, group_ids=group_ids)
+        results = await client.search_(
+            query=query,
+            config=config,
+            group_ids=group_ids,
+        )
     except Exception as exc:
         _logger.exception("Graphiti search failed")
         raise BackendUnavailableError(f"search failed: {exc}") from exc
@@ -280,6 +335,8 @@ async def search(
 
     hits: list[SearchHit] = []
     for edge in results.edges:
+        if as_of is not None and not _active_at(edge, as_of):
+            continue
         hits.append(
             SearchHit(
                 kind="fact",
@@ -291,22 +348,42 @@ async def search(
                 score=None,
             )
         )
-    for node in results.nodes:
-        text = (getattr(node, "summary", None) or node.name or "").strip()
-        if not text:
-            continue
-        hits.append(
-            SearchHit(
-                kind="entity",
-                fact=text,
-                namespace=_to_raw(node.group_id),
-                source_episode_ids=[],
-                valid_at=None,
-                invalid_at=None,
-                score=None,
+    # When time-travel is requested, entity-node summaries (which have no
+    # validity semantics) would mix "what we believed then" with "everything
+    # we ever knew about this entity" — confusingly. Drop them in that mode.
+    if as_of is None:
+        for node in results.nodes:
+            text = (getattr(node, "summary", None) or node.name or "").strip()
+            if not text:
+                continue
+            hits.append(
+                SearchHit(
+                    kind="entity",
+                    fact=text,
+                    namespace=_to_raw(node.group_id),
+                    source_episode_ids=[],
+                    valid_at=None,
+                    invalid_at=None,
+                    score=None,
+                )
             )
-        )
     return hits[:limit]
+
+
+def _active_at(edge: Any, as_of: datetime) -> bool:
+    """True iff the edge's validity window covers `as_of`."""
+    valid_at = getattr(edge, "valid_at", None)
+    if valid_at is None:
+        # Graphiti sometimes leaves valid_at null on edges produced for
+        # statements without temporal information. Treating them as
+        # "always valid" prevents losing them entirely under time filters.
+        pass
+    elif valid_at > as_of:
+        return False
+    invalid_at = getattr(edge, "invalid_at", None)
+    if invalid_at is not None and invalid_at <= as_of:
+        return False
+    return True
 
 
 @dataclass

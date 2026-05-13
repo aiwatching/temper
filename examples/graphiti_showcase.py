@@ -20,6 +20,9 @@ Scenarios:
                                           text that says "instructor."
   5. Source attribution                 — every fact links back to the
                                           original episodes it came from.
+  6. Time-travel queries (`as_of`)      — ask the same question against
+                                          different points in time, get
+                                          different answers.
 
 Usage:
     export MS_BASE_URL=http://localhost:8000
@@ -76,8 +79,17 @@ def write(c: httpx.Client, args, content: str, *, reference_time: datetime | Non
     return d
 
 
-def search(c: httpx.Client, query: str, *, limit: int = 5) -> list[dict]:
-    r = c.get("/v1/search", params={"query": query, "limit": limit})
+def search(
+    c: httpx.Client,
+    query: str,
+    *,
+    limit: int = 5,
+    as_of: datetime | None = None,
+) -> list[dict]:
+    params: dict[str, str | int] = {"query": query, "limit": limit}
+    if as_of is not None:
+        params["as_of"] = as_of.isoformat()
+    r = c.get("/v1/search", params=params)
     r.raise_for_status()
     return r.json()["facts"]
 
@@ -200,6 +212,65 @@ def scenario_hybrid_search(c: httpx.Client, args) -> None:
     print("      is absent, semantically-close facts still surface.")
 
 
+def scenario_time_travel(c: httpx.Client, args) -> None:
+    section(
+        "6. Time-travel queries (`as_of`)",
+        "Same question, three points in time — three different answers.",
+    )
+    now = datetime.now(UTC)
+    t_old = now - timedelta(days=10)
+    t_mid = now - timedelta(days=3)
+
+    step(f"Write at T_old (10 days ago):  Karen's project lead was Alice.")
+    write(c, args, "Karen's project lead is Alice.", reference_time=t_old)
+    step(f"Write at T_mid (3 days ago):   Karen got reassigned — new lead is Bob.")
+    write(c, args, "Karen's project lead is now Bob.", reference_time=t_mid)
+    step(f"Write at T_new (now):          Reorg — Karen's lead is Carol.")
+    write(c, args, "Karen's project lead is now Carol.")
+
+    def _show_facts_only(label: str, facts: list[dict], *, time_travel: bool) -> None:
+        # The as_of filter applies to RELATES_TO edges. Entity summaries
+        # are always the merged view (they don't have valid_at/invalid_at
+        # the same way), so we filter them out to keep the demo clear.
+        facts = [f for f in facts if f["kind"] == "fact" and "karen" in f["fact"].lower()]
+        print(f"    [{label}]")
+        if not facts:
+            print("      (no facts about Karen at this point)")
+            return
+        for f in facts:
+            if time_travel:
+                # Everything in this list was active at as_of by definition.
+                valid_at = (f.get("valid_at") or "")[:10]
+                print(f"      ✓ [active @ as_of, valid_at={valid_at}] {f['fact']}")
+            else:
+                valid = "active" if not f.get("invalid_at") else f"invalid_at={f['invalid_at'][:10]}"
+                marker = "✓" if not f.get("invalid_at") else "✗"
+                print(f"      {marker} [{valid}] {f['fact']}")
+
+    step("Search WITHOUT as_of — what the system believes right now:")
+    _show_facts_only(
+        "current", search(c, "Karen's project lead", limit=20), time_travel=False
+    )
+
+    for label, when in [
+        ("as_of = 5 days ago (between T_mid and now)", now - timedelta(days=5)),
+        ("as_of = 7 days ago (between T_old and T_mid)", now - timedelta(days=7)),
+        ("as_of = 15 days ago (before any write)",       now - timedelta(days=15)),
+    ]:
+        step(f"Search WITH {label}:")
+        _show_facts_only(
+            label,
+            search(c, "Karen's project lead", limit=20, as_of=when),
+            time_travel=True,
+        )
+
+    print("\n    → Filter: valid_at <= as_of  AND  (invalid_at IS NULL OR invalid_at > as_of)")
+    print("      Time-travel applies to RELATES_TO facts. Entity-node summaries are always")
+    print("      the merged view — you saw them in earlier scenarios as kind=\"entity\".")
+    print("      Use cases: compliance ('show what we knew on date X'), replay,")
+    print("      historical regression analysis.")
+
+
 def scenario_attribution(c: httpx.Client, args) -> None:
     section(
         "5. Source attribution",
@@ -237,7 +308,7 @@ def main() -> int:
     ap.add_argument(
         "--only",
         type=int,
-        choices=[1, 2, 3, 4, 5],
+        choices=[1, 2, 3, 4, 5, 6],
         help="Run only scenario N (useful for re-trying a single demo)",
     )
     args = ap.parse_args()
@@ -249,6 +320,7 @@ def main() -> int:
         scenario_multi_hop,
         scenario_hybrid_search,
         scenario_attribution,
+        scenario_time_travel,
     ]
     runs = [scenarios[args.only - 1]] if args.only else scenarios
     for fn in runs:

@@ -1,6 +1,7 @@
 """/v1/search — semantic search across episodes."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
@@ -19,6 +20,14 @@ async def search(
     query: Annotated[str, Query(min_length=1, max_length=1000)],
     namespaces: Annotated[str | None, Query(description="Comma-separated list")] = None,
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    as_of: Annotated[
+        datetime | None,
+        Query(
+            description="ISO-8601 instant. Returns only facts that were "
+            "active at this time — i.e. valid_at <= as_of and either "
+            "invalid_at IS NULL or invalid_at > as_of."
+        ),
+    ] = None,
 ) -> SearchResponse:
     ns_list: list[str] | None
     if namespaces:
@@ -27,7 +36,7 @@ async def search(
         ns_list = None
 
     try:
-        hits = await memory.search(user, query, ns_list, limit, db)
+        hits = await memory.search(user, query, ns_list, limit, db, as_of=as_of)
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
 
