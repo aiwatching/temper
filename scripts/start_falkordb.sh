@@ -19,7 +19,10 @@ cd "$(dirname "$0")/.."
 CONTAINER_NAME="${FALKORDB_CONTAINER:-memory-service-falkordb}"
 IMAGE="${FALKORDB_IMAGE:-falkordb/falkordb:latest}"
 
-get() { grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'"; }
+# `|| true` on the end: a missing key makes grep exit 1, which combined
+# with `set -euo pipefail` would kill the script on any optional .env key.
+# Callers handle "no value" via the `:-default` fallback below.
+get() { { grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'"; } || true; }
 HOST="$(get FALKORDB_HOST)";       HOST="${HOST:-localhost}"
 PORT="$(get FALKORDB_PORT)";       PORT="${PORT:-6380}"
 # FalkorDB image bundles a Browser UI on container port 3000. Publish it
