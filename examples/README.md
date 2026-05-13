@@ -1,0 +1,35 @@
+# Examples
+
+Working agent-side integrations against the Memory Service v0.1 API.
+All examples use the REST API directly — no SDK — so the pattern ports
+to any language you care to.
+
+## english_agent_minimal.py
+
+The smallest useful pattern in ~100 lines of Python:
+
+- `recall(query)` before your LLM call to fetch relevant background.
+- `call_my_llm(...)` is a stub — wire your own LLM.
+- `remember(text)` after the user turn to persist for future calls.
+
+Run:
+
+```bash
+# 1. Get an API key (one-time, via the admin page or curl)
+open http://localhost:8000/admin/me
+
+# 2. Point the example at your service + key
+export MS_BASE_URL=http://localhost:8000
+export MS_API_KEY=mk_yourkeyhere
+
+python3 examples/english_agent_minimal.py
+```
+
+The first run will produce stub coach replies — that's expected; the
+LLM call is left for you to wire. Watch the live admin episodes page
+(`/admin/episodes`) and you'll see four episodes appear and Sarah +
+Toronto + past-tense show up as extracted entities/facts.
+
+The fourth turn (`What's the teacher's name again?`) is the actual
+test: `recall(...)` should pull "Sarah is the user's English teacher"
+out of memory and your LLM should answer with Sarah's name.
