@@ -40,3 +40,17 @@ class EpisodeMetadata(Base, TimestampMixin):
     reference_time: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
+    # "done" for synchronous writes (the historic default), "pending" when
+    # POST /v1/episodes returned 202 and is still extracting, "failed" when
+    # the background extraction raised. Synchronous writes never go
+    # through pending — they either succeed (done) or roll back the row.
+    extraction_status: Mapped[str] = mapped_column(String(16), default="done")
+    extraction_error: Mapped[str | None] = mapped_column(String(2048), default=None)
+    # In sync writes this is identical to `id`. In async writes `id` is a
+    # tracking UUID we generate up front (so the API can return immediately);
+    # Graphiti picks its own UUID during background extraction and we record
+    # it here. get_episode / delete_episode resolve through this column when
+    # talking to FalkorDB.
+    graphiti_episode_id: Mapped[str | None] = mapped_column(
+        String(64), default=None, index=True
+    )

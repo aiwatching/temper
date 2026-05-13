@@ -222,7 +222,16 @@ async def add_episode(
     agent_name: str,
     req: WriteRequest,
     db: AsyncSession,
+    *,
+    async_extract: bool = False,
 ) -> WriteResult:
+    """Write an episode + extract entities/facts.
+
+    When `async_extract` is True, returns immediately with an empty
+    entities/facts list and `extraction_status="pending"` on the metadata
+    row. The Graphiti call happens in a background task that updates the
+    status to "done" or "failed" + an error message on completion.
+    """
     try:
         ns = resolve(req.namespace, user)
     except NamespaceError as exc:
@@ -236,6 +245,19 @@ async def add_episode(
     from memory_service.core.schemas import load_entity_types_for_namespace
 
     entity_types = await load_entity_types_for_namespace(ns.raw, db)
+
+    if async_extract:
+        return await _add_episode_async(
+            user=user,
+            agent_name=agent_name,
+            req=req,
+            ns=ns,
+            client=client,
+            reference_time=reference_time,
+            entity_types=entity_types or None,
+            db=db,
+        )
+
     try:
         result = await client.add_episode(
             name=f"{agent_name}-{int(reference_time.timestamp() * 1000)}",
@@ -251,7 +273,8 @@ async def add_episode(
         _logger.exception("Graphiti add_episode failed")
         raise BackendUnavailableError(f"add_episode failed: {exc}") from exc
 
-    # Persist application-layer metadata.
+    # Persist application-layer metadata. In sync mode id == graphiti's
+    # uuid; async mode keeps them distinct (id is our tracking uuid).
     meta = EpisodeMetadata(
         id=result.episode.uuid,
         namespace=ns.raw,
@@ -260,6 +283,8 @@ async def add_episode(
         source_type=req.source_type,
         tags=req.tags or [],
         reference_time=reference_time,
+        extraction_status="done",
+        graphiti_episode_id=result.episode.uuid,
     )
     db.add(meta)
     await db.commit()
@@ -288,6 +313,87 @@ async def add_episode(
             for e in result.edges
         ],
         created_at=result.episode.created_at,
+    )
+
+
+async def _add_episode_async(
+    *,
+    user, agent_name, req, ns, client, reference_time, entity_types, db
+):  # type: ignore[no-untyped-def]
+    """Synchronous setup + fire-and-forget Graphiti call.
+
+    Two phases:
+
+    1. Generate the episode UUID up front and commit a `pending` metadata
+       row. This is what the API hands back, so callers can poll status
+       and look the episode up immediately.
+    2. Spawn an asyncio task that opens a NEW DB session, calls Graphiti,
+       and updates the row to `done` (or `failed` with the error). The
+       request's own db session is closed by the time the task runs.
+    """
+    import asyncio
+    import uuid
+
+    episode_uuid = str(uuid.uuid4())
+    meta = EpisodeMetadata(
+        id=episode_uuid,
+        namespace=ns.raw,
+        created_by_user_id=user.id,
+        created_by_agent=agent_name,
+        source_type=req.source_type,
+        tags=req.tags or [],
+        reference_time=reference_time,
+        extraction_status="pending",
+    )
+    db.add(meta)
+    await db.commit()
+
+    async def _run() -> None:
+        from memory_service.config import get_settings
+        from memory_service.db.session import init_database
+
+        database = init_database(get_settings())
+        async for fresh_db in database.session():
+            try:
+                # Don't pass uuid — Graphiti treats `uuid=` as
+                # "look up an existing episode," not "use this as the
+                # new id." Let it pick, then record the assignment.
+                result = await client.add_episode(
+                    name=f"{agent_name}-{int(reference_time.timestamp() * 1000)}",
+                    episode_body=req.content,
+                    source=_episode_type(req.source_type),
+                    source_description=req.source_description or agent_name,
+                    reference_time=reference_time,
+                    group_id=ns.as_graphiti_group_id(),
+                    saga=req.saga,
+                    entity_types=entity_types,
+                )
+                row = await fresh_db.get(EpisodeMetadata, episode_uuid)
+                if row is not None:
+                    row.extraction_status = "done"
+                    row.graphiti_episode_id = result.episode.uuid
+                    await fresh_db.commit()
+            except Exception as exc:
+                _logger.exception(
+                    "background add_episode failed for %s", episode_uuid
+                )
+                row = await fresh_db.get(EpisodeMetadata, episode_uuid)
+                if row is not None:
+                    row.extraction_status = "failed"
+                    row.extraction_error = str(exc)[:2000]
+                    await fresh_db.commit()
+            break
+
+    asyncio.create_task(_run())
+
+    # Mirror the synchronous return shape so callers can write the same
+    # code; entities/facts are empty until the background task finishes.
+    return WriteResult(
+        episode_id=episode_uuid,
+        namespace=ns.raw,
+        extracted_entities=[],
+        extracted_facts=[],
+        created_at=reference_time,
     )
 
 
@@ -740,6 +846,25 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
         # Don't leak existence to unprivileged callers — 404 not 403.
         raise NotFoundError(f"Episode {episode_id} not found")
 
+    # In sync writes graphiti_episode_id == id; in async writes it's
+    # whatever Graphiti assigned during the background extraction. If
+    # still pending (graphiti id is None), we have no graph data yet.
+    graphiti_id = meta.graphiti_episode_id
+    if graphiti_id is None:
+        return {
+            "episode_id": episode_id,
+            "namespace": meta.namespace,
+            "created_by_user_id": meta.created_by_user_id,
+            "created_by_agent": meta.created_by_agent,
+            "source_type": meta.source_type,
+            "tags": meta.tags or [],
+            "reference_time": meta.reference_time,
+            "created_at": meta.created_at,
+            "content": None,
+            "entities": [],
+            "facts": [],
+        }
+
     client = _require_client()
     driver = _driver_for_namespace(client, ns)
     try:
@@ -750,7 +875,7 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
         from graphiti_core.nodes import EpisodicNode
         from graphiti_core.search.search_utils import get_mentioned_nodes
 
-        episode_node = await EpisodicNode.get_by_uuid(driver, episode_id)
+        episode_node = await EpisodicNode.get_by_uuid(driver, graphiti_id)
         edge_uuids = list(getattr(episode_node, "entity_edges", []) or [])
         edges = await EntityEdge.get_by_uuids(driver, edge_uuids) if edge_uuids else []
         nodes = await get_mentioned_nodes(driver, [episode_node])
@@ -1152,18 +1277,22 @@ async def delete_episode(user: User, episode_id: str, db: AsyncSession) -> None:
     if not user.is_super_admin and meta.created_by_user_id != user.id:
         raise NotFoundError(f"Episode {episode_id} not found")
 
-    client = _require_client()
-    ns = parse(meta.namespace)
-    driver = _driver_for_namespace(client, ns)
-    try:
-        from graphiti_core.nodes import EpisodicNode
+    graphiti_id = meta.graphiti_episode_id
+    if graphiti_id is not None:
+        client = _require_client()
+        ns = parse(meta.namespace)
+        driver = _driver_for_namespace(client, ns)
+        try:
+            from graphiti_core.nodes import EpisodicNode
 
-        node = await EpisodicNode.get_by_uuid(driver, episode_id)
-        # Graphiti exposes Node.delete() that also detaches related entities.
-        await node.delete(driver)
-    except Exception as exc:
-        _logger.exception("Graphiti delete_episode failed")
-        raise BackendUnavailableError(f"delete_episode failed: {exc}") from exc
+            node = await EpisodicNode.get_by_uuid(driver, graphiti_id)
+            # Node.delete() also detaches related entities.
+            await node.delete(driver)
+        except Exception as exc:
+            _logger.exception("Graphiti delete_episode failed")
+            raise BackendUnavailableError(f"delete_episode failed: {exc}") from exc
 
+    # If still pending we just drop the tracking row — background task
+    # will error trying to update a missing row and that's fine.
     await db.delete(meta)
     await db.commit()

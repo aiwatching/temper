@@ -76,6 +76,12 @@ class BulkEpisodesResponse(BaseModel):
     total_facts: int
 
 
+class EpisodeStatusResponse(BaseModel):
+    episode_id: str
+    extraction_status: Literal["pending", "done", "failed"]
+    extraction_error: str | None = None
+
+
 class EpisodeSummary(BaseModel):
     """Compact representation used in list endpoints."""
 

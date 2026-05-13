@@ -253,7 +253,8 @@ def cmd_write(args: argparse.Namespace) -> None:
         body["tags"] = args.tags
     if args.saga:
         body["saga"] = args.saga
-    data = _request(args, "POST", "/v1/episodes", json=body)
+    params = {"async_extract": "true"} if args.async_extract else None
+    data = _request(args, "POST", "/v1/episodes", json=body, params=params)
     if getattr(args, "json", False):
         emit(args, data)
         return
@@ -378,6 +379,11 @@ def cmd_show(args: argparse.Namespace) -> None:
 def cmd_rm(args: argparse.Namespace) -> None:
     _request(args, "DELETE", f"/v1/episodes/{args.episode_id}")
     print(f"  deleted {args.episode_id}")
+
+
+def cmd_status(args: argparse.Namespace) -> None:
+    data = _request(args, "GET", f"/v1/episodes/{args.episode_id}/status")
+    emit(args, data)
 
 
 # --- api keys --------------------------------------------------------
@@ -819,6 +825,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--source", default="text", choices=["text", "message", "json"])
     sp.add_argument("--tags", nargs="*", help="Free-form tags")
     sp.add_argument("--saga", help="Saga name to chain this episode into")
+    sp.add_argument(
+        "--async",
+        dest="async_extract",
+        action="store_true",
+        help="Return immediately; extraction runs in background. Poll status with `memctl status <id>`.",
+    )
     sp.set_defaults(func=cmd_write)
 
     sp = sub.add_parser(
@@ -889,6 +901,10 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("rm", help="Delete an episode")
     sp.add_argument("episode_id")
     sp.set_defaults(func=cmd_rm)
+
+    sp = sub.add_parser("status", help="Extraction status of an episode")
+    sp.add_argument("episode_id")
+    sp.set_defaults(func=cmd_status)
 
     # api keys
     key = sub.add_parser("key", help="API key management").add_subparsers(

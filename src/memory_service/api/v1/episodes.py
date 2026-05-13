@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from sqlalchemy import select
 
 from memory_service.api.deps import CurrentUser, DBDep
@@ -18,9 +18,11 @@ from memory_service.schemas.episode import (
     EntityOut,
     EpisodeDetailResponse,
     EpisodeListResponse,
+    EpisodeStatusResponse,
     EpisodeSummary,
     FactOut,
 )
+from memory_service.models import EpisodeMetadata
 
 router = APIRouter(prefix="/episodes", tags=["episodes"])
 
@@ -41,12 +43,22 @@ async def _agent_name_for(user_id: str, db) -> str:  # type: ignore[no-untyped-d
     return name or "web-console"
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, response_model=CreateEpisodeResponse)
+@router.post("", response_model=CreateEpisodeResponse)
 async def create_episode(
     payload: CreateEpisodeRequest,
     user: CurrentUser,
     db: DBDep,
-) -> CreateEpisodeResponse:
+    response: Response,
+    async_extract: Annotated[
+        bool,
+        Query(
+            description="Return 202 immediately and run Graphiti extraction "
+            "in a background task. Poll GET /v1/episodes/{id}/status. "
+            "Useful when you want to write fast and don't need facts back "
+            "in the same call."
+        ),
+    ] = False,
+):
     agent_name = await _agent_name_for(user.id, db)
     req = memory.WriteRequest(
         namespace=payload.namespace or "",
@@ -58,9 +70,15 @@ async def create_episode(
         saga=payload.saga,
     )
     try:
-        result = await memory.add_episode(user, agent_name, req, db)
+        result = await memory.add_episode(
+            user, agent_name, req, db, async_extract=async_extract
+        )
     except memory.MemoryError as exc:
         raise _to_http(exc) from exc
+
+    response.status_code = (
+        status.HTTP_202_ACCEPTED if async_extract else status.HTTP_201_CREATED
+    )
 
     return CreateEpisodeResponse(
         episode_id=result.episode_id,
@@ -161,6 +179,29 @@ async def get_episode(episode_id: str, user: CurrentUser, db: DBDep) -> EpisodeD
     except memory.MemoryError as exc:
         raise _to_http(exc) from exc
     return EpisodeDetailResponse(**data)
+
+
+@router.get("/{episode_id}/status", response_model=EpisodeStatusResponse)
+async def get_extraction_status(
+    episode_id: str, user: CurrentUser, db: DBDep
+) -> EpisodeStatusResponse:
+    """Poll the extraction status after POST with `?async_extract=true`.
+
+    Cheap: hits SQL only, doesn't touch FalkorDB. 404 if the episode
+    doesn't exist or you can't read its namespace (same posture as the
+    rest of the API)."""
+    meta = await db.get(EpisodeMetadata, episode_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+    from memory_service.core.namespaces import can_read, parse
+
+    if not await can_read(user, parse(meta.namespace), db):
+        raise HTTPException(status_code=404, detail=f"Episode {episode_id} not found")
+    return EpisodeStatusResponse(
+        episode_id=meta.id,
+        extraction_status=meta.extraction_status,  # type: ignore[arg-type]
+        extraction_error=meta.extraction_error,
+    )
 
 
 @router.delete("/{episode_id}", status_code=status.HTTP_204_NO_CONTENT)
