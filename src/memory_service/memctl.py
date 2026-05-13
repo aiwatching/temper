@@ -595,6 +595,16 @@ def cmd_graph_edges(args: argparse.Namespace) -> None:
     emit(args, rows, columns=["source", "rel", "target", "fact"])
 
 
+def cmd_entity_show(args: argparse.Namespace) -> None:
+    data = _request(args, "GET", f"/v1/entities/{args.uuid}")
+    emit(args, data)
+
+
+def cmd_fact_show(args: argparse.Namespace) -> None:
+    data = _request(args, "GET", f"/v1/facts/{args.uuid}")
+    emit(args, data)
+
+
 def cmd_graph_cypher(args: argparse.Namespace) -> None:
     db = _falkordb(args)
     g = db.select_graph(_resolve_graph_name(args))
@@ -799,6 +809,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("query")
     sp.add_argument("-n", "--namespace")
     sp.set_defaults(func=cmd_graph_cypher)
+
+    # entity / fact lookup by uuid
+    sp = sub.add_parser("entity", help="Show one entity by UUID")
+    sp.add_argument("uuid")
+    sp.set_defaults(func=cmd_entity_show)
+
+    sp = sub.add_parser("fact", help="Show one RELATES_TO fact by UUID")
+    sp.add_argument("uuid")
+    sp.set_defaults(func=cmd_fact_show)
 
     return p
 

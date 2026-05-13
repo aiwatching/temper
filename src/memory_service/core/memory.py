@@ -629,6 +629,85 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
     }
 
 
+async def get_entity(
+    user: User, entity_uuid: str, db: AsyncSession
+) -> dict[str, Any] | None:
+    """Find an entity node by UUID across the caller's readable namespaces.
+
+    Returns None when no readable namespace contains it. Inside each
+    namespace we clone the Graphiti driver before calling get_by_uuid so
+    the per-graph routing works (same trick as get_episode).
+    """
+    client = _require_client()
+    readable = await readable_namespaces_for(user, db)
+    from graphiti_core.nodes import EntityNode
+
+    for ns in readable:
+        driver = _driver_for_namespace(client, ns)
+        if driver is None:
+            continue
+        try:
+            node = await EntityNode.get_by_uuid(driver, entity_uuid)
+        except Exception:
+            continue
+        return {
+            "id": node.uuid,
+            "namespace": ns.raw,
+            "name": getattr(node, "name", None),
+            "summary": getattr(node, "summary", None),
+            "labels": list(getattr(node, "labels", []) or []),
+            "created_at": getattr(node, "created_at", None),
+            "attributes": dict(getattr(node, "attributes", {}) or {}),
+        }
+    return None
+
+
+async def get_fact(
+    user: User, edge_uuid: str, db: AsyncSession
+) -> dict[str, Any] | None:
+    """Find an EntityEdge (RELATES_TO fact) by UUID across readable namespaces."""
+    client = _require_client()
+    readable = await readable_namespaces_for(user, db)
+    from graphiti_core.edges import EntityEdge
+    from graphiti_core.nodes import EntityNode
+
+    for ns in readable:
+        driver = _driver_for_namespace(client, ns)
+        if driver is None:
+            continue
+        try:
+            edge = await EntityEdge.get_by_uuid(driver, edge_uuid)
+        except Exception:
+            continue
+        # Resolve endpoint names so the response is self-describing.
+        source_name = target_name = None
+        try:
+            source = await EntityNode.get_by_uuid(driver, edge.source_node_uuid)
+            source_name = source.name
+        except Exception:
+            pass
+        try:
+            target = await EntityNode.get_by_uuid(driver, edge.target_node_uuid)
+            target_name = target.name
+        except Exception:
+            pass
+        return {
+            "id": edge.uuid,
+            "namespace": ns.raw,
+            "fact": edge.fact,
+            "name": getattr(edge, "name", None),
+            "source_uuid": edge.source_node_uuid,
+            "target_uuid": edge.target_node_uuid,
+            "source_name": source_name,
+            "target_name": target_name,
+            "valid_at": edge.valid_at,
+            "invalid_at": edge.invalid_at,
+            "created_at": getattr(edge, "created_at", None),
+            "episodes": list(getattr(edge, "episodes", []) or []),
+        }
+    return None
+
+
 async def list_episodes(
     user: User,
     namespace: str | None,
