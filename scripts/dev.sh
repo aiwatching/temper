@@ -64,7 +64,12 @@ fi
 say "Embedding backend"
 scripts/start_embedding.sh
 
-# ---- 3. database URL -----------------------------------------------------
+# ---- 3. FalkorDB (Graphiti graph store) ----------------------------------
+
+say "FalkorDB"
+scripts/start_falkordb.sh
+
+# ---- 4. database URL -----------------------------------------------------
 
 say "Database"
 mkdir -p .data
@@ -77,7 +82,7 @@ else
   ok "using $DATABASE_URL"
 fi
 
-# ---- 4. open browser & start uvicorn -------------------------------------
+# ---- 5. open browser & start uvicorn -------------------------------------
 
 if [[ "${OPEN_BROWSER:-1}" = "1" ]]; then
   ( sleep 2 && command -v open >/dev/null && open "http://$HOST:$PORT/admin" ) &

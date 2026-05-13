@@ -1,8 +1,13 @@
 """FalkorDB connection management.
 
-Graphiti talks to FalkorDB internally; we keep a separate raw client for
-health checks. Using `falkordb-py` would pull in redis-py; we already have
-that transitive dep via graphiti.
+The health probe verifies that the endpoint **actually serves the GRAPH
+module** — a plain Redis would happily reply to PING but blow up the
+first time Graphiti calls GRAPH.QUERY at runtime. We catch that here so
+/v1/health is honest.
+
+We deliberately avoid importing the `falkordb` package; using raw RESP
+over a TCP socket keeps this probe usable even when client libs are
+missing or misconfigured.
 """
 from __future__ import annotations
 
@@ -18,13 +23,31 @@ class FalkorPing:
     detail: str
 
 
-async def ping_falkordb(settings: Settings | None = None) -> FalkorPing:
-    """Best-effort liveness probe for FalkorDB.
+def _encode_command(*args: str) -> bytes:
+    """Encode a Redis RESP-2 array command."""
+    out = bytearray(f"*{len(args)}\r\n".encode())
+    for a in args:
+        b = a.encode("utf-8")
+        out += f"${len(b)}\r\n".encode()
+        out += b
+        out += b"\r\n"
+    return bytes(out)
 
-    Returns `FalkorPing(ok=True)` when we can open a TCP connection and
-    receive a PONG. We deliberately avoid importing the `falkordb` package
-    here so the health endpoint stays useful even when that library is
-    missing or misconfigured.
+
+async def _read_response(reader: asyncio.StreamReader) -> tuple[bytes, bytes]:
+    """Read one RESP response and return (kind_byte, payload_first_line)."""
+    line = await asyncio.wait_for(reader.readline(), timeout=2.0)
+    if not line:
+        return (b"", b"")
+    return (line[:1], line[1:].rstrip(b"\r\n"))
+
+
+async def ping_falkordb(settings: Settings | None = None) -> FalkorPing:
+    """Liveness + capability probe for FalkorDB.
+
+    Returns ok=True only when the endpoint actually serves `GRAPH.QUERY`.
+    A plain Redis that lacks the FalkorDB module will return an error
+    here; we report that explicitly instead of pretending it's healthy.
     """
     settings = settings or get_settings()
     try:
@@ -36,12 +59,23 @@ async def ping_falkordb(settings: Settings | None = None) -> FalkorPing:
         return FalkorPing(ok=False, detail=f"connect failed: {exc}")
 
     try:
-        writer.write(b"PING\r\n")
+        # Use a throwaway graph name so we don't pollute the user's data.
+        writer.write(_encode_command("GRAPH.QUERY", "_healthcheck", "RETURN 1"))
         await writer.drain()
-        data = await asyncio.wait_for(reader.readline(), timeout=2.0)
-        if data.startswith(b"+PONG"):
-            return FalkorPing(ok=True, detail="PONG")
-        return FalkorPing(ok=False, detail=f"unexpected reply: {data!r}")
+        kind, payload = await _read_response(reader)
+        if kind == b"-":
+            # Error response — usually "unknown command 'GRAPH.QUERY'" on
+            # plain redis, or a genuine FalkorDB error string.
+            text = payload.decode("utf-8", errors="replace")
+            if "unknown command" in text.lower():
+                return FalkorPing(
+                    ok=False,
+                    detail="endpoint is plain Redis, not FalkorDB (no GRAPH module)",
+                )
+            return FalkorPing(ok=False, detail=f"GRAPH.QUERY error: {text}")
+        if kind == b"*":
+            return FalkorPing(ok=True, detail="GRAPH.QUERY ok")
+        return FalkorPing(ok=False, detail=f"unexpected reply: {kind!r} {payload!r}")
     finally:
         writer.close()
         try:

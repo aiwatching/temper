@@ -19,12 +19,16 @@ services:
   falkordb:
     image: falkordb/falkordb:latest
     restart: unless-stopped
+    # Mapped to 6380 on the host to leave 6379 free for any plain-redis
+    # the user already runs (e.g. fortinac-redis). Inside the container
+    # FalkorDB still listens on 6379.
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - falkor-data:/var/lib/falkordb/data
     healthcheck:
-      test: ["CMD", "redis-cli", "PING"]
+      # Real GRAPH liveness — plain redis would fail this.
+      test: ["CMD", "redis-cli", "GRAPH.QUERY", "_healthcheck", "RETURN 1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -40,6 +44,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://memory:memory@db:5432/memory_service
       FALKORDB_HOST: falkordb
+      # Container-to-container talks on the internal 6379, not the host 6380.
       FALKORDB_PORT: "6379"
       FALKORDB_GRAPH_NAME: memory
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
