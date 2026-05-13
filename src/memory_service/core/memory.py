@@ -899,6 +899,78 @@ async def get_entity(
     return None
 
 
+async def _find_fact_with_driver(
+    user: User, edge_uuid: str, db: AsyncSession
+):  # type: ignore[no-untyped-def]
+    """Locate an EntityEdge by UUID across readable namespaces, returning
+    (edge, namespace, driver) or (None, None, None). Shared between get/
+    update/delete paths so each one does the lookup the same way."""
+    client = _require_client()
+    readable = await readable_namespaces_for(user, db)
+    from graphiti_core.edges import EntityEdge
+
+    for ns in readable:
+        driver = _driver_for_namespace(client, ns)
+        if driver is None:
+            continue
+        try:
+            edge = await EntityEdge.get_by_uuid(driver, edge_uuid)
+        except Exception:
+            continue
+        return edge, ns, driver
+    return None, None, None
+
+
+async def set_fact_invalid_at(
+    user: User, edge_uuid: str, invalid_at: datetime | None, db: AsyncSession
+) -> dict[str, Any] | None:
+    """Explicitly mark a fact invalid_at a given time (or `None` to
+    reactivate). Overrides Graphiti's LLM-inferred contradiction logic
+    when the operator knows better.
+
+    Requires WRITE permission on the fact's namespace — invalidating is
+    a mutation of the fact, not just a read.
+    """
+    edge, ns, driver = await _find_fact_with_driver(user, edge_uuid, db)
+    if edge is None or ns is None:
+        return None
+    if not await can_write(user, ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' cannot modify facts in namespace '{ns.raw}'"
+        )
+    edge.invalid_at = invalid_at
+    try:
+        await edge.save(driver)
+    except Exception as exc:
+        _logger.exception("EntityEdge.save failed for %s", edge_uuid)
+        raise BackendUnavailableError(f"save failed: {exc}") from exc
+    return {
+        "id": edge.uuid,
+        "namespace": ns.raw,
+        "fact": edge.fact,
+        "valid_at": edge.valid_at,
+        "invalid_at": edge.invalid_at,
+    }
+
+
+async def delete_fact(user: User, edge_uuid: str, db: AsyncSession) -> bool:
+    """Hard-delete an EntityEdge. Returns True if deleted, False if not
+    found. Requires WRITE permission on the namespace."""
+    edge, ns, driver = await _find_fact_with_driver(user, edge_uuid, db)
+    if edge is None or ns is None:
+        return False
+    if not await can_write(user, ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' cannot modify facts in namespace '{ns.raw}'"
+        )
+    try:
+        await edge.delete(driver)
+    except Exception as exc:
+        _logger.exception("EntityEdge.delete failed for %s", edge_uuid)
+        raise BackendUnavailableError(f"delete failed: {exc}") from exc
+    return True
+
+
 async def get_fact(
     user: User, edge_uuid: str, db: AsyncSession
 ) -> dict[str, Any] | None:

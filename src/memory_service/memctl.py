@@ -20,6 +20,7 @@ import json
 import os
 import sys
 import tomllib
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -661,6 +662,22 @@ def cmd_fact_show(args: argparse.Namespace) -> None:
     emit(args, data)
 
 
+def cmd_fact_invalidate(args: argparse.Namespace) -> None:
+    """PATCH /v1/facts/{uuid} — set invalid_at (default now) or reactivate."""
+    if args.reactivate:
+        body = {"invalid_at": None}
+    else:
+        when = args.at or datetime.now(UTC).isoformat()
+        body = {"invalid_at": when}
+    data = _request(args, "PATCH", f"/v1/facts/{args.uuid}", json=body)
+    emit(args, data)
+
+
+def cmd_fact_rm(args: argparse.Namespace) -> None:
+    _request(args, "DELETE", f"/v1/facts/{args.uuid}")
+    print(f"  deleted fact {args.uuid}")
+
+
 def cmd_graph_cypher(args: argparse.Namespace) -> None:
     db = _falkordb(args)
     g = db.select_graph(_resolve_graph_name(args))
@@ -918,9 +935,27 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("uuid")
     sp.set_defaults(func=cmd_entity_show)
 
-    sp = sub.add_parser("fact", help="Show one RELATES_TO fact by UUID")
+    fact = sub.add_parser(
+        "fact", help="Operate on one RELATES_TO fact by UUID"
+    )
+    fact_sub = fact.add_subparsers(dest="fact_cmd", required=True)
+    sp = fact_sub.add_parser("show", help="Show this fact")
     sp.add_argument("uuid")
     sp.set_defaults(func=cmd_fact_show)
+    sp = fact_sub.add_parser(
+        "invalidate", help="Mark this fact invalid_at (default: now)"
+    )
+    sp.add_argument("uuid")
+    sp.add_argument("--at", help="ISO-8601 timestamp; default = now")
+    sp.add_argument(
+        "--reactivate",
+        action="store_true",
+        help="Clear invalid_at instead of setting it (undo an invalidation)",
+    )
+    sp.set_defaults(func=cmd_fact_invalidate)
+    sp = fact_sub.add_parser("rm", help="Hard-delete this fact")
+    sp.add_argument("uuid")
+    sp.set_defaults(func=cmd_fact_rm)
 
     return p
 
