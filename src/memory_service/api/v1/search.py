@@ -43,6 +43,13 @@ async def search(
             "(e.g. 'Person,Place'). Applied to entity-hit results."
         ),
     ] = None,
+    center: Annotated[
+        str | None,
+        Query(
+            description="Node UUID to bias ranking around. Facts/entities "
+            "closer to this node in the graph score higher."
+        ),
+    ] = None,
 ) -> SearchResponse:
     ns_list: list[str] | None
     if namespaces:
@@ -56,6 +63,7 @@ async def search(
         hits = await memory.search(
             user, query, ns_list, limit, db,
             as_of=as_of, edge_types=et, node_labels=nl,
+            center_node_uuid=center,
         )
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc

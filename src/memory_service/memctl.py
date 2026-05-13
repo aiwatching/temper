@@ -278,6 +278,8 @@ def cmd_search(args: argparse.Namespace) -> None:
         params["edge_types"] = args.edge_types
     if args.node_labels:
         params["node_labels"] = args.node_labels
+    if args.center:
+        params["center"] = args.center
     data = _request(args, "GET", "/v1/search", params=params)
     if getattr(args, "json", False):
         _dump_json(data)
@@ -665,6 +667,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--node-labels",
         dest="node_labels",
         help="Comma-separated entity labels, e.g. Person,Place",
+    )
+    sp.add_argument(
+        "--center",
+        help="Node UUID to bias ranking around",
     )
     sp.set_defaults(func=cmd_search)
 

@@ -292,16 +292,19 @@ async def search(
     as_of: datetime | None = None,
     edge_types: list[str] | None = None,
     node_labels: list[str] | None = None,
+    center_node_uuid: str | None = None,
 ) -> list[SearchHit]:
     """Search across the caller's readable namespaces.
 
-    Filters:
+    Filters / bias:
       - `as_of`: only facts active at that moment — `valid_at <= as_of` AND
         (`invalid_at IS NULL` OR `invalid_at > as_of`). Time-travel.
       - `edge_types`: only RELATES_TO edges whose `name` is in this list
         (e.g. ["LIVES_IN", "TEACHES"]). Pushed down to Graphiti.
       - `node_labels`: only entity nodes with these labels (e.g.
         ["Person", "Place"]). Applied to entity-hit search results too.
+      - `center_node_uuid`: bias ranking toward facts/entities connected
+        to this node ("relevant to Sarah" rather than globally relevant).
     """
     if not query.strip():
         return []
@@ -335,6 +338,17 @@ async def search(
     config = COMBINED_HYBRID_SEARCH_RRF.model_copy(deep=True)
     config.limit = limit
 
+    # `center_node_uuid` only biases the result set when the reranker
+    # consults graph distance. The default RRF reranker doesn't, so we
+    # switch to node-distance reranking on both edge and node configs
+    # whenever the caller asks for centering.
+    if center_node_uuid is not None:
+        from graphiti_core.search.search_config import EdgeReranker, NodeReranker
+
+        config.edge_config.reranker = EdgeReranker.node_distance
+        if config.node_config is not None:
+            config.node_config.reranker = NodeReranker.node_distance
+
     # Push the type-based filters into Graphiti's SearchFilters; they
     # lower to plain string-equality Cypher predicates and work reliably.
     # Time filters (as_of) stay in Python post-processing because FalkorDB
@@ -349,6 +363,7 @@ async def search(
             config=config,
             group_ids=group_ids,
             search_filter=search_filter,
+            center_node_uuid=center_node_uuid,
         )
     except Exception as exc:
         _logger.exception("Graphiti search failed")
