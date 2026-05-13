@@ -226,7 +226,13 @@ async def search(
     else:
         readable = await readable_namespaces_for(user, db)
 
-    group_ids = [n.as_graphiti_group_id() for n in readable]
+    # Build encoded→raw lookup so we can return the API-surface namespace
+    # ("user:<uuid>") instead of the Graphiti-internal group_id ("user__...").
+    # The encoding is lossy (slugs containing '_' can't be reversed), but every
+    # group_id Graphiti returns came from a namespace we passed in here, so
+    # the table covers it.
+    group_id_to_raw = {n.as_graphiti_group_id(): n.raw for n in readable}
+    group_ids = list(group_id_to_raw.keys())
 
     client = _require_client()
     # RRF recipe: no cross-encoder, no MMR — works with our noop reranker.
@@ -240,13 +246,16 @@ async def search(
         _logger.exception("Graphiti search failed")
         raise BackendUnavailableError(f"search failed: {exc}") from exc
 
+    def _to_raw(group_id: str) -> str:
+        return group_id_to_raw.get(group_id, group_id)
+
     hits: list[SearchHit] = []
     for edge in results.edges:
         hits.append(
             SearchHit(
                 kind="fact",
                 fact=edge.fact,
-                namespace=edge.group_id,
+                namespace=_to_raw(edge.group_id),
                 source_episode_ids=list(edge.episodes or []),
                 valid_at=edge.valid_at,
                 invalid_at=edge.invalid_at,
@@ -261,7 +270,7 @@ async def search(
             SearchHit(
                 kind="entity",
                 fact=text,
-                namespace=node.group_id,
+                namespace=_to_raw(node.group_id),
                 source_episode_ids=[],
                 valid_at=None,
                 invalid_at=None,
@@ -269,6 +278,22 @@ async def search(
             )
         )
     return hits[:limit]
+
+
+def _driver_for_namespace(client: Any, ns: Namespace):  # type: ignore[no-untyped-def]
+    """Return a Graphiti driver bound to the FalkorDB graph backing `ns`.
+
+    FalkorDB stores each Graphiti `group_id` as a separate graph; the
+    connection-level default ("default_db") never holds real data. Any op
+    that goes through `driver.execute_query` (get_by_uuid, delete, ...)
+    must be issued against the per-namespace graph or it sees nothing.
+
+    We `clone()` the existing driver so the underlying socket/auth is
+    reused — only the target graph name changes.
+    """
+    if getattr(client, "driver", None) is None:
+        return None
+    return client.driver.clone(database=ns.as_graphiti_group_id())
 
 
 async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str, Any]:
@@ -281,12 +306,19 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
         raise NotFoundError(f"Episode {episode_id} not found")
 
     client = _require_client()
+    driver = _driver_for_namespace(client, ns)
     try:
-        results = await client.get_nodes_and_edges_by_episode([episode_id])
-        # Also fetch the episode body
+        # Inlined Graphiti.get_nodes_and_edges_by_episode using the cloned
+        # driver — the canned method is a thin wrapper that uses
+        # `self.driver`, which is pinned to the wrong graph.
+        from graphiti_core.edges import EntityEdge
         from graphiti_core.nodes import EpisodicNode
+        from graphiti_core.search.search_utils import get_mentioned_nodes
 
-        node = await EpisodicNode.get_by_uuid(client.driver, episode_id)
+        episode_node = await EpisodicNode.get_by_uuid(driver, episode_id)
+        edge_uuids = list(getattr(episode_node, "entity_edges", []) or [])
+        edges = await EntityEdge.get_by_uuids(driver, edge_uuids) if edge_uuids else []
+        nodes = await get_mentioned_nodes(driver, [episode_node])
     except Exception as exc:
         _logger.exception("Graphiti get_episode failed")
         raise BackendUnavailableError(f"get_episode failed: {exc}") from exc
@@ -300,10 +332,10 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
         "tags": meta.tags or [],
         "reference_time": meta.reference_time,
         "created_at": meta.created_at,
-        "content": getattr(node, "content", None),
+        "content": getattr(episode_node, "content", None),
         "entities": [
             {"uuid": n.uuid, "name": n.name, "summary": getattr(n, "summary", None)}
-            for n in results.nodes
+            for n in nodes
         ],
         "facts": [
             {
@@ -312,7 +344,7 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
                 "valid_at": e.valid_at,
                 "invalid_at": e.invalid_at,
             }
-            for e in results.edges
+            for e in edges
         ],
     }
 
@@ -364,12 +396,14 @@ async def delete_episode(user: User, episode_id: str, db: AsyncSession) -> None:
         raise NotFoundError(f"Episode {episode_id} not found")
 
     client = _require_client()
+    ns = parse(meta.namespace)
+    driver = _driver_for_namespace(client, ns)
     try:
         from graphiti_core.nodes import EpisodicNode
 
-        node = await EpisodicNode.get_by_uuid(client.driver, episode_id)
+        node = await EpisodicNode.get_by_uuid(driver, episode_id)
         # Graphiti exposes Node.delete() that also detaches related entities.
-        await node.delete(client.driver)
+        await node.delete(driver)
     except Exception as exc:
         _logger.exception("Graphiti delete_episode failed")
         raise BackendUnavailableError(f"delete_episode failed: {exc}") from exc

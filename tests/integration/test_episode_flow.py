@@ -163,23 +163,40 @@ async def test_search_with_no_query_returns_empty(client, mock_graphiti) -> None
 @pytest.mark.asyncio
 async def test_search_calls_graphiti(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
     token = await _register_and_login(client)
-    edge = SimpleNamespace(
-        uuid="f1",
-        fact="Jerry has English teacher Sarah",
-        group_id="user:dummy",
-        episodes=["ep-uuid-1"],
-        valid_at=datetime.now(UTC),
-        invalid_at=None,
-    )
-    node = SimpleNamespace(
-        uuid="n1",
-        name="Sarah",
-        summary="Sarah is Jerry's English teacher.",
-        group_id="user:dummy",
-    )
-    mock_graphiti.search_.return_value = SimpleNamespace(
-        edges=[edge], nodes=[node], episodes=[], communities=[]
-    )
+
+    # Capture the group_ids the service hands to Graphiti so we can echo one
+    # back in the fake response — this is what makes the encoded->raw mapping
+    # in core.memory.search testable end-to-end.
+    captured: dict[str, list[str]] = {}
+
+    async def fake_search_(query, config, group_ids=None, **kw):  # type: ignore[no-untyped-def]
+        captured["group_ids"] = list(group_ids or [])
+        encoded = group_ids[0]
+        return SimpleNamespace(
+            edges=[
+                SimpleNamespace(
+                    uuid="f1",
+                    fact="Jerry has English teacher Sarah",
+                    group_id=encoded,
+                    episodes=["ep-uuid-1"],
+                    valid_at=datetime.now(UTC),
+                    invalid_at=None,
+                )
+            ],
+            nodes=[
+                SimpleNamespace(
+                    uuid="n1",
+                    name="Sarah",
+                    summary="Sarah is Jerry's English teacher.",
+                    group_id=encoded,
+                )
+            ],
+            episodes=[],
+            communities=[],
+        )
+
+    mock_graphiti.search_.side_effect = fake_search_
+
     r = await client.get(
         "/v1/search?query=who is the teacher",
         headers={"Authorization": f"Bearer {token}"},
@@ -193,6 +210,13 @@ async def test_search_calls_graphiti(client, mock_graphiti) -> None:  # type: ig
     assert edge_hit["fact"] == "Jerry has English teacher Sarah"
     entity_hit = next(h for h in facts if h["kind"] == "entity")
     assert entity_hit["fact"] == "Sarah is Jerry's English teacher."
+    # Both hits should surface the raw API-form namespace, not the encoded
+    # Graphiti group_id we received from search_().
+    assert edge_hit["namespace"].startswith("user:")
+    assert "__" not in edge_hit["namespace"]
+    assert entity_hit["namespace"] == edge_hit["namespace"]
+    # And we did send the encoded form to Graphiti.
+    assert any("__" in g for g in captured["group_ids"])
     assert mock_graphiti.search_.await_count == 1
 
 

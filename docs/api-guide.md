@@ -162,9 +162,19 @@ Response shape:
   "facts": [
     {
       "fact": "Jerry has English teacher Sarah",
+      "kind": "fact",
       "namespace": "user:2a4068c5-…",
       "source_episode_ids": ["abc…"],
       "valid_at":   "2026-05-12T00:00:00Z",
+      "invalid_at": null,
+      "score": null
+    },
+    {
+      "fact": "Sarah is Jerry's English teacher and lives in Toronto.",
+      "kind": "entity",
+      "namespace": "user:2a4068c5-…",
+      "source_episode_ids": [],
+      "valid_at": null,
       "invalid_at": null,
       "score": null
     }
@@ -173,6 +183,16 @@ Response shape:
   "namespaces_searched": []
 }
 ```
+
+`kind` distinguishes the two flavors of hit:
+
+- `"fact"` — a relationship edge between entities ("A has-teacher B"). Has
+  `valid_at` / `invalid_at` and `source_episode_ids`.
+- `"entity"` — an entity-node summary surfaced as text. `valid_at` /
+  `invalid_at` are always null; `source_episode_ids` is empty. These
+  exist because Graphiti sometimes captures information in the entity's
+  summary without producing an edge for it (common on short or terse
+  utterances), and we don't want that to be invisible at recall time.
 
 `invalid_at != null` means Graphiti has decided this fact has been
 superseded (e.g. you later wrote "Jerry's teacher is Mike now"). The
