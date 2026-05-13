@@ -9,6 +9,15 @@
       <tr><td colspan="3"><em>Loading…</em></td></tr>
     </tbody>
   </table>
+
+  <h3>Active providers</h3>
+  <table id="providers-table">
+    <thead><tr><th>Slot</th><th>Provider</th><th>Status</th><th>Model</th></tr></thead>
+    <tbody>
+      <tr><td colspan="4"><em>Loading…</em></td></tr>
+    </tbody>
+  </table>
+
   <p><button id="refresh">Refresh</button></p>
 </section>
 
@@ -24,22 +33,45 @@
 <script>
   async function refreshHealth() {
     const tbody = document.querySelector("#health-table tbody");
+    const ptbody = document.querySelector("#providers-table tbody");
     tbody.innerHTML = "<tr><td colspan='3'><em>Loading…</em></td></tr>";
+    ptbody.innerHTML = "<tr><td colspan='4'><em>Loading…</em></td></tr>";
     try {
       const res = await fetch("/v1/health");
       const data = await res.json();
-      const rows = Object.entries(data.checks).map(([name, info]) =>
-        `<tr>
+
+      const componentRow = (name, info) => `
+        <tr>
           <td>${name}</td>
           <td class="${info.ok ? 'ok' : 'bad'}">${info.ok ? "OK" : "DOWN"}</td>
           <td>${info.detail ?? ""}</td>
-        </tr>`).join("");
-      tbody.innerHTML = rows +
-        `<tr><td><strong>overall</strong></td>
-             <td class="${data.status === 'ok' ? 'ok' : 'bad'}">${data.status}</td>
-             <td>env=${data.env} · v${data.version}</td></tr>`;
+        </tr>`;
+
+      let rows = "";
+      for (const [name, info] of Object.entries(data.checks)) {
+        if (name === "graphiti") {
+          rows += componentRow(name, { ok: info.ok, detail: info.detail });
+        } else {
+          rows += componentRow(name, info);
+        }
+      }
+      rows += `<tr><td><strong>overall</strong></td>
+                   <td class="${data.status === 'ok' ? 'ok' : 'bad'}">${data.status}</td>
+                   <td>env=${data.env} · v${data.version}</td></tr>`;
+      tbody.innerHTML = rows;
+
+      const g = data.checks.graphiti;
+      const providerRow = (slot, info) => `
+        <tr>
+          <td>${slot}</td>
+          <td>${info.provider}</td>
+          <td class="${info.ok ? 'ok' : 'bad'}">${info.ok ? "OK" : "DOWN"}</td>
+          <td>${info.detail ?? ""}</td>
+        </tr>`;
+      ptbody.innerHTML = providerRow("LLM (extraction)", g.llm) + providerRow("Embedder (search)", g.embedder);
     } catch (err) {
       tbody.innerHTML = `<tr><td colspan='3' class='bad'>Failed to reach /v1/health: ${err}</td></tr>`;
+      ptbody.innerHTML = `<tr><td colspan='4' class='bad'>—</td></tr>`;
     }
   }
   document.getElementById("refresh").addEventListener("click", refreshHealth);

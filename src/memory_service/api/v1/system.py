@@ -13,19 +13,20 @@ router = APIRouter(tags=["system"])
 
 @router.get("/health")
 async def health() -> dict[str, object]:
-    """Aggregate health probe. Always returns 200; check the body for status.
+    """Aggregate health probe. Always returns 200; inspect the body for status.
 
-    A 200 with `status: degraded` is intentional — we want monitoring to see
-    *which* dependency is down rather than just a generic 503.
+    Monitoring should check `status` and the per-component `checks` rather
+    than relying on the HTTP code — a degraded LLM provider shouldn't make
+    the rest of the service look down.
     """
     settings = get_settings()
     db = get_database()
 
     db_ok = await db.ping()
     falkor = await ping_falkordb(settings)
-    gstatus = graphiti_status(settings)
+    g = graphiti_status(settings)
 
-    overall_ok = db_ok and falkor.ok and gstatus.initialized
+    overall_ok = db_ok and falkor.ok and g.initialized
     return {
         "status": "ok" if overall_ok else "degraded",
         "version": "0.1.0",
@@ -33,6 +34,19 @@ async def health() -> dict[str, object]:
         "checks": {
             "postgres": {"ok": db_ok},
             "falkordb": {"ok": falkor.ok, "detail": falkor.detail},
-            "graphiti": {"ok": gstatus.initialized, "detail": gstatus.detail},
+            "graphiti": {
+                "ok": g.initialized,
+                "detail": g.detail,
+                "llm": {
+                    "provider": g.llm.name,
+                    "ok": g.llm.ok,
+                    "detail": g.llm.detail,
+                },
+                "embedder": {
+                    "provider": g.embedder.name,
+                    "ok": g.embedder.ok,
+                    "detail": g.embedder.detail,
+                },
+            },
         },
     }
