@@ -909,6 +909,84 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
     }
 
 
+async def reindex_embeddings(
+    user: User,
+    raw_namespace: str | None,
+    db: AsyncSession,
+    *,
+    include_communities: bool = False,
+) -> dict[str, Any]:
+    """Re-embed every Entity (and optionally Community) node in a namespace.
+
+    Run this after swapping EMBEDDING_PROVIDER / EMBEDDING_MODEL —
+    pre-existing embeddings were produced by the old model and don't
+    sit in the same vector space as new ones, so semantic search degrades
+    until they're regenerated.
+
+    Sync within the request (no background queue): a few seconds for a
+    handful of nodes, possibly minutes for big namespaces. Caller is
+    expected to wait or use a connection timeout that allows for it.
+    """
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_write(user, ns, db):
+        raise PermissionDeniedError(_write_denied_hint(user, ns))
+
+    client = _require_client()
+    driver = _driver_for_namespace(client, ns)
+    if driver is None:
+        return {
+            "namespace": ns.raw,
+            "entities_reindexed": 0,
+            "communities_reindexed": 0,
+            "failed": 0,
+        }
+    embedder = getattr(client, "embedder", None) or getattr(
+        getattr(client, "clients", None), "embedder", None
+    )
+    if embedder is None:
+        raise BackendUnavailableError("embedder is not configured")
+
+    from graphiti_core.nodes import CommunityNode, EntityNode
+
+    entity_nodes = await EntityNode.get_by_group_ids(
+        driver, [ns.as_graphiti_group_id()]
+    )
+    ok = 0
+    failed = 0
+    for node in entity_nodes:
+        try:
+            await node.generate_name_embedding(embedder)
+            await node.save(driver)
+            ok += 1
+        except Exception:
+            _logger.exception("reindex failed for entity %s", node.uuid)
+            failed += 1
+
+    comm_ok = 0
+    if include_communities:
+        comm_nodes = await CommunityNode.get_by_group_ids(
+            driver, [ns.as_graphiti_group_id()]
+        )
+        for node in comm_nodes:
+            try:
+                await node.generate_name_embedding(embedder)
+                await node.save(driver)
+                comm_ok += 1
+            except Exception:
+                _logger.exception("reindex failed for community %s", node.uuid)
+                failed += 1
+
+    return {
+        "namespace": ns.raw,
+        "entities_reindexed": ok,
+        "communities_reindexed": comm_ok,
+        "failed": failed,
+    }
+
+
 async def build_communities(
     user: User, raw_namespace: str | None, db: AsyncSession
 ) -> dict[str, Any]:

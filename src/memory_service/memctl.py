@@ -662,6 +662,16 @@ def cmd_admin_build_communities(args: argparse.Namespace) -> None:
     emit(args, data)
 
 
+def cmd_admin_reindex(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {}
+    if args.namespace:
+        params["namespace"] = args.namespace
+    if args.include_communities:
+        params["include_communities"] = "true"
+    data = _request(args, "POST", "/v1/admin/embeddings/reindex", params=params)
+    emit(args, data)
+
+
 def cmd_entity_show(args: argparse.Namespace) -> None:
     data = _request(args, "GET", f"/v1/entities/{args.uuid}")
     emit(args, data)
@@ -1031,6 +1041,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("-n", "--namespace", help="Target namespace (default user:me)")
     sp.set_defaults(func=cmd_admin_build_communities)
+
+    embeddings = admin.add_parser(
+        "embeddings", help="Embedding maintenance"
+    ).add_subparsers(dest="emb_cmd", required=True)
+    sp = embeddings.add_parser(
+        "reindex",
+        help="Re-embed every Entity (and optionally Community) node in a namespace",
+    )
+    sp.add_argument("-n", "--namespace", help="Target namespace (default user:me)")
+    sp.add_argument(
+        "--include-communities",
+        action="store_true",
+        dest="include_communities",
+        help="Also re-embed Community nodes",
+    )
+    sp.set_defaults(func=cmd_admin_reindex)
 
     # entity / fact lookup by uuid
     sp = sub.add_parser("entity", help="Show one entity by UUID")
