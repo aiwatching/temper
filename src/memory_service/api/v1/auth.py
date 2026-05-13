@@ -11,6 +11,7 @@ from memory_service.core.auth import (
     issue_session_token,
     verify_password,
 )
+from memory_service.core.bootstrap import is_bootstrap_super_admin
 from memory_service.models import User
 from memory_service.schemas.auth import (
     LoginRequest,
@@ -23,17 +24,22 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/register", status_code=status.HTTP_201_CREATED, response_model=UserResponse)
-async def register(payload: RegisterRequest, db: DBDep) -> User:
+async def register(
+    payload: RegisterRequest, db: DBDep, settings: SettingsDep
+) -> User:
     """Create a new user account. Returns the created user (no token).
 
-    The first registered user with `BOOTSTRAP_SUPER_ADMIN_EMAIL` matching their
-    address is auto-promoted to super admin — convenience for fresh installs.
+    The first registered user whose address matches BOOTSTRAP_SUPER_ADMIN_EMAIL
+    is auto-promoted to super admin — convenience for fresh installs.
     """
+    email = str(payload.email).lower()
     user = User(
-        email=str(payload.email).lower(),
+        email=email,
         password_hash=hash_password(payload.password),
         display_name=payload.display_name,
     )
+    if is_bootstrap_super_admin(email, settings):
+        user.is_super_admin = True
     db.add(user)
     try:
         await db.commit()

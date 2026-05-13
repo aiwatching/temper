@@ -38,12 +38,24 @@ async def _ensure_schema_for_test() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
+async def _run_bootstrap() -> None:
+    """Promote BOOTSTRAP_SUPER_ADMIN_EMAIL on startup if that user exists."""
+    from memory_service.core.bootstrap import promote_bootstrap_super_admin
+
+    settings = get_settings()
+    db = get_database()
+    async for session in db.session():
+        await promote_bootstrap_super_admin(settings, session)
+        break
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     settings = get_settings()
     logging.basicConfig(level=settings.log_level)
     init_database(settings)
     await _ensure_schema_for_test()
+    await _run_bootstrap()
     _logger.info("memory-service starting (env=%s)", settings.app_env)
     try:
         yield
