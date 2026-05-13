@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="communitiesPage()" x-init="load()">
+  <h2>Communities</h2>
+  <p style="color:var(--muted)">
+    Community nodes are LLM-generated topic clusters over the entities in
+    a namespace. Build them after you've written some data — the cluster
+    algorithm needs enough connectivity to be useful.
+  </p>
+
+  <form @submit.prevent="load()" class="filter-grid" style="margin-bottom:12px">
+    <div>
+      <label>namespace</label>
+      <input type="text" x-model="ns" placeholder="user:me (default)">
+    </div>
+    <div style="align-self:end">
+      <button type="submit">Refresh</button>
+      <button type="button" @click="build()" :disabled="building" x-text="building ? 'Building…' : 'Build communities'"></button>
+    </div>
+  </form>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="msg"><div class="msg ok" x-text="msg"></div></template>
+
+  <table>
+    <thead><tr><th>name</th><th>summary</th></tr></thead>
+    <tbody>
+      <template x-if="!loading && communities.length === 0">
+        <tr><td colspan="2"><em>No communities yet. Click <strong>Build communities</strong>.</em></td></tr>
+      </template>
+      <template x-for="c in communities" :key="c.uuid">
+        <tr>
+          <td style="max-width:300px"><strong x-text="c.name"></strong></td>
+          <td x-text="c.summary"></td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+</section>
+
+<script>
+  function communitiesPage() {
+    return {
+      ns: "",
+      communities: [],
+      loading: true,
+      error: null,
+      msg: null,
+      building: false,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        try {
+          // Use server-side cypher to read Community nodes — no first-class API for listing.
+          const data = await window.ms.json(`/v1/graph/cypher`, {
+            method: "POST",
+            body: JSON.stringify({
+              namespace: this.ns || null,
+              query: "MATCH (c:Community) RETURN c.uuid AS uuid, c.name AS name, c.summary AS summary ORDER BY c.created_at DESC",
+              timeout_ms: 10000,
+            }),
+          });
+          this.communities = data.rows || [];
+        } catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      async build() {
+        this.building = true; this.error = null; this.msg = null;
+        const params = this.ns ? `?namespace=${encodeURIComponent(this.ns)}` : "";
+        try {
+          const out = await window.ms.json(`/v1/admin/communities/build${params}`, { method: "POST" });
+          this.msg = `Created ${out.communities_created} communities, ${out.community_edges_created} edges in ${out.namespace}.`;
+          await this.load();
+        } catch (e) { this.error = e.message; }
+        finally { this.building = false; }
+      },
+    };
+  }
+</script>
+{% endblock %}

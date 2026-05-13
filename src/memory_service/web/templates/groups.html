@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="groupsPage()" x-init="load()">
+  <h2>Groups</h2>
+  <p style="color:var(--muted)">
+    Groups are scoped to an org. Any org member can create one — the creator
+    auto-becomes group admin. Group members can read + write the
+    <code>group:&lt;slug&gt;</code> namespace.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <table>
+    <thead><tr><th>slug</th><th>name</th><th>org</th><th>members</th><th></th></tr></thead>
+    <tbody>
+      <template x-if="!loading && groups.length === 0">
+        <tr><td colspan="5"><em>No groups visible.</em></td></tr>
+      </template>
+      <template x-for="g in groups" :key="g.id">
+        <tr>
+          <td><code x-text="g.slug"></code></td>
+          <td x-text="g.name"></td>
+          <td><code x-text="g.org_slug"></code></td>
+          <td x-text="g.member_count"></td>
+          <td>
+            <button @click="selectedSlug = g.slug; loadMembers()">Members</button>
+            <button class="danger" @click="remove(g.slug)">Delete</button>
+          </td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+
+  <h3 style="margin-top:24px">Create group <small style="color:var(--muted)">(any org member; created in your own org)</small></h3>
+  <form @submit.prevent="create()" class="filter-grid">
+    <div><label>slug</label><input type="text" x-model="newSlug" placeholder="engineers" required></div>
+    <div><label>name</label><input type="text" x-model="newName" placeholder="Engineering" required></div>
+    <div><label>org slug (super_admin only — leave blank for your org)</label><input type="text" x-model="newOrg" placeholder=""></div>
+    <div style="align-self:end"><button type="submit">Create</button></div>
+  </form>
+
+  <template x-if="selectedSlug">
+    <div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--border)">
+      <h3>Members of <code x-text="selectedSlug"></code></h3>
+      <table>
+        <thead><tr><th>email</th><th>display name</th><th>role</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="m in members" :key="m.user_id">
+            <tr>
+              <td x-text="m.email"></td>
+              <td x-text="m.display_name || '—'"></td>
+              <td>
+                <span x-text="m.role"></span>
+                <button class="secondary" style="margin-left:6px"
+                  @click="updateRole(m, m.role === 'admin' ? 'member' : 'admin')">
+                  <span x-text="m.role === 'admin' ? 'demote' : 'promote'"></span>
+                </button>
+              </td>
+              <td><button class="danger" @click="removeMember(m.user_id)">Remove</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <h4>Add member</h4>
+      <form @submit.prevent="addMember()" class="filter-grid">
+        <div><label>user_id (UUID)</label><input type="text" x-model="addUid" required></div>
+        <div style="align-self:end"><label><input type="checkbox" x-model="addAdmin"> as admin</label></div>
+        <div style="align-self:end"><button type="submit">Add</button></div>
+      </form>
+    </div>
+  </template>
+</section>
+
+<script>
+  function groupsPage() {
+    return {
+      groups: [], loading: true, error: null,
+      newSlug: "", newName: "", newOrg: "",
+      selectedSlug: "", members: [],
+      addUid: "", addAdmin: false,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        try { this.groups = await window.ms.json("/v1/groups"); }
+        catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      async create() {
+        const body = { slug: this.newSlug, name: this.newName };
+        if (this.newOrg) body.org_slug = this.newOrg;
+        try { await window.ms.json("/v1/groups", { method: "POST", body: JSON.stringify(body) });
+              this.newSlug = ""; this.newName = ""; this.newOrg = ""; this.load(); }
+        catch (e) { this.error = e.message; }
+      },
+      async remove(slug) {
+        if (!confirm(`Delete group '${slug}'?`)) return;
+        try { await window.ms.fetch(`/v1/groups/${slug}`, { method: "DELETE" }); this.load(); }
+        catch (e) { this.error = e.message; }
+      },
+      async loadMembers() {
+        try { this.members = await window.ms.json(`/v1/groups/${this.selectedSlug}/members`); }
+        catch (e) { this.error = e.message; }
+      },
+      async addMember() {
+        try {
+          await window.ms.json(`/v1/groups/${this.selectedSlug}/members`, {
+            method: "POST", body: JSON.stringify({ user_id: this.addUid, role: this.addAdmin ? "admin" : "member" }),
+          });
+          this.addUid = ""; this.addAdmin = false; this.loadMembers(); this.load();
+        } catch (e) { this.error = e.message; }
+      },
+      async updateRole(m, role) {
+        try {
+          await window.ms.json(`/v1/groups/${this.selectedSlug}/members/${m.user_id}`, {
+            method: "PATCH", body: JSON.stringify({ role }),
+          });
+          this.loadMembers();
+        } catch (e) { this.error = e.message; }
+      },
+      async removeMember(uid) {
+        if (!confirm("Remove this user?")) return;
+        try { await window.ms.fetch(`/v1/groups/${this.selectedSlug}/members/${uid}`, { method: "DELETE" }); this.loadMembers(); this.load(); }
+        catch (e) { this.error = e.message; }
+      },
+    };
+  }
+</script>
+{% endblock %}

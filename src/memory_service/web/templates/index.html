@@ -1,80 +1,109 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h2>Service status</h2>
-  <p>Live snapshot of the dependencies the service needs.</p>
-  <table id="health-table">
+
+<section class="card" x-data="dashboard()" x-init="load()">
+  <h2>Dashboard</h2>
+  <p style="color:var(--muted)">
+    Snapshot of what's in this Memory Service right now. Health, what's stored,
+    and which providers are wired in.
+  </p>
+
+  <!-- Stat tiles -->
+  <div class="dash-grid" style="margin-bottom:16px">
+    <div class="stat"><div class="k">episodes</div><div class="v" x-text="stats.episodes_total ?? '…'"></div></div>
+    <div class="stat" :style="stats.episodes_pending > 0 ? 'border-color:#f1e05a' : ''">
+      <div class="k">pending extraction</div>
+      <div class="v" x-text="stats.episodes_pending ?? '…'"></div>
+    </div>
+    <div class="stat" :style="stats.episodes_failed > 0 ? 'border-color:#ffcbd1' : ''">
+      <div class="k">failed extraction</div>
+      <div class="v" x-text="stats.episodes_failed ?? '…'"></div>
+    </div>
+    <div class="stat"><div class="k">entity schemas</div><div class="v" x-text="stats.schemas_count ?? '…'"></div></div>
+    <template x-if="stats.users_count !== null && stats.users_count !== undefined">
+      <div class="stat"><div class="k">users (admin)</div><div class="v" x-text="stats.users_count"></div></div>
+    </template>
+    <template x-if="stats.orgs_count !== null && stats.orgs_count !== undefined">
+      <div class="stat"><div class="k">orgs (admin)</div><div class="v" x-text="stats.orgs_count"></div></div>
+    </template>
+    <template x-if="stats.groups_count !== null && stats.groups_count !== undefined">
+      <div class="stat"><div class="k">groups (admin)</div><div class="v" x-text="stats.groups_count"></div></div>
+    </template>
+  </div>
+
+  <!-- Health table -->
+  <h3>Service health</h3>
+  <table>
     <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
     <tbody>
-      <tr><td colspan="3"><em>Loading…</em></td></tr>
+      <template x-for="row in healthRows" :key="row.name">
+        <tr>
+          <td x-text="row.name"></td>
+          <td><span class="badge" :class="row.ok ? 'done' : 'failed'" x-text="row.ok ? 'ok' : 'down'"></span></td>
+          <td style="color:var(--muted)" x-text="row.detail"></td>
+        </tr>
+      </template>
     </tbody>
   </table>
 
-  <h3>Active providers</h3>
-  <table id="providers-table">
-    <thead><tr><th>Slot</th><th>Provider</th><th>Status</th><th>Model</th></tr></thead>
+  <h3>Providers</h3>
+  <table>
+    <thead><tr><th>Slot</th><th>Provider</th><th>Model</th></tr></thead>
     <tbody>
-      <tr><td colspan="4"><em>Loading…</em></td></tr>
+      <tr><td>LLM (extraction)</td><td x-text="providers.llm?.provider || ''"></td><td x-text="providers.llm?.detail || ''"></td></tr>
+      <tr><td>Embedder (search)</td><td x-text="providers.embedder?.provider || ''"></td><td x-text="providers.embedder?.detail || ''"></td></tr>
     </tbody>
   </table>
 
-  <p><button id="refresh">Refresh</button></p>
-</section>
+  <h3>Readable namespaces</h3>
+  <p>
+    <template x-for="ns in stats.readable_namespaces || []" :key="ns">
+      <code style="margin-right:6px; background:#f6f8fa; padding:1px 6px; border-radius:3px" x-text="ns"></code>
+    </template>
+  </p>
 
-<section class="card">
-  <h2>Coming soon</h2>
-  <ul>
-    <li><strong>Users</strong> — list, search, create, manage API keys (Phase 1.2)</li>
-    <li><strong>Episodes</strong> — browse stored memories per namespace (Phase 1.5–1.6)</li>
-    <li><strong>Permissions</strong> — view who can read/write each namespace (Phase 1.4)</li>
-  </ul>
+  <p><button @click="load()">Refresh</button></p>
 </section>
 
 <script>
-  async function refreshHealth() {
-    const tbody = document.querySelector("#health-table tbody");
-    const ptbody = document.querySelector("#providers-table tbody");
-    tbody.innerHTML = "<tr><td colspan='3'><em>Loading…</em></td></tr>";
-    ptbody.innerHTML = "<tr><td colspan='4'><em>Loading…</em></td></tr>";
-    try {
-      const res = await fetch("/v1/health");
-      const data = await res.json();
-
-      const componentRow = (name, info) => `
-        <tr>
-          <td>${name}</td>
-          <td class="${info.ok ? 'ok' : 'bad'}">${info.ok ? "OK" : "DOWN"}</td>
-          <td>${info.detail ?? ""}</td>
-        </tr>`;
-
-      let rows = "";
-      for (const [name, info] of Object.entries(data.checks)) {
-        if (name === "graphiti") {
-          rows += componentRow(name, { ok: info.ok, detail: info.detail });
-        } else {
-          rows += componentRow(name, info);
+  function dashboard() {
+    return {
+      stats: {},
+      healthRows: [],
+      providers: {},
+      async load() {
+        if (!window.ms.token()) {
+          // Show service health for anonymous visitors but no stats.
+          try {
+            const h = await fetch("/v1/health").then(r => r.json());
+            this.applyHealth(h);
+          } catch (e) { /* noop */ }
+          return;
         }
-      }
-      rows += `<tr><td><strong>overall</strong></td>
-                   <td class="${data.status === 'ok' ? 'ok' : 'bad'}">${data.status}</td>
-                   <td>env=${data.env} · v${data.version}</td></tr>`;
-      tbody.innerHTML = rows;
-
-      const g = data.checks.graphiti;
-      const providerRow = (slot, info) => `
-        <tr>
-          <td>${slot}</td>
-          <td>${info.provider}</td>
-          <td class="${info.ok ? 'ok' : 'bad'}">${info.ok ? "OK" : "DOWN"}</td>
-          <td>${info.detail ?? ""}</td>
-        </tr>`;
-      ptbody.innerHTML = providerRow("LLM (extraction)", g.llm) + providerRow("Embedder (search)", g.embedder);
-    } catch (err) {
-      tbody.innerHTML = `<tr><td colspan='3' class='bad'>Failed to reach /v1/health: ${err}</td></tr>`;
-      ptbody.innerHTML = `<tr><td colspan='4' class='bad'>—</td></tr>`;
-    }
+        try {
+          const [statsBody, health] = await Promise.all([
+            window.ms.json("/v1/stats"),
+            fetch("/v1/health").then(r => r.json()),
+          ]);
+          this.stats = statsBody;
+          this.applyHealth(health);
+        } catch (err) {
+          this.healthRows = [{ name: "stats", ok: false, detail: err.message || String(err) }];
+        }
+      },
+      applyHealth(data) {
+        this.healthRows = [
+          { name: "postgres", ok: data.checks.postgres.ok, detail: "" },
+          { name: "falkordb", ok: data.checks.falkordb.ok, detail: data.checks.falkordb.detail || "" },
+          { name: "graphiti", ok: data.checks.graphiti.ok, detail: data.checks.graphiti.detail || "" },
+          { name: "overall", ok: data.status === "ok", detail: `env=${data.env} · v${data.version}` },
+        ];
+        this.providers = {
+          llm: data.checks.graphiti.llm,
+          embedder: data.checks.graphiti.embedder,
+        };
+      },
+    };
   }
-  document.getElementById("refresh").addEventListener("click", refreshHealth);
-  refreshHealth();
 </script>
 {% endblock %}

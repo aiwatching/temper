@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="sagasPage()" x-init="load()">
+  <h2>Sagas</h2>
+  <p style="color:var(--muted)">
+    A saga groups a set of episodes into one logical conversation/event.
+    Episodes get chained via NEXT_EPISODE edges — useful for chat transcripts,
+    debug sessions, meeting notes. Create one by adding <code>saga: &lt;name&gt;</code>
+    when you write an episode.
+  </p>
+
+  <form @submit.prevent="load()" class="filter-grid" style="margin-bottom:12px">
+    <div>
+      <label>namespace</label>
+      <input type="text" x-model="ns" placeholder="user:me (default)">
+    </div>
+    <div style="align-self:end">
+      <button type="submit">Refresh</button>
+    </div>
+  </form>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <table>
+    <thead><tr><th>name</th><th>episodes</th><th>summary</th><th>created</th><th></th></tr></thead>
+    <tbody>
+      <template x-if="!loading && sagas.length === 0">
+        <tr><td colspan="5"><em>No sagas in this namespace yet.</em></td></tr>
+      </template>
+      <template x-for="s in sagas" :key="s.uuid">
+        <tr>
+          <td><strong x-text="s.name"></strong> <code style="font-size:11px" x-text="window.ms.fmtId(s.uuid)"></code></td>
+          <td x-text="s.episode_count"></td>
+          <td style="color:var(--muted); max-width:400px" x-text="s.summary || '—'"></td>
+          <td x-text="window.ms.fmtDate(s.created_at)"></td>
+          <td><button @click="open(s.name)">View</button></td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+</section>
+
+<section class="card" x-data="sagaDetail()" x-show="name" x-cloak>
+  <h3>Saga: <code x-text="name"></code></h3>
+  <p>
+    <span x-text="episodes.length"></span> episode(s) in this saga.
+    First → <code x-text="window.ms.fmtId(saga.first_episode_uuid) || '—'"></code> ·
+    Last → <code x-text="window.ms.fmtId(saga.last_episode_uuid) || '—'"></code>
+  </p>
+  <table>
+    <thead><tr><th>when</th><th>content</th><th>id</th></tr></thead>
+    <tbody>
+      <template x-for="e in episodes" :key="e.uuid">
+        <tr>
+          <td x-text="window.ms.fmtDate(e.created_at)"></td>
+          <td x-text="e.content || '—'"></td>
+          <td><code x-text="window.ms.fmtId(e.uuid)"></code></td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+</section>
+
+<script>
+  function sagasPage() {
+    return {
+      ns: "",
+      sagas: [],
+      loading: true,
+      error: null,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        const params = this.ns ? `?namespace=${encodeURIComponent(this.ns)}` : "";
+        try {
+          const data = await window.ms.json(`/v1/sagas${params}`);
+          this.sagas = data.sagas || [];
+        } catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      open(name) {
+        // Tell the detail component to fetch.
+        window.dispatchEvent(new CustomEvent("ms:open-saga", { detail: { name, ns: this.ns } }));
+        window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+      },
+    };
+  }
+  function sagaDetail() {
+    return {
+      name: "",
+      saga: {},
+      episodes: [],
+      init() {
+        window.addEventListener("ms:open-saga", async (ev) => {
+          this.name = ev.detail.name;
+          const params = ev.detail.ns ? `?namespace=${encodeURIComponent(ev.detail.ns)}` : "";
+          const data = await window.ms.json(`/v1/sagas/${encodeURIComponent(this.name)}${params}`);
+          this.saga = data.saga;
+          this.episodes = data.episodes || [];
+        });
+      },
+    };
+  }
+</script>
+{% endblock %}

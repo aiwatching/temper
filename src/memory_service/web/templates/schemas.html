@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="schemasPage()" x-init="load()">
+  <h2>Entity schemas</h2>
+  <p style="color:var(--muted)">
+    Register typed schemas to constrain LLM entity extraction in a
+    namespace. After saving a schema, episodes you write that mention a
+    matching entity (e.g. an email for <code>Customer</code>) get that
+    typed label in the graph — searchable via <code>?node_labels=</code>.
+  </p>
+
+  <form @submit.prevent="load()" class="filter-grid" style="margin-bottom:8px">
+    <div>
+      <label>namespace</label>
+      <input type="text" x-model="ns" placeholder="user:me (default)">
+    </div>
+    <div style="align-self:end">
+      <button type="submit">Refresh</button>
+    </div>
+  </form>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <table>
+    <thead><tr><th>name</th><th>fields</th><th>description</th><th>created</th><th></th></tr></thead>
+    <tbody>
+      <template x-if="!loading && schemas.length === 0">
+        <tr><td colspan="5"><em>No schemas registered. Add one below.</em></td></tr>
+      </template>
+      <template x-for="s in schemas" :key="s.id">
+        <tr>
+          <td><strong x-text="s.name"></strong></td>
+          <td>
+            <template x-for="f in s.fields" :key="f.name">
+              <code style="margin-right:6px" x-text="`${f.name}:${f.type}${f.required?'!':''}`"></code>
+            </template>
+          </td>
+          <td style="color:var(--muted)" x-text="s.description || '—'"></td>
+          <td x-text="window.ms.fmtDate(s.created_at)"></td>
+          <td><button class="danger" @click="remove(s.name)">Delete</button></td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+</section>
+
+<section class="card" x-data="newSchema()">
+  <h3>Register or update a schema</h3>
+  <p style="color:var(--muted)">
+    Field types: <code>string</code> · <code>integer</code> · <code>number</code> ·
+    <code>boolean</code> · <code>datetime</code>. Required fields use the LLM more strictly.
+  </p>
+  <form @submit.prevent="save()" class="stacked" style="max-width:none">
+    <div class="filter-grid">
+      <div>
+        <label>schema name (will be the entity label)</label>
+        <input type="text" x-model="name" required placeholder="Customer">
+      </div>
+      <div>
+        <label>namespace</label>
+        <input type="text" x-model="namespace" placeholder="user:me">
+      </div>
+      <div style="grid-column: 1 / -1">
+        <label>description</label>
+        <input type="text" x-model="description" placeholder="A customer record">
+      </div>
+    </div>
+
+    <h4 style="margin:12px 0 4px">Fields</h4>
+    <table>
+      <thead><tr><th>name</th><th>type</th><th>required</th><th>description</th><th></th></tr></thead>
+      <tbody>
+        <template x-for="(f, i) in fields" :key="i">
+          <tr>
+            <td><input type="text" x-model="f.name" placeholder="email" required></td>
+            <td>
+              <select x-model="f.type">
+                <option value="string">string</option>
+                <option value="integer">integer</option>
+                <option value="number">number</option>
+                <option value="boolean">boolean</option>
+                <option value="datetime">datetime</option>
+              </select>
+            </td>
+            <td><input type="checkbox" x-model="f.required"></td>
+            <td><input type="text" x-model="f.description" placeholder="(optional)"></td>
+            <td><button type="button" class="danger" @click="fields.splice(i,1)">×</button></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <p>
+      <button type="button" class="secondary" @click="fields.push({name:'',type:'string',required:false,description:''})">+ field</button>
+      <button type="submit">Save schema</button>
+    </p>
+    <template x-if="msg"><div :class="`msg ${msgKind}`" x-text="msg"></div></template>
+  </form>
+</section>
+
+<script>
+  function schemasPage() {
+    return {
+      ns: "", schemas: [], loading: true, error: null,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        const params = this.ns ? `?namespace=${encodeURIComponent(this.ns)}` : "";
+        try { this.schemas = await window.ms.json(`/v1/schemas/entity-types${params}`); }
+        catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      async remove(name) {
+        if (!confirm(`Delete schema '${name}'? Future writes won't apply this type.`)) return;
+        const params = this.ns ? `?namespace=${encodeURIComponent(this.ns)}` : "";
+        await window.ms.fetch(`/v1/schemas/entity-types/${encodeURIComponent(name)}${params}`, { method: "DELETE" });
+        this.load();
+      },
+    };
+  }
+  function newSchema() {
+    return {
+      name: "", namespace: "", description: "",
+      fields: [{ name: "", type: "string", required: false, description: "" }],
+      msg: "", msgKind: "ok",
+      async save() {
+        this.msg = "";
+        const cleaned = this.fields.filter(f => f.name.trim());
+        try {
+          const params = this.namespace ? `?namespace=${encodeURIComponent(this.namespace)}` : "";
+          const out = await window.ms.json(`/v1/schemas/entity-types${params}`, {
+            method: "POST",
+            body: JSON.stringify({ name: this.name, description: this.description, fields: cleaned }),
+          });
+          this.msg = `Saved schema '${out.name}'. Reload to see it above.`;
+          this.msgKind = "ok";
+        } catch (e) {
+          this.msg = e.message || String(e);
+          this.msgKind = "bad";
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

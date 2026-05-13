@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="cypherPage()" x-init="prefill()">
+  <h2>Cypher console <small style="color:var(--muted)">(read-only, ACL'd, server-enforced timeout)</small></h2>
+  <p style="color:var(--muted)">
+    Run arbitrary Cypher against one namespace's FalkorDB graph. Permission
+    is the same as <code>/v1/search</code> — namespaces you can't read return
+    403. Writes are rejected by FalkorDB's <code>ro_query</code> path.
+    Useful examples: <code>MATCH (n:Entity) RETURN count(n)</code>,
+    <code>MATCH (a)-[r:RELATES_TO]->(b) WHERE a.name='Sarah' RETURN r.fact</code>.
+  </p>
+
+  <form @submit.prevent="run()" class="stacked" style="max-width:none">
+    <div class="filter-grid">
+      <div>
+        <label>namespace</label>
+        <input type="text" x-model="ns" placeholder="user:me (default)">
+      </div>
+      <div>
+        <label>timeout (ms)</label>
+        <input type="number" x-model.number="timeoutMs" min="100" max="60000">
+      </div>
+    </div>
+    <label>query
+      <textarea x-model="query" rows="6" style="font:13px/1.4 SF Mono, Menlo, monospace; width:100%; padding:8px; border:1px solid var(--border); border-radius:4px"
+        placeholder="MATCH (n) RETURN labels(n)[0] AS label, count(n) AS c ORDER BY c DESC"></textarea>
+    </label>
+    <p>
+      <button type="submit" :disabled="running"><span x-text="running ? 'Running…' : 'Run'"></span></button>
+      <span x-show="elapsed !== null" style="margin-left:12px; color:var(--muted)">
+        <span x-text="elapsed?.toFixed(2)"></span>s · <span x-text="rows.length"></span> rows
+      </span>
+    </p>
+  </form>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <template x-if="rows.length > 0">
+    <table>
+      <thead>
+        <tr><template x-for="c in columns" :key="c"><th x-text="c"></th></template></tr>
+      </thead>
+      <tbody>
+        <template x-for="(r, i) in rows" :key="i">
+          <tr>
+            <template x-for="c in columns" :key="c">
+              <td><pre style="margin:0;white-space:pre-wrap;font:inherit" x-text="format(r[c])"></pre></td>
+            </template>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </template>
+</section>
+
+<script>
+  function cypherPage() {
+    return {
+      ns: "",
+      query: "MATCH (n) RETURN labels(n)[0] AS label, count(n) AS c ORDER BY c DESC",
+      timeoutMs: 10000,
+      rows: [],
+      columns: [],
+      running: false,
+      error: null,
+      elapsed: null,
+      prefill() { window.ms.requireAuth(); },
+      format(v) {
+        if (v === null || v === undefined) return "—";
+        if (typeof v === "object") return JSON.stringify(v, null, 2);
+        return String(v);
+      },
+      async run() {
+        this.error = null; this.rows = []; this.columns = []; this.running = true;
+        const t0 = performance.now();
+        try {
+          const data = await window.ms.json("/v1/graph/cypher", {
+            method: "POST",
+            body: JSON.stringify({
+              query: this.query,
+              namespace: this.ns || null,
+              timeout_ms: this.timeoutMs,
+            }),
+          });
+          this.rows = data.rows || [];
+          this.columns = this.rows.length ? Object.keys(this.rows[0]) : [];
+        } catch (e) { this.error = e.message || String(e); }
+        finally { this.elapsed = (performance.now() - t0) / 1000; this.running = false; }
+      },
+    };
+  }
+</script>
+{% endblock %}

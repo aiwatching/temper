@@ -1,0 +1,149 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="card" x-data="searchPage()" x-init="prefill()">
+  <h2>Search memory</h2>
+  <p style="color:var(--muted)">
+    All 8 search dimensions in one panel. Fact = LLM-derived relation,
+    Entity = node summary, Community = LLM-generated topic cluster.
+  </p>
+
+  <form @submit.prevent="run()" class="stacked" style="max-width:none">
+    <label>Query
+      <input type="text" x-model="q.query" placeholder='e.g. who is my English teacher' required>
+    </label>
+
+    <div class="filter-grid">
+      <div>
+        <label>namespaces (comma-separated, blank = all readable)</label>
+        <input type="text" x-model="q.namespaces" placeholder="user:me, public">
+      </div>
+      <div>
+        <label>limit</label>
+        <input type="number" min="1" max="50" x-model.number="q.limit">
+      </div>
+      <div>
+        <label>reranker</label>
+        <select x-model="q.reranker">
+          <option value="">(default)</option>
+          <option value="rrf">rrf — free</option>
+          <option value="mmr">mmr — diversity</option>
+          <option value="cross_encoder">cross_encoder — LLM, ~10x slower</option>
+        </select>
+      </div>
+      <div>
+        <label>as_of (ISO-8601, time-travel)</label>
+        <input type="text" x-model="q.as_of" placeholder="2026-05-01T00:00:00Z">
+      </div>
+      <div>
+        <label>edge_types (comma-separated)</label>
+        <input type="text" x-model="q.edge_types" placeholder="LIVES_IN, TEACHES">
+      </div>
+      <div>
+        <label>node_labels (comma-separated)</label>
+        <input type="text" x-model="q.node_labels" placeholder="Person, Customer">
+      </div>
+      <div>
+        <label>center node uuid</label>
+        <input type="text" x-model="q.center" placeholder="entity uuid…">
+      </div>
+      <div>
+        <label>bfs origins (comma uuids)</label>
+        <input type="text" x-model="q.bfs_origins" placeholder="uuid1, uuid2">
+      </div>
+      <div>
+        <label>bfs max depth</label>
+        <input type="number" min="1" max="10" x-model.number="q.bfs_max_depth">
+      </div>
+    </div>
+
+    <p>
+      <button type="submit" x-bind:disabled="running">
+        <span x-text="running ? 'Searching…' : 'Search'"></span>
+      </button>
+      <button type="button" class="secondary" @click="reset()">Clear filters</button>
+      <span x-show="elapsed !== null" style="margin-left:12px; color:var(--muted)">
+        <span x-text="elapsed?.toFixed(2)"></span>s · <span x-text="hits.length"></span> hits
+      </span>
+    </p>
+  </form>
+
+  <template x-if="error">
+    <div class="msg bad" x-text="error"></div>
+  </template>
+
+  <template x-if="hits.length">
+    <table>
+      <thead><tr><th>kind</th><th>fact</th><th>namespace</th><th>valid</th><th>invalid</th><th>source episodes</th></tr></thead>
+      <tbody>
+        <template x-for="h in hits" :key="h.fact + h.namespace">
+          <tr>
+            <td><span class="badge" :class="h.kind" x-text="h.kind"></span></td>
+            <td x-text="h.fact"></td>
+            <td><code x-text="h.namespace"></code></td>
+            <td x-text="window.ms.fmtDate(h.valid_at) || '—'"></td>
+            <td x-text="window.ms.fmtDate(h.invalid_at) || '—'"></td>
+            <td>
+              <template x-for="id in h.source_episode_ids || []" :key="id">
+                <code style="margin-right:4px" x-text="window.ms.fmtId(id)"></code>
+              </template>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </template>
+</section>
+
+<script>
+  function searchPage() {
+    return {
+      q: blank(),
+      hits: [],
+      running: false,
+      error: null,
+      elapsed: null,
+      prefill() {
+        window.ms.requireAuth();
+        const params = new URLSearchParams(location.search);
+        for (const k of Object.keys(this.q)) {
+          if (params.has(k)) this.q[k] = params.get(k);
+        }
+      },
+      reset() { this.q = blank(); this.hits = []; this.elapsed = null; this.error = null; },
+      async run() {
+        this.error = null; this.hits = []; this.running = true;
+        const params = new URLSearchParams();
+        params.set("query", this.q.query);
+        if (this.q.namespaces) params.set("namespaces", this.q.namespaces);
+        if (this.q.limit) params.set("limit", this.q.limit);
+        if (this.q.reranker) params.set("reranker", this.q.reranker);
+        if (this.q.as_of) params.set("as_of", this.q.as_of);
+        if (this.q.edge_types) params.set("edge_types", this.q.edge_types);
+        if (this.q.node_labels) params.set("node_labels", this.q.node_labels);
+        if (this.q.center) params.set("center", this.q.center);
+        if (this.q.bfs_origins) params.set("bfs_origins", this.q.bfs_origins);
+        if (this.q.bfs_max_depth) params.set("bfs_max_depth", this.q.bfs_max_depth);
+        const t0 = performance.now();
+        try {
+          const data = await window.ms.json(`/v1/search?${params}`);
+          this.hits = data.facts || [];
+        } catch (err) {
+          this.error = err.message || String(err);
+        } finally {
+          this.elapsed = (performance.now() - t0) / 1000;
+          this.running = false;
+        }
+      },
+    };
+  }
+  function blank() {
+    return {
+      query: "", namespaces: "", limit: 10,
+      reranker: "", as_of: "",
+      edge_types: "", node_labels: "",
+      center: "", bfs_origins: "", bfs_max_depth: 3,
+    };
+  }
+</script>
+{% endblock %}

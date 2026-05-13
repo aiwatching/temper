@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="orgsPage()" x-init="load()">
+  <h2>Organizations</h2>
+  <p style="color:var(--muted)">
+    Orgs are top-level tenants. Only super_admin can create them. Members
+    can read <code>org:&lt;slug&gt;</code> namespaces; <strong>org admins</strong>
+    can write to that namespace.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <table>
+    <thead><tr><th>slug</th><th>name</th><th>members</th><th>created</th><th></th></tr></thead>
+    <tbody>
+      <template x-if="!loading && orgs.length === 0">
+        <tr><td colspan="5"><em>No orgs visible. Super_admin can create one below.</em></td></tr>
+      </template>
+      <template x-for="o in orgs" :key="o.id">
+        <tr>
+          <td><code x-text="o.slug"></code></td>
+          <td x-text="o.name"></td>
+          <td x-text="o.member_count"></td>
+          <td x-text="window.ms.fmtDate(o.created_at)"></td>
+          <td>
+            <button @click="selectedSlug = o.slug; loadMembers()">Members</button>
+            <button class="danger" @click="remove(o.slug)">Delete</button>
+          </td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+
+  <h3 style="margin-top:24px">Create org <small style="color:var(--muted)">(super_admin only)</small></h3>
+  <form @submit.prevent="create()" class="filter-grid">
+    <div><label>slug</label><input type="text" x-model="newSlug" placeholder="acme" required></div>
+    <div><label>name</label><input type="text" x-model="newName" placeholder="Acme Corp" required></div>
+    <div style="align-self:end"><button type="submit">Create</button></div>
+  </form>
+
+  <template x-if="selectedSlug">
+    <div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--border)">
+      <h3>Members of <code x-text="selectedSlug"></code></h3>
+      <table>
+        <thead><tr><th>email</th><th>display name</th><th>role</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="m in members" :key="m.user_id">
+            <tr>
+              <td x-text="m.email"></td>
+              <td x-text="m.display_name || '—'"></td>
+              <td>
+                <span x-text="m.is_org_admin ? 'admin' : 'member'"></span>
+                <button class="secondary" style="margin-left:6px" @click="toggleRole(m)">
+                  <span x-text="m.is_org_admin ? 'demote' : 'promote'"></span>
+                </button>
+              </td>
+              <td><button class="danger" @click="removeMember(m.user_id)">Remove</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <h4>Add member</h4>
+      <form @submit.prevent="addMember()" class="filter-grid">
+        <div><label>user_id (UUID)</label><input type="text" x-model="addUid" required></div>
+        <div style="align-self:end"><label><input type="checkbox" x-model="addAdmin"> as admin</label></div>
+        <div style="align-self:end"><button type="submit">Add</button></div>
+      </form>
+    </div>
+  </template>
+</section>
+
+<script>
+  function orgsPage() {
+    return {
+      orgs: [], loading: true, error: null,
+      newSlug: "", newName: "",
+      selectedSlug: "", members: [],
+      addUid: "", addAdmin: false,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        try { this.orgs = await window.ms.json("/v1/orgs"); }
+        catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      async create() {
+        try {
+          await window.ms.json("/v1/orgs", { method: "POST", body: JSON.stringify({ slug: this.newSlug, name: this.newName }) });
+          this.newSlug = ""; this.newName = "";
+          this.load();
+        } catch (e) { this.error = e.message; }
+      },
+      async remove(slug) {
+        if (!confirm(`Delete org '${slug}'? Cascades to groups + memberships.`)) return;
+        try { await window.ms.fetch(`/v1/orgs/${slug}`, { method: "DELETE" }); this.load(); }
+        catch (e) { this.error = e.message; }
+      },
+      async loadMembers() {
+        try { this.members = await window.ms.json(`/v1/orgs/${this.selectedSlug}/members`); }
+        catch (e) { this.error = e.message; }
+      },
+      async addMember() {
+        try {
+          await window.ms.json(`/v1/orgs/${this.selectedSlug}/members`, {
+            method: "POST", body: JSON.stringify({ user_id: this.addUid, is_org_admin: this.addAdmin }),
+          });
+          this.addUid = ""; this.addAdmin = false;
+          this.loadMembers(); this.load();
+        } catch (e) { this.error = e.message; }
+      },
+      async toggleRole(m) {
+        try {
+          await window.ms.json(`/v1/orgs/${this.selectedSlug}/members/${m.user_id}`, {
+            method: "PATCH", body: JSON.stringify({ is_org_admin: !m.is_org_admin }),
+          });
+          this.loadMembers();
+        } catch (e) { this.error = e.message; }
+      },
+      async removeMember(uid) {
+        if (!confirm("Remove this user from the org?")) return;
+        try { await window.ms.fetch(`/v1/orgs/${this.selectedSlug}/members/${uid}`, { method: "DELETE" }); this.loadMembers(); this.load(); }
+        catch (e) { this.error = e.message; }
+      },
+    };
+  }
+</script>
+{% endblock %}

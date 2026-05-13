@@ -19,6 +19,13 @@
     <label>Tags (comma-separated, optional)
       <input type="text" name="tags" placeholder="english-learning, schedule">
     </label>
+    <label>Saga (optional — chain related episodes)
+      <input type="text" name="saga" placeholder="e.g. tuesday-standup">
+    </label>
+    <label style="flex-direction:row; align-items:center; gap:8px">
+      <input type="checkbox" name="async_extract">
+      Async (return immediately, extract in background)
+    </label>
     <button type="submit">Add episode</button>
   </form>
   <div id="write-msg"></div>
@@ -45,8 +52,10 @@
   <h2>Your episodes</h2>
   <button id="refresh-list">Refresh</button>
   <table id="episodes-table">
-    <thead><tr><th>When</th><th>Namespace</th><th>Agent</th><th>Tags</th><th>ID</th><th></th></tr></thead>
-    <tbody><tr><td colspan="6"><em>Loading…</em></td></tr></tbody>
+    <thead><tr>
+      <th>When</th><th>Namespace</th><th>Agent</th><th>Status</th><th>Tags</th><th>ID</th><th></th>
+    </tr></thead>
+    <tbody><tr><td colspan="7"><em>Loading…</em></td></tr></tbody>
   </table>
 </section>
 
@@ -74,20 +83,30 @@
       source_type: fd.get("source_type"),
       tags: (fd.get("tags") || "").split(",").map(s => s.trim()).filter(Boolean),
     };
+    const saga = (fd.get("saga") || "").trim();
+    if (saga) body.saga = saga;
+    const isAsync = fd.get("async_extract") === "on";
+    const path = isAsync ? "/v1/episodes?async_extract=true" : "/v1/episodes";
     const out = document.getElementById("write-msg");
-    out.innerHTML = `<div class='msg ok'><em>Extracting entities + writing to graph…</em></div>`;
-    const r = await fetch("/v1/episodes", { method:"POST", headers: auth, body: JSON.stringify(body) });
+    out.innerHTML = `<div class='msg ok'><em>${isAsync ? 'Queueing for extraction…' : 'Extracting entities + writing to graph…'}</em></div>`;
+    const r = await fetch(path, { method:"POST", headers: auth, body: JSON.stringify(body) });
     if (!r.ok) {
       const err = await r.json().catch(() => ({}));
       out.innerHTML = `<div class='msg bad'>Failed: ${err.detail || r.status}</div>`;
       return;
     }
     const data = await r.json();
-    out.innerHTML = `<div class='msg ok'>
-      Saved episode <code>${data.episode_id}</code> in <code>${data.namespace}</code>.
-      Extracted <strong>${data.extracted_entities.length}</strong> entities,
-      <strong>${data.extracted_facts.length}</strong> facts.
-    </div>`;
+    if (isAsync) {
+      out.innerHTML = `<div class='msg ok'>
+        Queued episode <code>${data.episode_id}</code> in <code>${data.namespace}</code> — extraction running in background.
+      </div>`;
+    } else {
+      out.innerHTML = `<div class='msg ok'>
+        Saved episode <code>${data.episode_id}</code> in <code>${data.namespace}</code>.
+        Extracted <strong>${data.extracted_entities.length}</strong> entities,
+        <strong>${data.extracted_facts.length}</strong> facts.
+      </div>`;
+    }
     e.target.reset();
     loadList();
   });
@@ -125,34 +144,56 @@
       </tbody></table>`;
   });
 
+  // Poll any "pending" rows every 3s — async writes flip pending → done | failed.
+  let pollTimer = null;
   async function loadList() {
     const tbody = document.querySelector("#episodes-table tbody");
-    tbody.innerHTML = `<tr><td colspan='6'><em>Loading…</em></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan='7'><em>Loading…</em></td></tr>`;
     const r = await fetch("/v1/episodes?limit=50", { headers: auth });
-    if (!r.ok) { tbody.innerHTML = `<tr><td colspan='6' class='bad'>Failed (${r.status})</td></tr>`; return; }
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan='7' class='bad'>Failed (${r.status})</td></tr>`; return; }
     const data = await r.json();
     if (data.episodes.length === 0) {
-      tbody.innerHTML = "<tr><td colspan='6'><em>No episodes yet.</em></td></tr>";
+      tbody.innerHTML = "<tr><td colspan='7'><em>No episodes yet.</em></td></tr>";
       return;
     }
-    tbody.innerHTML = data.episodes.map(e => `
-      <tr>
-        <td>${fmt(e.created_at)}</td>
-        <td><code>${e.namespace}</code></td>
-        <td>${e.created_by_agent}</td>
-        <td>${(e.tags || []).join(", ")}</td>
-        <td><code>${e.episode_id.slice(0,12)}…</code></td>
-        <td>
-          <button class='view' data-id='${e.episode_id}'>View</button>
-          <button class='del'  data-id='${e.episode_id}'>Delete</button>
-        </td>
-      </tr>`).join("");
+    // Fetch per-episode status for any row whose state we care to surface.
+    // /v1/episodes (list) doesn't include status; the /status endpoint does.
+    const statuses = await Promise.all(data.episodes.map(e =>
+      fetch(`/v1/episodes/${e.episode_id}/status`, { headers: auth })
+        .then(r => r.ok ? r.json() : null)
+        .catch(() => null)
+    ));
+    let anyPending = false;
+    tbody.innerHTML = data.episodes.map((e, i) => {
+      const st = statuses[i] || {};
+      const badge = st.extraction_status
+        ? `<span class='badge ${st.extraction_status}'>${st.extraction_status}</span>`
+        : "";
+      if (st.extraction_status === "pending") anyPending = true;
+      return `
+        <tr>
+          <td>${fmt(e.created_at)}</td>
+          <td><code>${e.namespace}</code></td>
+          <td>${e.created_by_agent}</td>
+          <td>${badge}</td>
+          <td>${(e.tags || []).join(", ")}</td>
+          <td><code>${e.episode_id.slice(0,12)}…</code></td>
+          <td>
+            <button class='view' data-id='${e.episode_id}'>View</button>
+            <button class='del'  data-id='${e.episode_id}'>Delete</button>
+          </td>
+        </tr>`;
+    }).join("");
     document.querySelectorAll("button.view").forEach(b => b.addEventListener("click", () => viewEpisode(b.dataset.id)));
     document.querySelectorAll("button.del").forEach(b => b.addEventListener("click", async () => {
       if (!confirm(`Delete episode ${b.dataset.id}? Removes the original record and any facts only derived from it.`)) return;
       const r = await fetch(`/v1/episodes/${b.dataset.id}`, { method: "DELETE", headers: auth });
       if (r.status === 204) loadList();
     }));
+
+    // Re-poll if anything is still extracting in the background.
+    if (pollTimer) clearTimeout(pollTimer);
+    if (anyPending) pollTimer = setTimeout(loadList, 3000);
   }
 
   async function viewEpisode(id) {

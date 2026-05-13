@@ -20,6 +20,7 @@ from memory_service.api.v1 import groups as v1_groups
 from memory_service.api.v1 import orgs as v1_orgs
 from memory_service.api.v1 import sagas as v1_sagas
 from memory_service.api.v1 import search as v1_search
+from memory_service.api.v1 import stats as v1_stats
 from memory_service.api.v1 import system as v1_system
 from memory_service.api.v1 import users as v1_users
 from memory_service.config import get_settings
@@ -111,6 +112,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_admin.router, prefix="/v1")
     app.include_router(v1_sagas.router, prefix="/v1")
     app.include_router(v1_entity_schemas.router, prefix="/v1")
+    app.include_router(v1_stats.router, prefix="/v1")
 
     # Admin page + static
     app.include_router(admin_router)

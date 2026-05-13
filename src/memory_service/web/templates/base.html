@@ -5,21 +5,68 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or "Memory Service" }}</title>
   <link rel="stylesheet" href="/admin/static/style.css">
+  <!-- Alpine.js for tiny reactive bits — zero build step, ~15KB. -->
+  <script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
 </head>
 <body>
   <header>
     <h1><a href="/admin">Memory Service</a></h1>
     <nav>
-      <a href="/admin">Dashboard</a>
-      <a href="/admin/me">Account</a>
-      <a href="/admin/episodes">Episodes</a>
-      <a href="/admin/graph">Graph</a>
-      <a href="/docs" target="_blank">API docs</a>
+      <span class="nav-group">
+        <a href="/admin">Dashboard</a>
+        <a href="/admin/episodes">Episodes</a>
+        <a href="/admin/search">Search</a>
+        <a href="/admin/graph">Graph</a>
+      </span>
+      <span class="nav-group">
+        <a href="/admin/sagas">Sagas</a>
+        <a href="/admin/schemas">Schemas</a>
+        <a href="/admin/communities">Communities</a>
+      </span>
+      <span class="nav-group">
+        <a href="/admin/orgs">Orgs</a>
+        <a href="/admin/groups">Groups</a>
+        <a href="/admin/cypher">Cypher</a>
+      </span>
+      <span class="nav-group">
+        <a href="/admin/me">Account</a>
+        <a href="/docs" target="_blank">API</a>
+      </span>
     </nav>
     <span class="auth-status" id="auth-status"></span>
   </header>
   <script>
-    // Render "signed in as X" or a Login link in the header.
+    // Tiny shared helper: every admin page reaches the v1 API through `ms.fetch`.
+    // Reads ms_token from localStorage. Redirects to login on 401.
+    window.ms = {
+      token() { return localStorage.getItem("ms_token"); },
+      email() { return localStorage.getItem("ms_email"); },
+      authHeaders() {
+        const t = this.token();
+        return t ? { "Authorization": `Bearer ${t}`, "Content-Type": "application/json" }
+                 : { "Content-Type": "application/json" };
+      },
+      async fetch(path, opts = {}) {
+        const r = await fetch(path, { ...opts, headers: { ...this.authHeaders(), ...(opts.headers || {}) } });
+        if (r.status === 401) { location.href = "/admin/login"; throw new Error("unauthenticated"); }
+        return r;
+      },
+      async json(path, opts = {}) {
+        const r = await this.fetch(path, opts);
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${r.status}`);
+        }
+        return r.status === 204 ? null : r.json();
+      },
+      fmtDate(d) { return d ? new Date(d).toISOString().replace("T", " ").slice(0, 19) : ""; },
+      fmtId(id, n = 8) { return id ? id.slice(0, n) + "…" : ""; },
+      requireAuth() {
+        if (!this.token()) { location.href = "/admin/login"; }
+      },
+    };
+
+    // Header: render "signed in as X" or a Login link.
     (function () {
       const el = document.getElementById("auth-status");
       const token = localStorage.getItem("ms_token");
@@ -37,11 +84,11 @@
       }
     })();
   </script>
-  <main>
+  <main {% if wide %}class="wide"{% endif %}>
     {% block content %}{% endblock %}
   </main>
   <footer>
-    <small>v0.1.0 · Phase 1.x scaffold</small>
+    <small>v0.1.0 · Memory Service</small>
   </footer>
 </body>
 </html>

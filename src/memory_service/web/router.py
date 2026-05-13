@@ -40,3 +40,44 @@ async def admin_episodes(request: Request) -> HTMLResponse:
 @router.get("/admin/graph", response_class=HTMLResponse, include_in_schema=False)
 async def admin_graph(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "graph.html", {"title": "Graph"})
+
+
+@router.get("/admin/search", response_class=HTMLResponse, include_in_schema=False)
+async def admin_search(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "search.html", {"title": "Search", "wide": True}
+    )
+
+
+@router.get("/admin/sagas", response_class=HTMLResponse, include_in_schema=False)
+async def admin_sagas(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "sagas.html", {"title": "Sagas"})
+
+
+@router.get("/admin/schemas", response_class=HTMLResponse, include_in_schema=False)
+async def admin_schemas(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "schemas.html", {"title": "Schemas"})
+
+
+@router.get("/admin/communities", response_class=HTMLResponse, include_in_schema=False)
+async def admin_communities(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "communities.html", {"title": "Communities"}
+    )
+
+
+@router.get("/admin/orgs", response_class=HTMLResponse, include_in_schema=False)
+async def admin_orgs(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "orgs.html", {"title": "Orgs"})
+
+
+@router.get("/admin/groups", response_class=HTMLResponse, include_in_schema=False)
+async def admin_groups(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "groups.html", {"title": "Groups"})
+
+
+@router.get("/admin/cypher", response_class=HTMLResponse, include_in_schema=False)
+async def admin_cypher(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "cypher.html", {"title": "Cypher", "wide": True}
+    )
