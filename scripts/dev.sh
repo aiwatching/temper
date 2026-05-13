@@ -10,9 +10,14 @@
 #   4. Start uvicorn with a SQLite dev database under .data/.
 #
 # Usage:
-#   scripts/dev.sh                # default: localhost:8000, opens browser
-#   PORT=8080 scripts/dev.sh      # custom port
-#   OPEN_BROWSER=0 scripts/dev.sh # don't auto-open /admin
+#   scripts/dev.sh                  # default: 127.0.0.1:8000, opens browser
+#   MS_PORT=8080 scripts/dev.sh     # custom port
+#   MS_HOST=0.0.0.0 scripts/dev.sh  # bind all interfaces
+#   OPEN_BROWSER=0 scripts/dev.sh   # don't auto-open /admin
+#
+# We deliberately use MS_PORT/MS_HOST (not PORT/HOST) because other tools
+# like Forge inject a global PORT into the shell environment and would
+# otherwise hijack the bind address.
 #
 # Postgres mode (for parity with prod):
 #   docker compose up -d db
@@ -22,8 +27,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PORT="${PORT:-8000}"
-HOST="${HOST:-127.0.0.1}"
+# Use a memory-service-specific env name so we don't collide with PORT/HOST
+# that other tools (e.g. Forge sets PORT=8403 globally) might export.
+PORT="${MS_PORT:-8000}"
+HOST="${MS_HOST:-127.0.0.1}"
 
 say()   { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 ok()    { printf '  \033[32m✓\033[0m %s\n' "$*"; }
