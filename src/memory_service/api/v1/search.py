@@ -58,6 +58,14 @@ async def search(
         ),
     ] = None,
     bfs_max_depth: Annotated[int, Query(ge=1, le=10)] = 3,
+    reranker: Annotated[
+        str | None,
+        Query(
+            description="Override SEARCH_RERANKER for this call: "
+            "'rrf' (default, free), 'mmr' (diversity), or "
+            "'cross_encoder' (LLM-rescored, slower + token cost)."
+        ),
+    ] = None,
 ) -> SearchResponse:
     ns_list: list[str] | None
     if namespaces:
@@ -68,12 +76,19 @@ async def search(
     nl = [s.strip() for s in node_labels.split(",")] if node_labels else None
     bfs = [s.strip() for s in bfs_origins.split(",")] if bfs_origins else None
 
+    if reranker is not None and reranker not in ("rrf", "mmr", "cross_encoder"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"reranker must be one of: rrf, mmr, cross_encoder. Got: {reranker!r}",
+        )
+
     try:
         hits = await memory.search(
             user, query, ns_list, limit, db,
             as_of=as_of, edge_types=et, node_labels=nl,
             center_node_uuid=center,
             bfs_origin_node_uuids=bfs, bfs_max_depth=bfs_max_depth,
+            reranker=reranker,
         )
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc

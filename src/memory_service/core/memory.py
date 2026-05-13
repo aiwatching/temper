@@ -295,6 +295,7 @@ async def search(
     center_node_uuid: str | None = None,
     bfs_origin_node_uuids: list[str] | None = None,
     bfs_max_depth: int = 3,
+    reranker: str | None = None,
 ) -> list[SearchHit]:
     """Search across the caller's readable namespaces.
 
@@ -337,17 +338,31 @@ async def search(
     group_ids = list(group_id_to_raw.keys())
 
     client = _require_client()
-    # RRF recipe: no cross-encoder, no MMR — works with our noop reranker.
-    from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
+    from graphiti_core.search.search_config_recipes import (
+        COMBINED_HYBRID_SEARCH_CROSS_ENCODER,
+        COMBINED_HYBRID_SEARCH_MMR,
+        COMBINED_HYBRID_SEARCH_RRF,
+    )
 
-    config = COMBINED_HYBRID_SEARCH_RRF.model_copy(deep=True)
+    # Pick the recipe — request override > settings default. cross_encoder
+    # is the only one that pays for an LLM call per search; document that.
+    from memory_service.config import get_settings
+
+    chosen = reranker or get_settings().search_reranker
+    recipe = {
+        "rrf": COMBINED_HYBRID_SEARCH_RRF,
+        "mmr": COMBINED_HYBRID_SEARCH_MMR,
+        "cross_encoder": COMBINED_HYBRID_SEARCH_CROSS_ENCODER,
+    }.get(chosen, COMBINED_HYBRID_SEARCH_RRF)
+    config = recipe.model_copy(deep=True)
     config.limit = limit
 
     # `center_node_uuid` only biases the result set when the reranker
-    # consults graph distance. The default RRF reranker doesn't, so we
-    # switch to node-distance reranking on both edge and node configs
-    # whenever the caller asks for centering.
-    if center_node_uuid is not None:
+    # consults graph distance. When the caller asks for centering AND
+    # didn't pick a different reranker explicitly, swap to node-distance.
+    # If they DID pick (e.g. cross_encoder), respect that choice — they're
+    # opting into a different ranking criterion entirely.
+    if center_node_uuid is not None and reranker is None and chosen == "rrf":
         from graphiti_core.search.search_config import EdgeReranker, NodeReranker
 
         config.edge_config.reranker = EdgeReranker.node_distance

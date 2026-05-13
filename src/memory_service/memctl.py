@@ -284,6 +284,8 @@ def cmd_search(args: argparse.Namespace) -> None:
         params["bfs_origins"] = args.bfs_origins
     if args.bfs_max_depth is not None:
         params["bfs_max_depth"] = args.bfs_max_depth
+    if args.reranker:
+        params["reranker"] = args.reranker
     data = _request(args, "GET", "/v1/search", params=params)
     if getattr(args, "json", False):
         _dump_json(data)
@@ -705,6 +707,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="BFS hop limit (1-10, default 3)",
+    )
+    sp.add_argument(
+        "--reranker",
+        choices=["rrf", "mmr", "cross_encoder"],
+        help="Override reranking strategy for this call",
     )
     sp.set_defaults(func=cmd_search)
 

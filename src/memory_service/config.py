@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     falkordb_port: int = 6379
     falkordb_password: _NoneIfEmptyStr = None
 
+    # --- Search ---
+    # Default reranker for /v1/search. rrf is free; cross_encoder uses
+    # the configured LLM for each query (slower + costs tokens); mmr is
+    # diversity-biased rather than relevance-biased.
+    search_reranker: Literal["rrf", "cross_encoder", "mmr"] = "rrf"
+
     # --- LLM (for entity / relation extraction) ---
     llm_provider: LLMProvider = "openai"
     # If left empty, falls back to LLM_DEFAULTS[provider]
