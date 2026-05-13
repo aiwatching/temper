@@ -597,6 +597,21 @@ def cmd_graph_edges(args: argparse.Namespace) -> None:
     emit(args, rows, columns=["source", "rel", "target", "fact"])
 
 
+def cmd_cypher(args: argparse.Namespace) -> None:
+    """Server-side Cypher: respects namespace ACL, server-enforced timeout."""
+    body: dict[str, Any] = {"query": args.query}
+    if args.namespace:
+        body["namespace"] = args.namespace
+    if args.timeout_ms:
+        body["timeout_ms"] = args.timeout_ms
+    data = _request(args, "POST", "/v1/graph/cypher", json=body)
+    if getattr(args, "json", False):
+        _dump_json(data)
+        return
+    print(f"  namespace: {data['namespace']}  rows: {len(data['rows'])}")
+    emit(args, data["rows"])
+
+
 def cmd_admin_build_communities(args: argparse.Namespace) -> None:
     params: dict[str, Any] = {}
     if args.namespace:
@@ -824,6 +839,22 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("query")
     sp.add_argument("-n", "--namespace")
     sp.set_defaults(func=cmd_graph_cypher)
+
+    # server-side cypher (ACL'd, timeout-bounded)
+    sp = sub.add_parser(
+        "cypher",
+        help="Run read-only Cypher through the service (namespace-scoped, ACL'd)",
+    )
+    sp.add_argument("query")
+    sp.add_argument("-n", "--namespace", help="Target namespace (default user:me)")
+    sp.add_argument(
+        "--timeout-ms",
+        dest="timeout_ms",
+        type=int,
+        default=None,
+        help="Server-side timeout (100-60000ms, default 10000)",
+    )
+    sp.set_defaults(func=cmd_cypher)
 
     # admin (graph maintenance jobs)
     admin = sub.add_parser("admin", help="Graph maintenance jobs").add_subparsers(

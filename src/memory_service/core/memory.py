@@ -718,6 +718,63 @@ async def build_communities(
     }
 
 
+async def run_cypher(
+    user: User,
+    raw_namespace: str | None,
+    query: str,
+    params: dict[str, Any] | None,
+    db: AsyncSession,
+    *,
+    timeout_ms: int = 10_000,
+) -> list[dict[str, Any]]:
+    """Run a *read-only* Cypher query against one namespace's graph.
+
+    Permission: caller must have read access to `raw_namespace`. The
+    driver is cloned to the per-namespace FalkorDB graph so callers
+    can never reach data outside their own namespace through this API.
+
+    Safety: passes the query through the falkordb client's `ro_query`
+    which rejects writes server-side, and a TIMEOUT clause keeps a
+    malformed query from monopolizing the FalkorDB worker.
+    """
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_read(user, ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' has no read access to namespace '{ns.raw}'"
+        )
+
+    encoded = ns.as_graphiti_group_id()
+    settings = __import__("memory_service.config", fromlist=["get_settings"]).get_settings()
+    try:
+        import falkordb
+
+        client = falkordb.FalkorDB(
+            host=settings.falkordb_host,
+            port=settings.falkordb_port,
+            password=settings.falkordb_password,
+        )
+        graph = client.select_graph(encoded)
+        result = graph.ro_query(query, params=params or {}, timeout=timeout_ms)
+    except Exception as exc:
+        _logger.exception("Cypher query failed in %s", ns.raw)
+        raise InvalidRequestError(f"cypher failed: {exc}") from exc
+
+    headers = [h[1] for h in result.header]
+    rows: list[dict[str, Any]] = []
+    for row in result.result_set:
+        rec: dict[str, Any] = {}
+        for h, v in zip(headers, row):
+            if hasattr(v, "properties"):  # Node / Edge → flatten props
+                rec[h] = dict(v.properties)
+            else:
+                rec[h] = v
+        rows.append(rec)
+    return rows
+
+
 async def get_entity(
     user: User, entity_uuid: str, db: AsyncSession
 ) -> dict[str, Any] | None:
