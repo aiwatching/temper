@@ -82,6 +82,7 @@ class SearchHitOut(BaseModel):
     valid_at: datetime | None
     invalid_at: datetime | None
     score: float | None = None
+    kind: Literal["fact", "entity"] = "fact"
 
 
 class SearchResponse(BaseModel):

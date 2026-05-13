@@ -97,6 +97,12 @@ class SearchHit:
     valid_at: datetime | None
     invalid_at: datetime | None
     score: float | None
+    # "fact" = relationship edge between entities (Graphiti's primary output).
+    # "entity" = entity-node summary. We surface both because Graphiti's
+    # extractor sometimes produces a rich entity summary but never derives a
+    # relation from it (especially on terse one-liners), so edge-only search
+    # would miss the answer that's clearly in the graph.
+    kind: str = "fact"
 
 
 # ---------- adapters ----------
@@ -223,23 +229,46 @@ async def search(
     group_ids = [n.as_graphiti_group_id() for n in readable]
 
     client = _require_client()
+    # RRF recipe: no cross-encoder, no MMR — works with our noop reranker.
+    from graphiti_core.search.search_config_recipes import COMBINED_HYBRID_SEARCH_RRF
+
+    config = COMBINED_HYBRID_SEARCH_RRF.model_copy(deep=True)
+    config.limit = limit
     try:
-        edges = await client.search(query=query, group_ids=group_ids, num_results=limit)
+        results = await client.search_(query=query, config=config, group_ids=group_ids)
     except Exception as exc:
         _logger.exception("Graphiti search failed")
         raise BackendUnavailableError(f"search failed: {exc}") from exc
 
-    return [
-        SearchHit(
-            fact=edge.fact,
-            namespace=edge.group_id,
-            source_episode_ids=list(edge.episodes or []),
-            valid_at=edge.valid_at,
-            invalid_at=edge.invalid_at,
-            score=None,  # Graphiti doesn't surface per-edge scores in this path
+    hits: list[SearchHit] = []
+    for edge in results.edges:
+        hits.append(
+            SearchHit(
+                kind="fact",
+                fact=edge.fact,
+                namespace=edge.group_id,
+                source_episode_ids=list(edge.episodes or []),
+                valid_at=edge.valid_at,
+                invalid_at=edge.invalid_at,
+                score=None,
+            )
         )
-        for edge in edges
-    ]
+    for node in results.nodes:
+        text = (getattr(node, "summary", None) or node.name or "").strip()
+        if not text:
+            continue
+        hits.append(
+            SearchHit(
+                kind="entity",
+                fact=text,
+                namespace=node.group_id,
+                source_episode_ids=[],
+                valid_at=None,
+                invalid_at=None,
+                score=None,
+            )
+        )
+    return hits[:limit]
 
 
 async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str, Any]:

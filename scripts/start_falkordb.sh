@@ -8,7 +8,7 @@
 # plain-redis already running on 6379).
 #
 # Steps:
-#   1. Read FALKORDB_HOST / FALKORDB_PORT / FALKORDB_GRAPH_NAME from .env.
+#   1. Read FALKORDB_HOST / FALKORDB_PORT from .env.
 #   2. If something is already serving GRAPH.QUERY at that endpoint, do nothing.
 #   3. Otherwise: docker run falkordb/falkordb in the background.
 #   4. Probe GRAPH.QUERY to confirm the module is actually loaded.
@@ -22,7 +22,9 @@ IMAGE="${FALKORDB_IMAGE:-falkordb/falkordb:latest}"
 get() { grep -E "^$1=" .env 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '"' | tr -d "'"; }
 HOST="$(get FALKORDB_HOST)";       HOST="${HOST:-localhost}"
 PORT="$(get FALKORDB_PORT)";       PORT="${PORT:-6380}"
-GRAPH="$(get FALKORDB_GRAPH_NAME)"; GRAPH="${GRAPH:-_healthcheck}"
+# Probe graph is hardcoded — the runtime healthcheck uses the same name
+# (`adapters/falkordb.py`). We never write data here.
+GRAPH="_healthcheck"
 
 say()  { printf '  %s\n' "$*"; }
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }

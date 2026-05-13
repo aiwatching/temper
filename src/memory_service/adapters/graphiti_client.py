@@ -205,11 +205,15 @@ def _build_graphiti(settings: Settings) -> tuple[object | None, GraphitiStatus]:
             FalkorDriver,
         )
 
+        # Don't set `database=` here: Graphiti's FalkorDB driver routes every
+        # write to a graph named after the episode's `group_id`, so the
+        # connection-level default is only used for low-level driver calls
+        # that never carry data (indices, healthchecks). The lib's own
+        # default ("default_db") is fine.
         driver = FalkorDriver(
             host=settings.falkordb_host,
             port=str(settings.falkordb_port),
             password=settings.falkordb_password,
-            database=settings.falkordb_graph_name,
         )
         client = Graphiti(
             graph_driver=driver,

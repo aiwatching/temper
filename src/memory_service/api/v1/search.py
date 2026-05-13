@@ -40,6 +40,7 @@ async def search(
                 valid_at=h.valid_at,
                 invalid_at=h.invalid_at,
                 score=h.score,
+                kind=h.kind,
             )
             for h in hits
         ],

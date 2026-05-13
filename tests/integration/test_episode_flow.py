@@ -67,9 +67,10 @@ def _fake_add_episode_result(episode_uuid: str = "ep-uuid-1") -> SimpleNamespace
 @pytest.fixture
 def mock_graphiti():
     """Patch get_graphiti() to return a fake client with the methods we hit."""
+    empty_results = SimpleNamespace(edges=[], nodes=[], episodes=[], communities=[])
     fake_client = SimpleNamespace(
         add_episode=AsyncMock(return_value=_fake_add_episode_result()),
-        search=AsyncMock(return_value=[]),
+        search_=AsyncMock(return_value=empty_results),
         driver=None,
     )
     with patch("memory_service.core.memory.get_graphiti", return_value=fake_client):
@@ -156,31 +157,43 @@ async def test_search_with_no_query_returns_empty(client, mock_graphiti) -> None
     # because the trimmed query is empty.
     assert r.status_code == 200
     assert r.json()["facts"] == []
-    assert mock_graphiti.search.await_count == 0  # short-circuited
+    assert mock_graphiti.search_.await_count == 0  # short-circuited
 
 
 @pytest.mark.asyncio
 async def test_search_calls_graphiti(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
     token = await _register_and_login(client)
-    mock_graphiti.search.return_value = [
-        SimpleNamespace(
-            uuid="f1",
-            fact="Jerry has English teacher Sarah",
-            group_id="user:dummy",
-            episodes=["ep-uuid-1"],
-            valid_at=datetime.now(UTC),
-            invalid_at=None,
-        )
-    ]
+    edge = SimpleNamespace(
+        uuid="f1",
+        fact="Jerry has English teacher Sarah",
+        group_id="user:dummy",
+        episodes=["ep-uuid-1"],
+        valid_at=datetime.now(UTC),
+        invalid_at=None,
+    )
+    node = SimpleNamespace(
+        uuid="n1",
+        name="Sarah",
+        summary="Sarah is Jerry's English teacher.",
+        group_id="user:dummy",
+    )
+    mock_graphiti.search_.return_value = SimpleNamespace(
+        edges=[edge], nodes=[node], episodes=[], communities=[]
+    )
     r = await client.get(
         "/v1/search?query=who is the teacher",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert len(body["facts"]) == 1
-    assert body["facts"][0]["fact"] == "Jerry has English teacher Sarah"
-    assert mock_graphiti.search.await_count == 1
+    facts = body["facts"]
+    assert len(facts) == 2
+    assert {h["kind"] for h in facts} == {"fact", "entity"}
+    edge_hit = next(h for h in facts if h["kind"] == "fact")
+    assert edge_hit["fact"] == "Jerry has English teacher Sarah"
+    entity_hit = next(h for h in facts if h["kind"] == "entity")
+    assert entity_hit["fact"] == "Sarah is Jerry's English teacher."
+    assert mock_graphiti.search_.await_count == 1
 
 
 @pytest.mark.asyncio

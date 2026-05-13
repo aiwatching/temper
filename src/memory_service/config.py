@@ -67,7 +67,6 @@ class Settings(BaseSettings):
     falkordb_host: str = "localhost"
     falkordb_port: int = 6379
     falkordb_password: _NoneIfEmptyStr = None
-    falkordb_graph_name: str = "memory"
 
     # --- LLM (for entity / relation extraction) ---
     llm_provider: LLMProvider = "openai"
