@@ -1,0 +1,181 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Write a memory</h2>
+  <form id="write-form" class="stacked">
+    <label>Namespace
+      <input type="text" name="namespace" placeholder="user:&lt;your-id&gt;  (leave blank for your own)">
+    </label>
+    <label>Content
+      <textarea name="content" rows="4" placeholder="e.g. Jerry's new English teacher is Sarah. They meet on Tuesdays at 9am." required style="font:inherit;padding:8px 10px;border:1px solid #e5e7eb;border-radius:4px;"></textarea>
+    </label>
+    <label>Source type
+      <select name="source_type">
+        <option value="text">text</option>
+        <option value="message">message</option>
+        <option value="json">json</option>
+      </select>
+    </label>
+    <label>Tags (comma-separated, optional)
+      <input type="text" name="tags" placeholder="english-learning, schedule">
+    </label>
+    <button type="submit">Add episode</button>
+  </form>
+  <div id="write-msg"></div>
+</section>
+
+<section class="card">
+  <h2>Search memory</h2>
+  <form id="search-form" class="stacked">
+    <label>Query
+      <input type="text" name="query" placeholder="Who is Jerry's English teacher?" required>
+    </label>
+    <label>Namespaces (comma-separated, optional)
+      <input type="text" name="namespaces" placeholder="leave blank to search everything readable">
+    </label>
+    <label>Limit
+      <input type="number" name="limit" min="1" max="50" value="10">
+    </label>
+    <button type="submit">Search</button>
+  </form>
+  <div id="search-result"></div>
+</section>
+
+<section class="card">
+  <h2>Your episodes</h2>
+  <button id="refresh-list">Refresh</button>
+  <table id="episodes-table">
+    <thead><tr><th>When</th><th>Namespace</th><th>Agent</th><th>Tags</th><th>ID</th><th></th></tr></thead>
+    <tbody><tr><td colspan="6"><em>Loading…</em></td></tr></tbody>
+  </table>
+</section>
+
+<dialog id="detail-modal" style="max-width:720px;padding:0;border:1px solid #e5e7eb;border-radius:6px;">
+  <div style="padding:16px 20px;">
+    <button id="modal-close" style="float:right;background:transparent;color:#57606a;border:0;font-size:18px;cursor:pointer;">×</button>
+    <h3 id="modal-title">Episode</h3>
+    <div id="modal-body"></div>
+  </div>
+</dialog>
+
+<script>
+  const token = localStorage.getItem("ms_token");
+  if (!token) { location.href = "/admin/login"; }
+  const auth = { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" };
+
+  function fmt(d) { return d ? new Date(d).toISOString().replace("T"," ").slice(0,19) : ""; }
+
+  document.getElementById("write-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {
+      namespace: fd.get("namespace") || null,
+      content: fd.get("content"),
+      source_type: fd.get("source_type"),
+      tags: (fd.get("tags") || "").split(",").map(s => s.trim()).filter(Boolean),
+    };
+    const out = document.getElementById("write-msg");
+    out.innerHTML = `<div class='msg ok'><em>Extracting entities + writing to graph…</em></div>`;
+    const r = await fetch("/v1/episodes", { method:"POST", headers: auth, body: JSON.stringify(body) });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      out.innerHTML = `<div class='msg bad'>Failed: ${err.detail || r.status}</div>`;
+      return;
+    }
+    const data = await r.json();
+    out.innerHTML = `<div class='msg ok'>
+      Saved episode <code>${data.episode_id}</code> in <code>${data.namespace}</code>.
+      Extracted <strong>${data.extracted_entities.length}</strong> entities,
+      <strong>${data.extracted_facts.length}</strong> facts.
+    </div>`;
+    e.target.reset();
+    loadList();
+  });
+
+  document.getElementById("search-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const params = new URLSearchParams({
+      query: fd.get("query"),
+      limit: fd.get("limit") || "10",
+    });
+    if (fd.get("namespaces")) params.set("namespaces", fd.get("namespaces"));
+    const out = document.getElementById("search-result");
+    out.innerHTML = `<div class='msg ok'><em>Searching…</em></div>`;
+    const r = await fetch(`/v1/search?${params}`, { headers: auth });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      out.innerHTML = `<div class='msg bad'>Failed: ${err.detail || r.status}</div>`;
+      return;
+    }
+    const data = await r.json();
+    if (data.facts.length === 0) {
+      out.innerHTML = `<div class='msg ok'>No hits for "${data.query}".</div>`;
+      return;
+    }
+    out.innerHTML = `<table><thead><tr><th>Fact</th><th>Namespace</th><th>Valid</th><th>Invalid</th><th>Source episodes</th></tr></thead><tbody>
+      ${data.facts.map(f => `
+        <tr>
+          <td>${f.fact}</td>
+          <td><code>${f.namespace}</code></td>
+          <td>${fmt(f.valid_at) || "—"}</td>
+          <td>${fmt(f.invalid_at) || "—"}</td>
+          <td>${(f.source_episode_ids || []).map(id => `<code>${id.slice(0,8)}…</code>`).join(" ")}</td>
+        </tr>`).join("")}
+      </tbody></table>`;
+  });
+
+  async function loadList() {
+    const tbody = document.querySelector("#episodes-table tbody");
+    tbody.innerHTML = `<tr><td colspan='6'><em>Loading…</em></td></tr>`;
+    const r = await fetch("/v1/episodes?limit=50", { headers: auth });
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan='6' class='bad'>Failed (${r.status})</td></tr>`; return; }
+    const data = await r.json();
+    if (data.episodes.length === 0) {
+      tbody.innerHTML = "<tr><td colspan='6'><em>No episodes yet.</em></td></tr>";
+      return;
+    }
+    tbody.innerHTML = data.episodes.map(e => `
+      <tr>
+        <td>${fmt(e.created_at)}</td>
+        <td><code>${e.namespace}</code></td>
+        <td>${e.created_by_agent}</td>
+        <td>${(e.tags || []).join(", ")}</td>
+        <td><code>${e.episode_id.slice(0,12)}…</code></td>
+        <td>
+          <button class='view' data-id='${e.episode_id}'>View</button>
+          <button class='del'  data-id='${e.episode_id}'>Delete</button>
+        </td>
+      </tr>`).join("");
+    document.querySelectorAll("button.view").forEach(b => b.addEventListener("click", () => viewEpisode(b.dataset.id)));
+    document.querySelectorAll("button.del").forEach(b => b.addEventListener("click", async () => {
+      if (!confirm(`Delete episode ${b.dataset.id}? Removes the original record and any facts only derived from it.`)) return;
+      const r = await fetch(`/v1/episodes/${b.dataset.id}`, { method: "DELETE", headers: auth });
+      if (r.status === 204) loadList();
+    }));
+  }
+
+  async function viewEpisode(id) {
+    const r = await fetch(`/v1/episodes/${id}`, { headers: auth });
+    if (!r.ok) { alert(`Failed: ${r.status}`); return; }
+    const data = await r.json();
+    document.getElementById("modal-title").textContent = "Episode " + data.episode_id.slice(0, 12) + "…";
+    document.getElementById("modal-body").innerHTML = `
+      <p><strong>Namespace:</strong> <code>${data.namespace}</code> ·
+         <strong>Agent:</strong> ${data.created_by_agent} ·
+         <strong>When:</strong> ${fmt(data.created_at)}</p>
+      <h4>Content</h4>
+      <pre style="white-space:pre-wrap;background:#f6f8fa;padding:8px;border-radius:4px;">${data.content || "(empty)"}</pre>
+      <h4>Extracted entities (${data.entities.length})</h4>
+      <ul>${data.entities.map(e => `<li><strong>${e.name}</strong>${e.summary ? ` — ${e.summary}` : ""}</li>`).join("") || "<li><em>none</em></li>"}</ul>
+      <h4>Extracted facts (${data.facts.length})</h4>
+      <ul>${data.facts.map(f => `<li>${f.fact}</li>`).join("") || "<li><em>none</em></li>"}</ul>
+    `;
+    document.getElementById("detail-modal").showModal();
+  }
+  document.getElementById("modal-close").addEventListener("click", () => document.getElementById("detail-modal").close());
+
+  document.getElementById("refresh-list").addEventListener("click", loadList);
+  loadList();
+</script>
+{% endblock %}

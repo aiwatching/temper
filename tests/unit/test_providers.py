@@ -7,17 +7,25 @@ from memory_service.config import EMBEDDING_DEFAULTS, LLM_DEFAULTS, Settings
 
 
 def _settings(**overrides: object) -> Settings:
-    """Build a fresh Settings instance with api keys forced to None.
+    """Build a fresh Settings instance with provider fields forced to None.
 
-    conftest seeds LLM_API_KEY into the environment for integration tests;
-    these unit tests need to control exactly what each slot resolves to,
-    so we explicitly null both api key fields unless the caller overrides.
+    `_env_file=None` disables .env file reading. But graphiti_core calls
+    `dotenv.load_dotenv()` on import, which copies our .env file into
+    `os.environ`, so pydantic-settings still picks those values up via
+    its environ source. We defeat that by explicitly nulling every
+    provider-shaped field the caller doesn't set, so the resolution
+    logic falls back to the per-provider defaults.
     """
     base: dict[str, object] = {
         "secret_key": "test-secret-key",
         "app_env": "test",
         "llm_api_key": None,
+        "llm_base_url": None,
+        "llm_model": None,
         "embedding_api_key": None,
+        "embedding_base_url": None,
+        "embedding_model": None,
+        "embedding_dimensions": None,
     }
     base.update(overrides)
     return Settings(_env_file=None, **base)  # type: ignore[arg-type]

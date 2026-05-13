@@ -78,4 +78,13 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # graphiti-core ships some Pydantic v1-style class-based Config blocks.
+    # Treat as warning so its deprecation doesn't fail our suite.
+    "ignore::pydantic.warnings.PydanticDeprecatedSince20",
+    "ignore::DeprecationWarning:graphiti_core",
+    # aiosqlite Connection.__del__ ResourceWarning fires after teardown for
+    # short-lived in-memory engines. Cosmetic.
+    "ignore::ResourceWarning",
+]
