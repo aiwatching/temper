@@ -13,9 +13,9 @@ import pytest_asyncio
 # Force test env BEFORE any memory_service import reads it.
 os.environ["APP_ENV"] = "test"
 os.environ["SECRET_KEY"] = "test-secret-do-not-use-in-prod"
-# Disable real LLM init in tests — we don't exercise those paths here.
+# Stub LLM key so Graphiti init paths in tests don't trip on missing creds.
 os.environ.setdefault("LLM_API_KEY", "test")
-os.environ.setdefault("OPENAI_API_KEY", "test")
+os.environ.setdefault("EMBEDDING_API_KEY", "test")
 
 
 @pytest_asyncio.fixture

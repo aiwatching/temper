@@ -13,10 +13,21 @@ embedding".
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field
+from pydantic import BeforeValidator, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _empty_to_none(v: Any) -> Any:
+    """Treat empty strings (from blank .env entries) as unset."""
+    if isinstance(v, str) and v.strip() == "":
+        return None
+    return v
+
+
+_NoneIfEmptyInt = Annotated[int | None, BeforeValidator(_empty_to_none)]
+_NoneIfEmptyStr = Annotated[str | None, BeforeValidator(_empty_to_none)]
 
 LLMProvider = Literal["openai", "deepseek", "anthropic", "ollama"]
 EmbeddingProvider = Literal["openai", "ollama"]
@@ -55,24 +66,24 @@ class Settings(BaseSettings):
     # --- FalkorDB ---
     falkordb_host: str = "localhost"
     falkordb_port: int = 6379
-    falkordb_password: str | None = None
+    falkordb_password: _NoneIfEmptyStr = None
     falkordb_graph_name: str = "memory"
 
     # --- LLM (for entity / relation extraction) ---
     llm_provider: LLMProvider = "openai"
     # If left empty, falls back to LLM_DEFAULTS[provider]
-    llm_api_key: str | None = None
-    llm_base_url: str | None = None
-    llm_model: str | None = None
+    llm_api_key: _NoneIfEmptyStr = None
+    llm_base_url: _NoneIfEmptyStr = None
+    llm_model: _NoneIfEmptyStr = None
     llm_temperature: float = 0.0
     llm_max_tokens: int = 8192
 
     # --- Embedding (for semantic search) ---
     embedding_provider: EmbeddingProvider = "openai"
-    embedding_api_key: str | None = None
-    embedding_base_url: str | None = None
-    embedding_model: str | None = None
-    embedding_dimensions: int | None = None  # auto from defaults
+    embedding_api_key: _NoneIfEmptyStr = None
+    embedding_base_url: _NoneIfEmptyStr = None
+    embedding_model: _NoneIfEmptyStr = None
+    embedding_dimensions: _NoneIfEmptyInt = None  # auto from defaults
 
     # --- Auth / sessions ---
     # JWT signing algorithm and lifetime for /v1/auth/login tokens.
@@ -80,11 +91,7 @@ class Settings(BaseSettings):
     session_lifetime_minutes: int = 60 * 24  # 1 day
 
     # --- Bootstrap ---
-    bootstrap_super_admin_email: str | None = None
-
-    # --- Legacy aliases (so older OPENAI_* env vars still work) ---
-    # OPENAI_API_KEY → llm_api_key fallback for the openai provider
-    openai_api_key: str | None = None
+    bootstrap_super_admin_email: _NoneIfEmptyStr = None
 
     # ---------- derived helpers ----------
 
@@ -99,24 +106,18 @@ class Settings(BaseSettings):
     def resolved_llm(self) -> "ResolvedProvider":
         """Compose the active LLM config with provider defaults filled in."""
         base_url_default, model_default = LLM_DEFAULTS[self.llm_provider]
-        api_key = self.llm_api_key or (
-            self.openai_api_key if self.llm_provider == "openai" else None
-        )
         return ResolvedProvider(
             provider=self.llm_provider,
-            api_key=api_key,
+            api_key=self.llm_api_key,
             base_url=self.llm_base_url or base_url_default,
             model=self.llm_model or model_default,
         )
 
     def resolved_embedder(self) -> "ResolvedProvider":
         base_url_default, model_default, dim_default = EMBEDDING_DEFAULTS[self.embedding_provider]
-        api_key = self.embedding_api_key or (
-            self.openai_api_key if self.embedding_provider == "openai" else None
-        )
         return ResolvedProvider(
             provider=self.embedding_provider,
-            api_key=api_key,
+            api_key=self.embedding_api_key,
             base_url=self.embedding_base_url or base_url_default,
             model=self.embedding_model or model_default,
             dimensions=self.embedding_dimensions or dim_default,

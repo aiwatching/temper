@@ -7,17 +7,15 @@ from memory_service.config import EMBEDDING_DEFAULTS, LLM_DEFAULTS, Settings
 
 
 def _settings(**overrides: object) -> Settings:
-    """Build a fresh Settings instance with all api keys forced to None.
+    """Build a fresh Settings instance with api keys forced to None.
 
-    conftest seeds OPENAI_API_KEY / LLM_API_KEY into the environment for
-    integration tests; these unit tests need to control exactly what each
-    slot resolves to, so we explicitly null them out unless the caller
-    overrides.
+    conftest seeds LLM_API_KEY into the environment for integration tests;
+    these unit tests need to control exactly what each slot resolves to,
+    so we explicitly null both api key fields unless the caller overrides.
     """
     base: dict[str, object] = {
         "secret_key": "test-secret-key",
         "app_env": "test",
-        "openai_api_key": None,
         "llm_api_key": None,
         "embedding_api_key": None,
     }
@@ -56,15 +54,6 @@ def test_llm_overrides_win_over_defaults() -> None:
     assert rp.base_url == "https://custom-proxy/v1"
     assert rp.model == "deepseek-coder-v2"
     assert rp.api_key == "sk-ds-key"
-
-
-def test_legacy_openai_api_key_falls_back_only_for_openai() -> None:
-    s_openai = _settings(llm_provider="openai", openai_api_key="sk-legacy")
-    assert s_openai.resolved_llm().api_key == "sk-legacy"
-
-    s_deepseek = _settings(llm_provider="deepseek", openai_api_key="sk-legacy")
-    # DeepSeek must NOT pick up OPENAI_API_KEY by accident
-    assert s_deepseek.resolved_llm().api_key is None
 
 
 def test_ollama_does_not_need_api_key() -> None:
