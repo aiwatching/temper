@@ -103,16 +103,23 @@ def _build_embedder(rp: ResolvedProvider):  # type: ignore[no-untyped-def]
         return None, ProviderStatus(rp.provider, False, f"init failed: {exc}")
 
 
-class _NoopReranker:
-    """Cross-encoder that returns passages in original order with a flat score.
+def _make_noop_reranker():  # type: ignore[no-untyped-def]
+    """Build a CrossEncoderClient that returns passages in original order.
 
     Used when no OpenAI-compatible chat endpoint is available to host the
     real reranker (e.g. anthropic LLM + ollama embedding-only setup).
     Search still works — results just aren't reordered against the query.
-    """
 
-    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
-        return [(p, 1.0) for p in passages]
+    Constructed inside a function so the import of CrossEncoderClient stays
+    lazy (Graphiti might be importable but mis-configured at module load).
+    """
+    from graphiti_core.cross_encoder.client import CrossEncoderClient
+
+    class _NoopReranker(CrossEncoderClient):
+        async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+            return [(p, 1.0) for p in passages]
+
+    return _NoopReranker()
 
 
 def _build_reranker(llm_rp: ResolvedProvider, emb_rp: ResolvedProvider):  # type: ignore[no-untyped-def]
@@ -151,7 +158,7 @@ def _build_reranker(llm_rp: ResolvedProvider, emb_rp: ResolvedProvider):  # type
             llm_rp.provider,
             emb_rp.provider,
         )
-        return _NoopReranker()
+        return _make_noop_reranker()
 
     try:
         from graphiti_core.cross_encoder.openai_reranker_client import (
@@ -167,7 +174,7 @@ def _build_reranker(llm_rp: ResolvedProvider, emb_rp: ResolvedProvider):  # type
         return OpenAIRerankerClient(config=config)
     except Exception as exc:  # pragma: no cover - defensive
         _logger.warning("reranker init failed (%s); using no-op reranker", exc)
-        return _NoopReranker()
+        return _make_noop_reranker()
 
 
 def _build_graphiti(settings: Settings) -> tuple[object | None, GraphitiStatus]:
