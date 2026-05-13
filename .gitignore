@@ -31,3 +31,4 @@ data/
 *.sqlite
 *.sqlite3
 logs/
+.forge/
