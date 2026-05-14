@@ -1,0 +1,28 @@
+[project]
+name = "smith"
+version = "0.0.1"
+description = "Personal company-level agent. Memory backed by TEMPER, tool surface backed by MCP."
+requires-python = ">=3.11"
+dependencies = [
+  # HTTP client for Temper API + MCP HTTP transports
+  "httpx>=0.27",
+  # Tiny HTTP server so we can talk to Smith from CLI / IDE / future UIs
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  # Env / config
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+  # Official Python MCP SDK (when wired in)
+  # Uncomment when we actually wire it up — keeping the dep list lean for now.
+  # "mcp>=0.5",
+]
+
+[project.scripts]
+smith = "smith.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smith"]
