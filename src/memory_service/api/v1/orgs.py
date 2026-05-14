@@ -1,10 +1,10 @@
 """/v1/orgs — organization CRUD + members.
 
-Org creation is super_admin-only by design: org slugs become public
-namespace prefixes (`org:<slug>`) and self-service invites squatting.
-Membership is one-org-per-user, enforced by `User.org_id` being a single
-FK. `is_org_admin` is a per-user bool, scoped implicitly to that user's
-current org — change orgs, lose the role.
+Org creation/modification is super_admin-only by design: org slugs become
+public namespace prefixes (`org:<slug>`) and self-service would invite
+squatting. Membership is one-org-per-user, enforced by `User.org_id`
+being a single FK. Regular members can read the org they belong to so
+they know which `org:<slug>` namespace they have access to.
 """
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from memory_service.schemas.org import (
     OrgCreate,
     OrgMemberAdd,
     OrgMemberOut,
-    OrgMemberRoleUpdate,
     OrgOut,
     OrgUpdate,
 )
@@ -56,17 +55,11 @@ async def _member_count(db: AsyncSession, org_id: str) -> int:
     )
 
 
-def _is_org_admin_of(user: User, org: Organization) -> bool:
-    """True if `user` is admin of THIS specific org."""
-    return user.org_id == org.id and user.is_org_admin
-
-
-async def _require_org_admin(user: User, org: Organization) -> None:
-    if user.is_super_admin or _is_org_admin_of(user, org):
+async def _require_super_admin(user: User) -> None:
+    if user.is_super_admin:
         return
     raise HTTPException(
-        status_code=403,
-        detail=f"Only super_admin or admin of org '{org.slug}' may perform this action",
+        status_code=403, detail="Only super_admin may perform this action",
     )
 
 
@@ -181,7 +174,7 @@ async def add_member(
     slug: str, payload: OrgMemberAdd, user: CurrentUser, db: DBDep
 ) -> OrgMemberOut:
     org = await _org_by_slug(db, slug)
-    await _require_org_admin(user, org)
+    await _require_super_admin(user)
     target = await db.get(User, payload.user_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"User '{payload.user_id}' not found")
@@ -191,14 +184,12 @@ async def add_member(
             detail=f"User already belongs to another org; remove them first",
         )
     target.org_id = org.id
-    target.is_org_admin = payload.is_org_admin
     await db.commit()
     await db.refresh(target)
     return OrgMemberOut(
         user_id=target.id,
         email=target.email,
         display_name=target.display_name,
-        is_org_admin=target.is_org_admin,
     )
 
 
@@ -222,36 +213,9 @@ async def list_members(slug: str, user: CurrentUser, db: DBDep) -> list[OrgMembe
             user_id=u.id,
             email=u.email,
             display_name=u.display_name,
-            is_org_admin=u.is_org_admin,
         )
         for u in rows
     ]
-
-
-@router.patch("/{slug}/members/{user_id}", response_model=OrgMemberOut)
-async def update_member_role(
-    slug: str,
-    user_id: str,
-    payload: OrgMemberRoleUpdate,
-    user: CurrentUser,
-    db: DBDep,
-) -> OrgMemberOut:
-    org = await _org_by_slug(db, slug)
-    await _require_org_admin(user, org)
-    target = await db.get(User, user_id)
-    if target is None or target.org_id != org.id:
-        raise HTTPException(
-            status_code=404, detail=f"User '{user_id}' is not a member of org '{slug}'"
-        )
-    target.is_org_admin = payload.is_org_admin
-    await db.commit()
-    await db.refresh(target)
-    return OrgMemberOut(
-        user_id=target.id,
-        email=target.email,
-        display_name=target.display_name,
-        is_org_admin=target.is_org_admin,
-    )
 
 
 @router.delete("/{slug}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -259,9 +223,9 @@ async def remove_member(
     slug: str, user_id: str, user: CurrentUser, db: DBDep
 ) -> None:
     org = await _org_by_slug(db, slug)
-    # Allow self-leave; otherwise require admin.
+    # Allow self-leave; otherwise require super_admin.
     if user_id != user.id:
-        await _require_org_admin(user, org)
+        await _require_super_admin(user)
     target = await db.get(User, user_id)
     if target is None or target.org_id != org.id:
         raise HTTPException(
@@ -279,6 +243,5 @@ async def remove_member(
         )
     )
     target.org_id = None
-    target.is_org_admin = False
     await db.commit()
     return None

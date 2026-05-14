@@ -33,7 +33,6 @@ class UserResponse(BaseModel):
     display_name: str | None
     org_id: str | None
     is_super_admin: bool
-    is_org_admin: bool
     is_active: bool = True
     must_change_password: bool = False
     created_at: datetime

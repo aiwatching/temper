@@ -23,8 +23,6 @@ class CreateUserRequest(BaseModel):
     username: str | None = Field(default=None, min_length=1, max_length=64)
     display_name: str | None = Field(default=None, max_length=255)
     org_slug: str | None = None
-    is_org_admin: bool = False
-    # Super_admin can supply this; org_admin always gets False forced.
     is_super_admin: bool = False
     group_slugs: list[str] = Field(default_factory=list)
 
@@ -56,10 +54,14 @@ class UserListItem(BaseModel):
     email: str
     username: str | None
     display_name: str | None
+    org_id: str | None
     org_slug: str | None
     is_super_admin: bool
-    is_org_admin: bool
     is_active: bool
+    # True for the bootstrap admin account — UI uses this to hide
+    # delete / demote / disable buttons since the backend rejects them
+    # anyway.
+    is_protected: bool = False
     has_password: bool
     has_pending_invite: bool
     invite_expires_at: datetime | None
@@ -75,7 +77,6 @@ class UpdateUserRequest(BaseModel):
     display_name: str | None = None
     is_active: bool | None = None
     is_super_admin: bool | None = None   # super_admin only
-    is_org_admin: bool | None = None     # super_admin or relevant org_admin
     org_slug: str | None = None          # super_admin only; "" to remove from org
 
 

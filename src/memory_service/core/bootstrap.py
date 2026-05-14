@@ -61,9 +61,22 @@ async def create_default_admin_if_empty(
 
 
 async def promote_bootstrap_super_admin(settings: Settings, session: AsyncSession) -> None:
-    """Idempotent promotion of `BOOTSTRAP_SUPER_ADMIN_EMAIL` to super admin."""
+    """One-shot promotion of `BOOTSTRAP_SUPER_ADMIN_EMAIL` to super_admin.
+
+    Only acts when the system has zero super_admins — otherwise it becomes
+    an every-restart override that silently re-promotes a user who was
+    intentionally demoted (or who happened to register with that email).
+    """
     email = (settings.bootstrap_super_admin_email or "").strip().lower()
     if not email:
+        return
+
+    existing_admin = (
+        await session.execute(
+            select(func.count(User.id)).where(User.is_super_admin.is_(True))
+        )
+    ).scalar_one()
+    if existing_admin > 0:
         return
 
     stmt = select(User).where(User.email == email)
@@ -74,15 +87,27 @@ async def promote_bootstrap_super_admin(settings: Settings, session: AsyncSessio
             email,
         )
         return
-    if user.is_super_admin:
-        return
 
     user.is_super_admin = True
     await session.commit()
     _logger.warning("Promoted existing user %s to super_admin (bootstrap)", email)
 
 
-def is_bootstrap_super_admin(email: str, settings: Settings) -> bool:
-    """Whether a newly-registering email should be auto-promoted."""
+async def is_bootstrap_super_admin(
+    email: str, settings: Settings, session: AsyncSession
+) -> bool:
+    """Whether a newly-registering email should be auto-promoted.
+
+    Like `promote_bootstrap_super_admin`, this is one-shot: once any
+    super_admin exists, this returns False so a regular user registering
+    with the configured email doesn't accidentally inherit admin rights.
+    """
     target = (settings.bootstrap_super_admin_email or "").strip().lower()
-    return bool(target) and email.strip().lower() == target
+    if not target or email.strip().lower() != target:
+        return False
+    existing_admin = (
+        await session.execute(
+            select(func.count(User.id)).where(User.is_super_admin.is_(True))
+        )
+    ).scalar_one()
+    return existing_admin == 0

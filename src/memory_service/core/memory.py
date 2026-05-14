@@ -197,14 +197,13 @@ def _write_denied_hint(user: User, ns) -> str:  # type: ignore[no-untyped-def]
     if ns.kind == "group":
         return (
             f"{base} You must be a member of group '{ns.value}'. "
-            "Ask a group admin to add you via "
+            "Ask a super_admin to add you via "
             f"POST /v1/groups/{ns.value}/members."
         )
     if ns.kind == "org":
         return (
-            f"{base} Writing to an org namespace requires org_admin role in "
-            f"that org. Ask a super_admin or another org_admin to promote you "
-            f"via PATCH /v1/orgs/{ns.value}/members/{{user_id}}."
+            f"{base} Writing to an org namespace is super_admin-only. "
+            "Use your own user / group namespace instead."
         )
     if ns.kind == "public":
         return (

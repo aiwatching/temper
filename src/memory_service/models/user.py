@@ -2,10 +2,7 @@
 
 Roles:
   - `is_super_admin`: full system access; can create orgs, write to
-    `public`, manage any user.
-  - `is_org_admin`: within their own org only (one-org-per-user, so
-    the scope is implicit). Can write `org:<slug>` namespace and
-    invite users into the org.
+    `public`, manage any user. Only role that can edit org/group state.
   - is_active=False blocks login but keeps data.
 
 Invite lifecycle:
@@ -41,7 +38,6 @@ class User(Base, UUIDPKMixin, TimestampMixin):
         String(36), ForeignKey("organizations.id", ondelete="SET NULL"), default=None, index=True
     )
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False)
-    is_org_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Set when the account ships with a default / reset password — the
     # user can log in but is force-routed to the change-password screen.

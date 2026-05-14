@@ -1,9 +1,8 @@
 """/v1/groups — flat groups within an organization.
 
-Group creation is open to any org member: the creator becomes the
-group's first admin (UserGroupMembership.role='admin'). Org admins and
-super_admin can manage any group in their scope; the group's own admins
-manage that group's members.
+All mutating ops (create, rename, delete, add/remove member) require
+super_admin. Org members can list + read groups they belong to so they
+know which `group:<slug>` namespaces are available for memory sharing.
 
 A user added to a group MUST belong to the same org as the group.
 """
@@ -95,32 +94,18 @@ async def _member_count(db: AsyncSession, group_id: str) -> int:
     )
 
 
-def _is_org_admin_of(user: User, org: Organization) -> bool:
-    return user.org_id == org.id and user.is_org_admin
-
-
-async def _is_group_admin(db: AsyncSession, user: User, group: Group) -> bool:
-    m = await _membership(db, user.id, group.id)
-    return m is not None and m.role == "admin"
-
-
-async def _require_group_admin(
-    db: AsyncSession, user: User, group: Group, org: Organization
-) -> None:
-    if user.is_super_admin or _is_org_admin_of(user, org):
-        return
-    if await _is_group_admin(db, user, group):
+async def _require_super_admin(user: User) -> None:
+    if user.is_super_admin:
         return
     raise HTTPException(
-        status_code=403,
-        detail=f"Only admin of group '{group.slug}' (or org admin / super_admin) may perform this",
+        status_code=403, detail="Only super_admin may perform this action",
     )
 
 
 async def _require_group_member(
     db: AsyncSession, user: User, group: Group, org: Organization
 ) -> None:
-    if user.is_super_admin or _is_org_admin_of(user, org):
+    if user.is_super_admin:
         return
     if await _membership(db, user.id, group.id) is not None:
         return
@@ -157,26 +142,13 @@ async def _org_by_slug(db: AsyncSession, slug: str) -> Organization:
 
 @router.post("", status_code=status.HTTP_201_CREATED, response_model=GroupOut)
 async def create_group(payload: GroupCreate, user: CurrentUser, db: DBDep) -> GroupOut:
-    # Pick the target org: explicit `org_slug` if super_admin specified it,
-    # otherwise the caller's own org.
-    if payload.org_slug:
-        if not user.is_super_admin:
-            raise HTTPException(
-                status_code=403,
-                detail="Only super_admin may create groups in an arbitrary org; "
-                "leave org_slug blank to use your own org",
-            )
-        org = await _org_by_slug(db, payload.org_slug)
-    else:
-        if not user.org_id:
-            raise HTTPException(
-                status_code=400,
-                detail="You don't belong to any org. Ask a super_admin to add you "
-                "to one before creating a group.",
-            )
-        org = await db.get(Organization, user.org_id)
-        if org is None:
-            raise HTTPException(status_code=500, detail="Your org record is missing")
+    await _require_super_admin(user)
+    if not payload.org_slug:
+        raise HTTPException(
+            status_code=400,
+            detail="org_slug is required — super_admin must say which org owns the group",
+        )
+    org = await _org_by_slug(db, payload.org_slug)
 
     existing = (
         await db.execute(select(Group).where(Group.slug == payload.slug))
@@ -189,10 +161,6 @@ async def create_group(payload: GroupCreate, user: CurrentUser, db: DBDep) -> Gr
     group = Group(slug=payload.slug, name=payload.name, org_id=org.id)
     db.add(group)
     await db.flush()
-    # Creator gets first admin seat — unless they're super_admin acting on
-    # someone else's org (then no auto-membership; they manage from outside).
-    if user.org_id == org.id:
-        db.add(UserGroupMembership(user_id=user.id, group_id=group.id, role="admin"))
     await db.commit()
     await db.refresh(group)
     return _serialize_group(group, org.slug, await _member_count(db, group.id))
@@ -253,7 +221,7 @@ async def update_group(
 ) -> GroupOut:
     group, org = await _group_by_slug(db, slug)
     org = _require_live_org(group, org, "rename")
-    await _require_group_admin(db, user, group, org)
+    await _require_super_admin(user)
     group.name = payload.name
     await db.commit()
     await db.refresh(group)
@@ -263,16 +231,7 @@ async def update_group(
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(slug: str, user: CurrentUser, db: DBDep) -> None:
     group, org = await _group_by_slug(db, slug)
-    if org is None:
-        # Orphan cleanup is super_admin's job (the natural admin chain
-        # is gone with the org).
-        if not user.is_super_admin:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Orphan group '{slug}' can only be removed by super_admin",
-            )
-    else:
-        await _require_group_admin(db, user, group, org)
+    await _require_super_admin(user)
     await db.delete(group)  # FK cascade drops memberships
     await db.commit()
     # FalkorDB doesn't know about our FKs — explicit graph drop.
@@ -295,7 +254,7 @@ async def add_member(
 ) -> GroupMemberOut:
     group, org = await _group_by_slug(db, slug)
     org = _require_live_org(group, org, "add members")
-    await _require_group_admin(db, user, group, org)
+    await _require_super_admin(user)
     target = await db.get(User, payload.user_id)
     if target is None:
         raise HTTPException(status_code=404, detail=f"User '{payload.user_id}' not found")
@@ -359,7 +318,7 @@ async def update_member_role(
 ) -> GroupMemberOut:
     group, org = await _group_by_slug(db, slug)
     org = _require_live_org(group, org, "change member roles")
-    await _require_group_admin(db, user, group, org)
+    await _require_super_admin(user)
     m = await _membership(db, user_id, group.id)
     if m is None:
         raise HTTPException(
@@ -382,16 +341,9 @@ async def remove_member(
     slug: str, user_id: str, user: CurrentUser, db: DBDep
 ) -> None:
     group, org = await _group_by_slug(db, slug)
-    # Orphan groups: allow self-leave (cleanup), require super_admin to
-    # remove anyone else (the regular group_admin chain is broken).
-    if org is None:
-        if user_id != user.id and not user.is_super_admin:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Orphan group '{slug}': only super_admin can remove other members",
-            )
-    elif user_id != user.id:
-        await _require_group_admin(db, user, group, org)
+    # Self-leave is always allowed; otherwise only super_admin.
+    if user_id != user.id:
+        await _require_super_admin(user)
     m = await _membership(db, user_id, group.id)
     if m is None:
         raise HTTPException(

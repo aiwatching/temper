@@ -64,7 +64,14 @@ async def admin_change_password(request: Request) -> HTMLResponse:
 
 @router.get("/admin/me", response_class=HTMLResponse, include_in_schema=False)
 async def admin_me(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "me.html", {"title": "Account"})
+    return templates.TemplateResponse(request, "me.html", {"title": "Account & API keys"})
+
+
+@router.get("/admin/api-keys", response_class=HTMLResponse, include_in_schema=False)
+async def admin_api_keys(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "api_keys_admin.html", {"title": "All API keys", "wide": True}
+    )
 
 
 @router.get("/admin/episodes", response_class=HTMLResponse, include_in_schema=False)

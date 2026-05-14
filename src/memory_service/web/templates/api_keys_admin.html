@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="adminKeysPage()" x-init="load()">
+  <h2>All API keys</h2>
+  <p style="color:var(--muted)">
+    Every API key in the system, across all users. super_admin can
+    revoke any key here — the row stays for audit, but future
+    <code>X-API-Key</code> auth attempts with it will fail.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="!isSuperAdmin && !loading">
+    <p class="msg bad">This page requires super_admin.</p>
+  </template>
+
+  <p>
+    <button class="secondary" @click="load()">Refresh</button>
+    <label style="margin-left:14px; font-size:12px; color:var(--muted)">
+      <input type="checkbox" x-model="hideRevoked"> hide revoked
+    </label>
+  </p>
+
+  <table>
+    <thead><tr>
+      <th>user</th><th>agent</th><th>prefix</th><th>created</th>
+      <th>last used</th><th>status</th><th></th>
+    </tr></thead>
+    <tbody>
+      <template x-if="!loading && filtered().length === 0">
+        <tr><td colspan="7"><em>No API keys.</em></td></tr>
+      </template>
+      <template x-for="k in filtered()" :key="k.id">
+        <tr>
+          <td>
+            <strong x-text="k.user_email"></strong>
+            <template x-if="k.user_username">
+              <span style="margin-left:6px; color:var(--muted-2); font-size:11px">
+                · <code x-text="k.user_username"></code>
+              </span>
+            </template>
+          </td>
+          <td x-text="k.agent_name"></td>
+          <td><code x-text="k.prefix"></code></td>
+          <td x-text="window.ms.fmtDate(k.created_at)"></td>
+          <td x-text="k.last_used_at ? window.ms.fmtDate(k.last_used_at) : '—'"></td>
+          <td>
+            <template x-if="k.revoked">
+              <span class="badge failed">revoked</span>
+            </template>
+            <template x-if="!k.revoked">
+              <span class="badge done">active</span>
+            </template>
+          </td>
+          <td>
+            <template x-if="!k.revoked">
+              <button class="danger" @click="revoke(k)">Disable</button>
+            </template>
+          </td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+</section>
+
+<script>
+  function adminKeysPage() {
+    return {
+      keys: [], loading: true, error: null,
+      isSuperAdmin: false, hideRevoked: false,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        try {
+          const me = window.ms.me || await window.ms.json("/v1/auth/me");
+          window.ms.me = me;
+          this.isSuperAdmin = me.is_super_admin === true;
+          if (!this.isSuperAdmin) { this.keys = []; return; }
+          this.keys = await window.ms.json("/v1/admin/api-keys");
+        } catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      filtered() {
+        return this.hideRevoked ? this.keys.filter(k => !k.revoked) : this.keys;
+      },
+      async revoke(k) {
+        if (!confirm(`Disable key '${k.agent_name}' belonging to ${k.user_email}?`)) return;
+        try {
+          await window.ms.fetch(`/v1/admin/api-keys/${k.id}`, { method: "DELETE" });
+          await this.load();
+        } catch (e) { this.error = e.message; }
+      },
+    };
+  }
+</script>
+{% endblock %}

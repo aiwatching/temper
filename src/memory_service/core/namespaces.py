@@ -7,20 +7,17 @@ Per PRD §4.2 namespaces are flat strings of four shapes:
   org:{org_slug}        owned by an organization
   public                everyone-authenticated readable
 
-Permission matrix (Phase 1.4):
+Permission matrix:
 
   user:self       rw  for the user.
   user:other      ro/wo only for super_admin.
-  group:slug      rw  for any group member; super_admin and the group's
-                  org_admin can write/manage without joining.
-  org:slug        ro  for any member; write for that org's admin only;
-                  super_admin always.
+  group:slug      rw  for any group member; super_admin always.
+  org:slug        ro  for any member; write for super_admin only.
   public          read for any authenticated user; write for super_admin.
 
 Group-membership writes flow through `UserGroupMembership`; org
-membership is the single `User.org_id` column; org-admin is the
-`User.is_org_admin` bool (scoped implicitly to the user's current org —
-moving orgs forfeits the role).
+membership is the single `User.org_id` column. There is no per-org
+admin role — only the global super_admin manages org/group state.
 """
 from __future__ import annotations
 
@@ -132,8 +129,9 @@ async def can_write(user: User, ns: Namespace, db: AsyncSession) -> bool:
     if ns.kind == "group":
         return await _is_group_member(user, ns.value, db)
     if ns.kind == "org":
-        # Org admin of THIS org may write. Plain members read but don't write.
-        return user.is_org_admin and await _is_in_org(user, ns.value, db)
+        # Only super_admin (handled above) writes to org namespaces now
+        # that org_admin is gone. Plain members read but don't write.
+        return False
     return False
 
 

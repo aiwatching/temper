@@ -3,9 +3,9 @@
 <section class="card" x-data="orgsPage()" x-init="load()">
   <h2>Organizations</h2>
   <p style="color:var(--muted)">
-    Orgs are top-level tenants. Only super_admin can create them. Members
-    can read <code>org:&lt;slug&gt;</code> namespaces; <strong>org admins</strong>
-    can write to that namespace.
+    Orgs are top-level tenants. Only super_admin can create or manage them.
+    Members can read the <code>org:&lt;slug&gt;</code> namespace they belong to;
+    writes to org namespaces require super_admin.
   </p>
 
   <template x-if="error"><div class="msg bad" x-text="error"></div></template>
@@ -24,7 +24,9 @@
           <td x-text="window.ms.fmtDate(o.created_at)"></td>
           <td>
             <button @click="selectedSlug = o.slug; loadMembers()">Members</button>
-            <button class="danger" @click="remove(o.slug)">Delete</button>
+            <template x-if="isSuperAdmin">
+              <button class="danger" @click="remove(o.slug)">Delete</button>
+            </template>
           </td>
         </tr>
       </template>
@@ -35,8 +37,12 @@
     <div>
       <h3 style="margin-top:24px">Create org</h3>
       <form @submit.prevent="create()" class="filter-grid">
-        <div><label>slug</label><input type="text" x-model="newSlug" placeholder="acme" required></div>
-        <div><label>name</label><input type="text" x-model="newName" placeholder="Acme Corp" required></div>
+        <div>
+          <label>slug (a-z, 0-9, hyphens; no spaces / uppercase)</label>
+          <input type="text" x-model="newSlug" placeholder="acme" required
+                 pattern="[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?">
+        </div>
+        <div><label>name (any text)</label><input type="text" x-model="newName" placeholder="Acme Corp" required></div>
         <div style="align-self:end"><button type="submit">Create</button></div>
       </form>
     </div>
@@ -52,29 +58,30 @@
     <div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--border)">
       <h3>Members of <code x-text="selectedSlug"></code></h3>
       <table>
-        <thead><tr><th>email</th><th>display name</th><th>role</th><th></th></tr></thead>
+        <thead><tr><th>email</th><th>display name</th><th></th></tr></thead>
         <tbody>
           <template x-for="m in members" :key="m.user_id">
             <tr>
               <td x-text="m.email"></td>
               <td x-text="m.display_name || '—'"></td>
               <td>
-                <span x-text="m.is_org_admin ? 'admin' : 'member'"></span>
-                <button class="secondary" style="margin-left:6px" @click="toggleRole(m)">
-                  <span x-text="m.is_org_admin ? 'demote' : 'promote'"></span>
-                </button>
+                <template x-if="isSuperAdmin">
+                  <button class="danger" @click="removeMember(m.user_id)">Remove</button>
+                </template>
               </td>
-              <td><button class="danger" @click="removeMember(m.user_id)">Remove</button></td>
             </tr>
           </template>
         </tbody>
       </table>
-      <h4>Add member</h4>
-      <form @submit.prevent="addMember()" class="filter-grid">
-        <div><label>user_id (UUID)</label><input type="text" x-model="addUid" required></div>
-        <div style="align-self:end"><label><input type="checkbox" x-model="addAdmin"> as admin</label></div>
-        <div style="align-self:end"><button type="submit">Add</button></div>
-      </form>
+      <template x-if="isSuperAdmin">
+        <div>
+          <h4>Add member</h4>
+          <form @submit.prevent="addMember()" class="filter-grid">
+            <div><label>user_id (UUID)</label><input type="text" x-model="addUid" required></div>
+            <div style="align-self:end"><button type="submit">Add</button></div>
+          </form>
+        </div>
+      </template>
     </div>
   </template>
 </section>
@@ -85,7 +92,7 @@
       orgs: [], loading: true, error: null,
       newSlug: "", newName: "",
       selectedSlug: "", members: [],
-      addUid: "", addAdmin: false,
+      addUid: "",
       isSuperAdmin: false,
       async load() {
         window.ms.requireAuth();
@@ -119,18 +126,10 @@
       async addMember() {
         try {
           await window.ms.json(`/v1/orgs/${this.selectedSlug}/members`, {
-            method: "POST", body: JSON.stringify({ user_id: this.addUid, is_org_admin: this.addAdmin }),
+            method: "POST", body: JSON.stringify({ user_id: this.addUid }),
           });
-          this.addUid = ""; this.addAdmin = false;
+          this.addUid = "";
           this.loadMembers(); this.load();
-        } catch (e) { this.error = e.message; }
-      },
-      async toggleRole(m) {
-        try {
-          await window.ms.json(`/v1/orgs/${this.selectedSlug}/members/${m.user_id}`, {
-            method: "PATCH", body: JSON.stringify({ is_org_admin: !m.is_org_admin }),
-          });
-          this.loadMembers();
         } catch (e) { this.error = e.message; }
       },
       async removeMember(uid) {

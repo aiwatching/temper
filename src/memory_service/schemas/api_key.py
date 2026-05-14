@@ -25,3 +25,11 @@ class APIKeyCreatedResponse(APIKeyResponse):
     """Returned only on creation. The `key` field is shown once and never again."""
 
     key: str
+
+
+class AdminAPIKeyListItem(APIKeyResponse):
+    """Shape for the admin all-keys view. Includes the owning user's
+    identifiers so the UI can group / display per-user."""
+    user_id: str
+    user_email: str
+    user_username: str | None

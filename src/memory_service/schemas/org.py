@@ -29,15 +29,9 @@ class OrgOut(BaseModel):
 
 class OrgMemberAdd(BaseModel):
     user_id: str = Field(min_length=1)
-    is_org_admin: bool = False
-
-
-class OrgMemberRoleUpdate(BaseModel):
-    is_org_admin: bool
 
 
 class OrgMemberOut(BaseModel):
     user_id: str
     email: str
     display_name: str | None
-    is_org_admin: bool

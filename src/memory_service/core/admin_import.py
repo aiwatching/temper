@@ -181,7 +181,7 @@ async def run_import(payload: BulkImportRequest, db: AsyncSession) -> BulkImport
                 await db.execute(select(Organization).where(Organization.slug == u.org_slug))
             ).scalar_one_or_none()
             if user_obj and org:
-                already = user_obj.org_id == org.id and user_obj.is_org_admin == u.is_org_admin
+                already = user_obj.org_id == org.id
                 action = "would-skip" if (already and payload.dry_run) else (
                     "skipped" if already else (
                         "would-update" if payload.dry_run else "updated"
@@ -189,13 +189,12 @@ async def run_import(payload: BulkImportRequest, db: AsyncSession) -> BulkImport
                 )
                 if not payload.dry_run and not already:
                     user_obj.org_id = org.id
-                    user_obj.is_org_admin = u.is_org_admin
                 await _record(
-                    "membership", f"{u.email}→org:{u.org_slug}", action,
-                    f"is_org_admin={u.is_org_admin}",
+                    "membership", f"{u.email}→org:{u.org_slug}", action, None,
                 )
 
-        # Group memberships.
+        # Group memberships. All imports get role="member" — group-level
+        # roles are no-ops for permissions in the simplified model.
         for gm in u.groups:
             group = (
                 await db.execute(select(Group).where(Group.slug == gm.slug))
@@ -203,7 +202,7 @@ async def run_import(payload: BulkImportRequest, db: AsyncSession) -> BulkImport
             if user_obj is None or group is None:
                 if payload.dry_run:
                     await _record("membership", f"{u.email}→group:{gm.slug}",
-                                  "would-create", f"role={gm.role}")
+                                  "would-create", None)
                 continue
             existing_mem = (
                 await db.execute(
@@ -214,24 +213,15 @@ async def run_import(payload: BulkImportRequest, db: AsyncSession) -> BulkImport
                 )
             ).scalar_one_or_none()
             if existing_mem:
-                if existing_mem.role == gm.role:
-                    await _record("membership", f"{u.email}→group:{gm.slug}",
-                                  "would-skip" if payload.dry_run else "skipped",
-                                  f"role={gm.role}")
-                else:
-                    if not payload.dry_run:
-                        existing_mem.role = gm.role
-                    await _record("membership", f"{u.email}→group:{gm.slug}",
-                                  "would-update" if payload.dry_run else "updated",
-                                  f"role: {existing_mem.role}→{gm.role}")
+                await _record("membership", f"{u.email}→group:{gm.slug}",
+                              "would-skip" if payload.dry_run else "skipped", None)
             else:
                 if not payload.dry_run:
                     db.add(UserGroupMembership(
-                        user_id=user_obj.id, group_id=group.id, role=gm.role,
+                        user_id=user_obj.id, group_id=group.id, role="member",
                     ))
                 await _record("membership", f"{u.email}→group:{gm.slug}",
-                              "would-create" if payload.dry_run else "created",
-                              f"role={gm.role}")
+                              "would-create" if payload.dry_run else "created", None)
 
     if not payload.dry_run:
         await db.commit()

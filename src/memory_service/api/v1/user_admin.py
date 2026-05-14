@@ -2,11 +2,11 @@
 
 This is the enterprise onboarding surface:
 
-  POST   /v1/users                    create + return invite URL  (super | org_admin)
-  GET    /v1/users                    list                         (super → all; org_admin → own org)
-  GET    /v1/users/{id}               read                         (admin or self)
-  PATCH  /v1/users/{id}               update role / activate / org  (admin)
-  POST   /v1/users/{id}/resend-invite reissue invite               (admin)
+  POST   /v1/users                    create + return invite URL  (super_admin)
+  GET    /v1/users                    list                         (super_admin → all)
+  GET    /v1/users/{id}               read                         (super_admin or self)
+  PATCH  /v1/users/{id}               update role / activate / org  (super_admin)
+  POST   /v1/users/{id}/resend-invite reissue invite               (super_admin)
   DELETE /v1/users/{id}               hard delete                  (super_admin only)
 
 API-key endpoints under /v1/users/me/api-keys keep their old path
@@ -69,14 +69,22 @@ async def _org_by_slug(db: AsyncSession, slug: str) -> Organization:
 
 
 def _can_manage_user(actor: User, target_org_id: str | None) -> bool:
-    """Returns True if `actor` is allowed to manage a user attached to
-    `target_org_id` (None = unassigned). Org_admin can only touch their
-    own org's users; super_admin can touch anyone."""
-    if actor.is_super_admin:
-        return True
-    if actor.is_org_admin and actor.org_id and actor.org_id == target_org_id:
-        return True
-    return False
+    """Only super_admin can manage other users now that org_admin is gone.
+    `target_org_id` is kept in the signature so call sites don't need to
+    care about it."""
+    return actor.is_super_admin
+
+
+def _is_protected_admin(u: User) -> bool:
+    """The bootstrap admin (username = settings.default_admin_username) is
+    the system's last-resort login. It can't be deleted, demoted from
+    super_admin, or disabled — losing it would lock the whole instance
+    out. Other super_admins can still be demoted by their peers.
+    """
+    target = (get_settings().default_admin_username or "").strip().lower()
+    if not target:
+        return False
+    return (u.username or "").strip().lower() == target
 
 
 async def _serialize_user(db: AsyncSession, u: User) -> UserListItem:
@@ -91,10 +99,11 @@ async def _serialize_user(db: AsyncSession, u: User) -> UserListItem:
         email=u.email,
         username=u.username,
         display_name=u.display_name,
+        org_id=u.org_id,
         org_slug=org_slug,
         is_super_admin=u.is_super_admin,
-        is_org_admin=u.is_org_admin,
         is_active=u.is_active,
+        is_protected=_is_protected_admin(u),
         has_password=u.password_hash is not None,
         has_pending_invite=has_invite,
         invite_expires_at=u.invite_token_expires_at if has_invite else None,
@@ -119,33 +128,7 @@ def _invite_expires() -> datetime:
 async def create_user(
     payload: CreateUserRequest, actor: CurrentUser, db: DBDep,
 ) -> CreateUserResponse:
-    # Determine target org_id (for permission check).
-    target_org_id: str | None = None
-    if payload.org_slug:
-        org = await _org_by_slug(db, payload.org_slug)
-        target_org_id = org.id
-
-    if not _can_manage_user(actor, target_org_id):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Need super_admin (any org) or org_admin (own org only) to "
-                "create users in that scope."
-            ),
-        )
-    # Org_admin can't elevate someone to super_admin.
-    if payload.is_super_admin and not actor.is_super_admin:
-        raise HTTPException(
-            status_code=403, detail="Only super_admin can grant super_admin",
-        )
-
-    existing = (
-        await db.execute(select(User).where(User.email == payload.email))
-    ).scalar_one_or_none()
-    if existing is not None:
-        raise HTTPException(status_code=409, detail=f"User {payload.email!r} already exists")
-
-    # Validate groups (must belong to the same org).
+    # Resolve all the groups up front; org may be derived from them.
     group_objs: list[Group] = []
     for slug in payload.group_slugs:
         g = (
@@ -153,12 +136,43 @@ async def create_user(
         ).scalar_one_or_none()
         if g is None:
             raise HTTPException(status_code=404, detail=f"Group {slug!r} not found")
-        if target_org_id is None or g.org_id != target_org_id:
+        group_objs.append(g)
+
+    # Org follows groups when not specified: a group implies its org,
+    # so an admin picking "engineering" doesn't also need to type "acme".
+    # If both org_slug AND groups are given, they must agree.
+    target_org_id: str | None = None
+    if payload.org_slug:
+        org = await _org_by_slug(db, payload.org_slug)
+        target_org_id = org.id
+
+    if group_objs:
+        # All groups must be in the same org.
+        group_org_ids = {g.org_id for g in group_objs}
+        if len(group_org_ids) > 1:
             raise HTTPException(
                 status_code=409,
-                detail=f"Group {slug!r} is not in the target user's org",
+                detail="Selected groups belong to different orgs — pick one org's groups only",
             )
-        group_objs.append(g)
+        inferred_org = next(iter(group_org_ids))
+        if target_org_id is None:
+            target_org_id = inferred_org
+        elif target_org_id != inferred_org:
+            raise HTTPException(
+                status_code=409,
+                detail="org_slug doesn't match the org of the selected groups",
+            )
+
+    if not _can_manage_user(actor, target_org_id):
+        raise HTTPException(
+            status_code=403, detail="Only super_admin can create users",
+        )
+
+    existing = (
+        await db.execute(select(User).where(User.email == payload.email))
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail=f"User {payload.email!r} already exists")
 
     # Reject username collisions up-front for a friendlier error.
     requested_username = (payload.username or "").strip().lower() or None
@@ -186,7 +200,6 @@ async def create_user(
         password_hash=hash_password(default_pw),
         org_id=target_org_id,
         is_super_admin=payload.is_super_admin,
-        is_org_admin=payload.is_org_admin,
         is_active=True,
         must_change_password=True,
         invited_by_user_id=actor.id,
@@ -209,16 +222,11 @@ async def create_user(
 
 @router.get("", response_model=UserListResponse)
 async def list_users(actor: CurrentUser, db: DBDep) -> UserListResponse:
-    """super_admin sees everyone; org_admin sees their own org; regular
-    users get 403 (they should use /v1/auth/me for self)."""
-    if actor.is_super_admin:
-        stmt = select(User).order_by(User.created_at.desc())
-    elif actor.is_org_admin and actor.org_id:
-        stmt = select(User).where(User.org_id == actor.org_id).order_by(User.created_at.desc())
-    else:
-        raise HTTPException(
-            status_code=403, detail="List requires super_admin or org_admin",
-        )
+    """Only super_admin can list users. Regular users should hit
+    /v1/auth/me for themselves."""
+    if not actor.is_super_admin:
+        raise HTTPException(status_code=403, detail="List requires super_admin")
+    stmt = select(User).order_by(User.created_at.desc())
     rows = list((await db.execute(stmt)).scalars().all())
     return UserListResponse(users=[await _serialize_user(db, u) for u in rows])
 
@@ -256,24 +264,28 @@ async def update_user(
     if payload.is_active is not None:
         if not admin_edit:
             raise HTTPException(status_code=403, detail="Only admins can change is_active")
+        if not payload.is_active and _is_protected_admin(u):
+            raise HTTPException(
+                status_code=409,
+                detail="The default admin account cannot be disabled.",
+            )
         u.is_active = payload.is_active
 
     if payload.is_super_admin is not None:
         if not actor.is_super_admin:
             raise HTTPException(status_code=403, detail="Only super_admin can toggle super_admin")
+        if not payload.is_super_admin and _is_protected_admin(u):
+            raise HTTPException(
+                status_code=409,
+                detail="The default admin cannot be demoted from super_admin.",
+            )
         u.is_super_admin = payload.is_super_admin
-
-    if payload.is_org_admin is not None:
-        if not admin_edit:
-            raise HTTPException(status_code=403, detail="Only admins can change is_org_admin")
-        u.is_org_admin = payload.is_org_admin
 
     if payload.org_slug is not None:
         if not actor.is_super_admin:
             raise HTTPException(status_code=403, detail="Only super_admin can move users between orgs")
         if payload.org_slug == "":
             u.org_id = None
-            u.is_org_admin = False
         else:
             org = await _org_by_slug(db, payload.org_slug)
             u.org_id = org.id
@@ -369,6 +381,11 @@ async def delete_user(user_id: str, actor: CurrentUser, db: DBDep) -> None:
     if user_id == actor.id:
         raise HTTPException(status_code=409, detail="Refusing to delete yourself")
     u = await _user_by_id_for_admin(db, user_id)
+    if _is_protected_admin(u):
+        raise HTTPException(
+            status_code=409,
+            detail="The default admin account cannot be deleted.",
+        )
     # Their personal user:<id> FalkorDB graph is left alone — no clean
     # way to reach it after the row is gone, and historical data has
     # audit value. Episodes' created_by_user_id FK has SET NULL.

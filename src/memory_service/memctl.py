@@ -436,14 +436,14 @@ def cmd_org_member_add(args: argparse.Namespace) -> None:
         args,
         "POST",
         f"/v1/orgs/{args.slug}/members",
-        json={"user_id": args.user_id, "is_org_admin": args.admin},
+        json={"user_id": args.user_id},
     )
     emit(args, data)
 
 
 def cmd_org_member_ls(args: argparse.Namespace) -> None:
     data = _request(args, "GET", f"/v1/orgs/{args.slug}/members")
-    emit(args, data, columns=["user_id", "email", "display_name", "is_org_admin"])
+    emit(args, data, columns=["user_id", "email", "display_name"])
 
 
 def cmd_org_member_rm(args: argparse.Namespace) -> None:
@@ -980,7 +980,6 @@ def build_parser() -> argparse.ArgumentParser:
     sp = member.add_parser("add", help="Add a user to an org")
     sp.add_argument("slug")
     sp.add_argument("user_id")
-    sp.add_argument("--admin", action="store_true", help="Make them org_admin")
     sp.set_defaults(func=cmd_org_member_add)
     sp = member.add_parser("ls", help="List members")
     sp.add_argument("slug")

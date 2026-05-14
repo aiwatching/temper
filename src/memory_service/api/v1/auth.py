@@ -51,7 +51,7 @@ async def register(
         password_hash=hash_password(payload.password),
         display_name=payload.display_name,
     )
-    if is_bootstrap_super_admin(email, settings):
+    if await is_bootstrap_super_admin(email, settings, db):
         user.is_super_admin = True
     db.add(user)
     try:

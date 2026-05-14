@@ -36,15 +36,20 @@
 
       <div class="nav-section">
         <h4>Tenancy</h4>
-        <a href="/admin/users"  data-path="/admin/users">Users</a>
+        <!-- Hidden for non-super_admin; the page would 403 anyway. -->
+        <a href="/admin/users"  data-path="/admin/users" data-super-only>Users</a>
+        <!-- Orgs / Groups are read-only for members so they can see what
+             they belong to. -->
         <a href="/admin/orgs"   data-path="/admin/orgs">Orgs</a>
         <a href="/admin/groups" data-path="/admin/groups">Groups</a>
-        <a href="/admin/import" data-path="/admin/import">Bulk import</a>
+        <a href="/admin/import" data-path="/admin/import" data-super-only>Bulk import</a>
       </div>
 
       <div class="nav-section">
         <h4>Ops</h4>
-        <a href="/admin/cypher" data-path="/admin/cypher">Cypher console</a>
+        <a href="/admin/me"       data-path="/admin/me">My API keys</a>
+        <a href="/admin/api-keys" data-path="/admin/api-keys" data-super-only>All API keys</a>
+        <a href="/admin/cypher"   data-path="/admin/cypher" data-super-only>Cypher console</a>
         <a href="/docs" target="_blank">API docs ↗</a>
       </div>
     </nav>
@@ -85,7 +90,16 @@
         const r = await this.fetch(path, opts);
         if (!r.ok) {
           const err = await r.json().catch(() => ({}));
-          throw new Error(err.detail || `HTTP ${r.status}`);
+          let msg = err.detail;
+          // 422 from FastAPI is a list of pydantic ValidationError dicts.
+          // Format as "field: human reason" so the user sees what's wrong.
+          if (Array.isArray(msg)) {
+            msg = msg.map(e => {
+              const field = (e.loc || []).slice(1).join(".") || e.loc?.[0] || "?";
+              return `${field}: ${e.msg || JSON.stringify(e)}`;
+            }).join("; ");
+          }
+          throw new Error(msg || `HTTP ${r.status}`);
         }
         return r.status === 204 ? null : r.json();
       },
@@ -150,13 +164,17 @@
           location.href = "/admin/change-password";
           return;
         }
+        // Hide nav links flagged super_admin-only when the viewer
+        // isn't one. The page itself still 403s; this is just UX.
+        if (!me.is_super_admin) {
+          document.querySelectorAll('a[data-super-only]').forEach(a => {
+            a.style.display = "none";
+          });
+        }
         const role = me.is_super_admin ? "super_admin"
-                   : me.is_org_admin   ? "org_admin"
                    : me.org_id         ? "member"
                                        : "user";
-        const cls = me.is_super_admin ? "fact"
-                  : me.is_org_admin   ? "community"
-                                      : "entity";
+        const cls = me.is_super_admin ? "fact" : "entity";
         el.insertAdjacentHTML(
           "afterbegin",
           `<span class="badge ${cls}" style="margin-bottom:4px;width:fit-content">${role}</span>`,
@@ -169,7 +187,6 @@
       const me = window.ms.me;
       if (!me) return null;
       if (me.is_super_admin) return "super_admin";
-      if (me.is_org_admin) return "org_admin";
       if (me.org_id) return "member";
       return "user";
     };

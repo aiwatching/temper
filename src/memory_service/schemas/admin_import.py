@@ -30,7 +30,6 @@ class ImportGroup(BaseModel):
 
 class ImportUserGroupMembership(BaseModel):
     slug: str
-    role: Literal["member", "admin"] = "member"
 
 
 class ImportUser(BaseModel):
@@ -40,7 +39,6 @@ class ImportUser(BaseModel):
     # in the response so the operator can share it with the user.
     password: str | None = Field(default=None, min_length=8, max_length=128)
     org_slug: str | None = None
-    is_org_admin: bool = False
     groups: list[ImportUserGroupMembership] = Field(default_factory=list)
 
 
