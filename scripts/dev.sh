@@ -121,4 +121,10 @@ echo
 echo "  Press Ctrl-C to stop."
 echo
 
-exec uvicorn memory_service.main:app --reload --host "$HOST" --port "$PORT"
+# --reload watches only Temper's Python source. Without --reload-dir, uvicorn
+# defaults to the cwd which now includes agents/smith/ — Smith file changes
+# would otherwise trigger a Temper restart. Templates and static assets are
+# served fresh from disk each request, so they don't need uvicorn reloads.
+exec uvicorn memory_service.main:app --reload \
+  --reload-dir src/memory_service \
+  --host "$HOST" --port "$PORT"
