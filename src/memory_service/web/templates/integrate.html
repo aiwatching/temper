@@ -35,27 +35,69 @@
     <tr>
       <th>API key</th>
       <td>
+        <!-- Active key (just created / rotated / pasted) — embedded into the snippets. -->
         <template x-if="apiKey">
-          <code class="token" x-text="apiKey"></code>
+          <div style="margin-bottom:8px">
+            <code class="token" x-text="apiKey"></code>
+            <button class="secondary" style="margin-left:8px" @click="apiKey = ''">Clear</button>
+          </div>
         </template>
-        <template x-if="!apiKey">
-          <span>
-            <em style="color:var(--muted)">No fresh key in this session.</em>
-            <button class="secondary" style="margin-left:6px" @click="createKey()">
-              Create one now
-            </button>
-            <small style="color:var(--muted); margin-left:6px">
-              or manually paste a key you saved from
-              <a href="/admin/me">My API keys</a> →
-              <input type="text" x-model="pastedKey" placeholder="mk_…"
-                     style="padding:3px 6px; border:1px solid var(--border); border-radius:4px; font-family:monospace; width:240px">
-              <button class="secondary" @click="apiKey = pastedKey; pastedKey = ''" :disabled="!pastedKey">Use it</button>
-            </small>
-          </span>
+
+        <!-- Pick one of the user's existing keys. -->
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0">
+          <label style="font-size:12px; color:var(--muted)">Existing key</label>
+          <select x-model="selectedKeyId" @change="onSelectChange()"
+                  style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; min-width:280px">
+            <option value="">— pick one of your keys —</option>
+            <template x-for="k in activeKeys" :key="k.id">
+              <option :value="k.id" x-text="`${k.agent_name}  ·  ${k.prefix}`"></option>
+            </template>
+          </select>
+          <template x-if="selectedKey">
+            <span style="font-size:12px; color:var(--muted)">
+              created <span x-text="window.ms.fmtDate(selectedKey.created_at)"></span>
+            </span>
+          </template>
+        </div>
+
+        <!-- Once a key is picked: either paste its saved plaintext or rotate it. -->
+        <template x-if="selectedKey">
+          <div style="margin:4px 0 6px; padding:8px 10px; background:var(--bg-2,#fafafa); border:1px solid var(--border); border-radius:6px">
+            <p style="margin:0 0 6px; font-size:12px; color:var(--muted)">
+              The server doesn't store plaintext keys. Two ways forward:
+            </p>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:6px">
+              <strong style="font-size:12px">A.</strong>
+              <span style="font-size:12px">Paste the plaintext you saved when you created it</span>
+              <input type="text" x-model="pastedKey"
+                     :placeholder="selectedKey.prefix + '…'"
+                     style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-family:monospace; width:260px">
+              <button class="secondary" @click="usePasted()" :disabled="!pastedKey">Use it</button>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+              <strong style="font-size:12px">B.</strong>
+              <span style="font-size:12px">
+                Lost the plaintext? <em>Rotate</em> — revokes the old, creates a fresh
+                key with the same name + returns it once.
+              </span>
+              <button class="danger" @click="rotateSelected()" :disabled="rotating">
+                <span x-text="rotating ? 'Rotating…' : 'Rotate'"></span>
+              </button>
+            </div>
+          </div>
         </template>
-        <p style="color:var(--muted); font-size:11px; margin:4px 0 0">
-          Plaintext is only shown once. If you lose it, create a new one on
-          <a href="/admin/me">My API keys</a> and revoke the old one.
+
+        <!-- Or create a brand-new key. -->
+        <div style="margin-top:6px">
+          <button class="secondary" @click="createKey()">+ Create new key</button>
+          <small style="color:var(--muted); margin-left:8px">
+            For a fresh agent that doesn't exist yet.
+          </small>
+        </div>
+
+        <p style="color:var(--muted); font-size:11px; margin:6px 0 0">
+          Plaintext is only shown once. Save it somewhere — or come back and
+          Rotate to get a new one. Manage all your keys on <a href="/admin/me">My API keys</a>.
         </p>
       </td>
     </tr>
@@ -127,8 +169,11 @@
     return {
       me: null, error: null,
       baseUrl: location.origin,
-      apiKey: "",          // populated only when user creates one this session
+      apiKey: "",          // populated only when user creates / rotates / pastes
       pastedKey: "",
+      existingKeys: [],
+      selectedKeyId: "",
+      rotating: false,
       active: "system",
       tabs: [
         { id: "system", label: "Generic system prompt" },
@@ -141,7 +186,37 @@
         try {
           this.me = window.ms.me || await window.ms.json("/v1/auth/me");
           window.ms.me = this.me;
+          await this.loadKeys();
         } catch (e) { this.error = e.message; }
+      },
+      async loadKeys() {
+        try {
+          this.existingKeys = await window.ms.json("/v1/users/me/api-keys");
+        } catch (_) { this.existingKeys = []; }
+      },
+      get activeKeys() {
+        return this.existingKeys.filter(k => !k.revoked);
+      },
+      get selectedKey() {
+        return this.activeKeys.find(k => k.id === this.selectedKeyId) || null;
+      },
+      onSelectChange() {
+        // Reset the paste field so it doesn't carry over from another key.
+        this.pastedKey = "";
+      },
+      usePasted() {
+        const v = (this.pastedKey || "").trim();
+        if (!v) return;
+        // Sanity-check the prefix against the picked key so we don't silently
+        // embed a paste that belongs to a different one.
+        if (this.selectedKey && !v.startsWith(this.selectedKey.prefix)) {
+          if (!confirm(
+            `That doesn't match prefix '${this.selectedKey.prefix}'. ` +
+            "Use it anyway?"
+          )) return;
+        }
+        this.apiKey = v;
+        this.pastedKey = "";
       },
       async createKey() {
         const name = prompt("Name this agent (e.g. 'claude-code-laptop')",
@@ -153,7 +228,32 @@
             body: JSON.stringify({ agent_name: name }),
           });
           this.apiKey = r.key;
+          await this.loadKeys();
+          this.selectedKeyId = r.id;
         } catch (e) { this.error = e.message; }
+      },
+      async rotateSelected() {
+        const k = this.selectedKey;
+        if (!k) return;
+        if (!confirm(
+          `Rotate key '${k.agent_name}'?\n` +
+          "The old key (prefix " + k.prefix + ") is revoked immediately — " +
+          "anyone still using it stops working — and a fresh key is generated."
+        )) return;
+        this.rotating = true; this.error = null;
+        try {
+          // Create the fresh key with the same name first, so even if revoke
+          // fails the user has the new plaintext in hand.
+          const fresh = await window.ms.json("/v1/users/me/api-keys", {
+            method: "POST",
+            body: JSON.stringify({ agent_name: k.agent_name }),
+          });
+          this.apiKey = fresh.key;
+          await window.ms.fetch(`/v1/users/me/api-keys/${k.id}`, { method: "DELETE" });
+          await this.loadKeys();
+          this.selectedKeyId = fresh.id;
+        } catch (e) { this.error = e.message; }
+        finally { this.rotating = false; }
       },
       copy(text) {
         navigator.clipboard?.writeText(text);
