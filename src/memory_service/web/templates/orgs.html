@@ -31,12 +31,22 @@
     </tbody>
   </table>
 
-  <h3 style="margin-top:24px">Create org <small style="color:var(--muted)">(super_admin only)</small></h3>
-  <form @submit.prevent="create()" class="filter-grid">
-    <div><label>slug</label><input type="text" x-model="newSlug" placeholder="acme" required></div>
-    <div><label>name</label><input type="text" x-model="newName" placeholder="Acme Corp" required></div>
-    <div style="align-self:end"><button type="submit">Create</button></div>
-  </form>
+  <template x-if="isSuperAdmin">
+    <div>
+      <h3 style="margin-top:24px">Create org</h3>
+      <form @submit.prevent="create()" class="filter-grid">
+        <div><label>slug</label><input type="text" x-model="newSlug" placeholder="acme" required></div>
+        <div><label>name</label><input type="text" x-model="newName" placeholder="Acme Corp" required></div>
+        <div style="align-self:end"><button type="submit">Create</button></div>
+      </form>
+    </div>
+  </template>
+  <template x-if="!isSuperAdmin">
+    <p style="color:var(--muted); font-size:12px; margin-top:16px">
+      <em>Only super_admin can create orgs. Ask the operator who owns
+      <code>BOOTSTRAP_SUPER_ADMIN_EMAIL</code> to create one for you.</em>
+    </p>
+  </template>
 
   <template x-if="selectedSlug">
     <div style="margin-top:24px; padding-top:16px; border-top:1px solid var(--border)">
@@ -76,10 +86,17 @@
       newSlug: "", newName: "",
       selectedSlug: "", members: [],
       addUid: "", addAdmin: false,
+      isSuperAdmin: false,
       async load() {
         window.ms.requireAuth();
         this.loading = true; this.error = null;
-        try { this.orgs = await window.ms.json("/v1/orgs"); }
+        try {
+          // Cache role for the conditional UI bits.
+          const me = window.ms.me || await window.ms.json("/v1/auth/me");
+          window.ms.me = me;
+          this.isSuperAdmin = me.is_super_admin === true;
+          this.orgs = await window.ms.json("/v1/orgs");
+        }
         catch (e) { this.error = e.message; }
         finally { this.loading = false; }
       },

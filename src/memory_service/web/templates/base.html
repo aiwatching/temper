@@ -36,6 +36,7 @@
         <h4>Tenancy</h4>
         <a href="/admin/orgs"   data-path="/admin/orgs">Orgs</a>
         <a href="/admin/groups" data-path="/admin/groups">Groups</a>
+        <a href="/admin/import" data-path="/admin/import">Bulk import</a>
       </div>
 
       <div class="nav-section">
@@ -91,25 +92,52 @@
       if (me && path === "/admin/me") me.classList.add("active");
     })();
 
-    // Auth status footer block.
+    // Auth status footer block. Shows email + role badge derived from
+    // /v1/auth/me (we cache the result in window.ms.me so other pages
+    // can call window.ms.role() / window.ms.isSuperAdmin() without
+    // hitting the API a second time).
     (function () {
       const el = document.getElementById("auth-status");
       const token = localStorage.getItem("ms_token");
       const email = localStorage.getItem("ms_email");
-      if (token && email) {
-        el.innerHTML = `
-          <span class="who" title="${email}">${email}</span>
-          <a href="#" id="logout">Sign out</a>`;
-        document.getElementById("logout").addEventListener("click", (e) => {
-          e.preventDefault();
-          localStorage.removeItem("ms_token");
-          localStorage.removeItem("ms_email");
-          location.href = "/admin";
-        });
-      } else {
+      if (!token || !email) {
         el.innerHTML = `<a href="/admin/login">Sign in</a>`;
+        return;
       }
+      el.innerHTML = `<span class="who" title="${email}">${email}</span><a href="#" id="logout">Sign out</a>`;
+      document.getElementById("logout").addEventListener("click", (e) => {
+        e.preventDefault();
+        localStorage.removeItem("ms_token");
+        localStorage.removeItem("ms_email");
+        location.href = "/admin";
+      });
+      // Fetch role for the badge — non-blocking.
+      window.ms.json("/v1/auth/me").then(me => {
+        window.ms.me = me;
+        const role = me.is_super_admin ? "super_admin"
+                   : me.is_org_admin   ? "org_admin"
+                   : me.org_id         ? "member"
+                                       : "user";
+        const cls = me.is_super_admin ? "fact"
+                  : me.is_org_admin   ? "community"
+                                      : "entity";
+        el.insertAdjacentHTML(
+          "afterbegin",
+          `<span class="badge ${cls}" style="margin-bottom:4px;width:fit-content">${role}</span>`,
+        );
+      }).catch(() => {});
     })();
+
+    // Helpers any page can call after window.ms.me is populated.
+    window.ms.role = () => {
+      const me = window.ms.me;
+      if (!me) return null;
+      if (me.is_super_admin) return "super_admin";
+      if (me.is_org_admin) return "org_admin";
+      if (me.org_id) return "member";
+      return "user";
+    };
+    window.ms.isSuperAdmin = () => window.ms.me?.is_super_admin === true;
   </script>
 
   <main class="content {% if wide %}wide{% endif %}">

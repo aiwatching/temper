@@ -25,6 +25,7 @@ class StatsResponse(BaseModel):
     users_count: int | None  # super_admin only
     orgs_count: int | None
     groups_count: int | None
+    super_admin_count: int  # whole system; lets the UI flag "no admin yet"
     readable_namespaces: list[str]
 
 
@@ -43,6 +44,12 @@ async def stats(user: CurrentUser, db: DBDep) -> StatsResponse:
     if not user.is_super_admin:
         schema_stmt = schema_stmt.where(EntitySchema.namespace.in_(readable_raw))
 
+    super_admin_count = (
+        await db.execute(
+            select(func.count(User.id)).where(User.is_super_admin.is_(True))
+        )
+    ).scalar_one()
+
     out = StatsResponse(
         episodes_total=sum(ep_counts.values()),
         episodes_pending=ep_counts.get("pending", 0),
@@ -51,6 +58,7 @@ async def stats(user: CurrentUser, db: DBDep) -> StatsResponse:
         users_count=None,
         orgs_count=None,
         groups_count=None,
+        super_admin_count=super_admin_count,
         readable_namespaces=readable_raw,
     )
 

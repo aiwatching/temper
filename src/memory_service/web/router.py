@@ -81,3 +81,10 @@ async def admin_cypher(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request, "cypher.html", {"title": "Cypher", "wide": True}
     )
+
+
+@router.get("/admin/import", response_class=HTMLResponse, include_in_schema=False)
+async def admin_import(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "import.html", {"title": "Bulk import", "wide": True}
+    )

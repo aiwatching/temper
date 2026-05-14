@@ -25,6 +25,18 @@ class Database:
         self._sessionmaker = async_sessionmaker(
             self._engine, expire_on_commit=False, class_=AsyncSession
         )
+        # SQLite turns FK enforcement OFF by default. Without this hook
+        # ON DELETE CASCADE / SET NULL on Group.org_id, User.org_id, etc.
+        # are silently ignored — Postgres always enforces them, but every
+        # dev-DB session would leave orphan rows after an org delete.
+        if url.startswith("sqlite"):
+            from sqlalchemy import event
+
+            @event.listens_for(self._engine.sync_engine, "connect")
+            def _enable_sqlite_fk(dbapi_conn, _conn_record):  # type: ignore[no-untyped-def]
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.close()
 
     @property
     def engine(self) -> AsyncEngine:

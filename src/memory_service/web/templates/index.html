@@ -8,6 +8,16 @@
     and which providers are wired in.
   </p>
 
+  <template x-if="stats.super_admin_count === 0">
+    <div class="msg bad" style="margin-bottom:16px">
+      <strong>No super_admin set up yet.</strong>
+      Set <code>BOOTSTRAP_SUPER_ADMIN_EMAIL</code> in <code>.env</code> to the
+      email of an existing or to-be-registered user and restart the service —
+      that account becomes super_admin automatically. Without one, nobody can
+      create orgs or write to <code>public</code>.
+    </div>
+  </template>
+
   <!-- Stat tiles -->
   <div class="dash-grid" style="margin-bottom:16px">
     <div class="stat"><div class="k">episodes</div><div class="v" x-text="stats.episodes_total ?? '…'"></div></div>

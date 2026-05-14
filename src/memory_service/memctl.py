@@ -662,6 +662,39 @@ def cmd_admin_build_communities(args: argparse.Namespace) -> None:
     emit(args, data)
 
 
+def cmd_admin_import(args: argparse.Namespace) -> None:
+    """POST /v1/admin/import — load a JSON file describing orgs/groups/users."""
+    if not args.file:
+        die("--file required (path to a JSON payload, or '-' for stdin)")
+    src = sys.stdin if args.file == "-" else open(args.file)
+    try:
+        body = json.load(src)
+    finally:
+        if src is not sys.stdin:
+            src.close()
+    body["dry_run"] = bool(args.dry_run)
+    data = _request(args, "POST", "/v1/admin/import", json=body)
+    if getattr(args, "json", False):
+        _dump_json(data)
+        return
+    if data.get("errors"):
+        print(f"  errors ({len(data['errors'])}):")
+        for e in data["errors"]:
+            print(f"    ✗ {e}")
+        return
+    print(f"  {'dry-run plan' if data['dry_run'] else 'applied'}:")
+    for r in data["rows"]:
+        marker = "→" if r["action"].startswith("would") else "✓"
+        print(f"    {marker} {r['kind']:<10} {r['target']:<30} {r['action']}"
+              + (f"  ({r['detail']})" if r.get("detail") else ""))
+    if data.get("created_users"):
+        print()
+        print(f"  generated credentials ({len(data['created_users'])}) — COPY NOW:")
+        for u in data["created_users"]:
+            pw = u.get("generated_password") or "(supplied by you)"
+            print(f"    {u['email']:<32}  {pw}")
+
+
 def cmd_admin_reindex(args: argparse.Namespace) -> None:
     params: dict[str, Any] = {}
     if args.namespace:
@@ -1041,6 +1074,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument("-n", "--namespace", help="Target namespace (default user:me)")
     sp.set_defaults(func=cmd_admin_build_communities)
+
+    sp = admin.add_parser(
+        "import",
+        help="Bulk-load orgs / groups / users + assignments from a JSON file",
+    )
+    sp.add_argument("--file", "-f", help="Path to JSON payload, '-' or omitted = stdin")
+    sp.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="Validate + plan without mutating",
+    )
+    sp.set_defaults(func=cmd_admin_import)
 
     embeddings = admin.add_parser(
         "embeddings", help="Embedding maintenance"

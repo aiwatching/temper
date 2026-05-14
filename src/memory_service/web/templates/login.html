@@ -20,6 +20,16 @@
   </form>
 
   <div id="msg"></div>
+
+  <hr style="margin:20px 0; border:0; border-top:1px solid var(--border)">
+  <p style="color: var(--muted); font-size: 12px; margin: 0">
+    <strong>How super_admin works:</strong> register with the email matching
+    <code>BOOTSTRAP_SUPER_ADMIN_EMAIL</code> in <code>.env</code>; that account is
+    auto-promoted on first login. Super_admin is the only account that can
+    create orgs and write to the <code>public</code> namespace. The bootstrap
+    flag is idempotent — drop it from <code>.env</code> after first boot if you
+    don't want it re-promoting.
+  </p>
 </section>
 
 <script>

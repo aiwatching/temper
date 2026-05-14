@@ -224,8 +224,12 @@ async def update_group(
 async def delete_group(slug: str, user: CurrentUser, db: DBDep) -> None:
     group, org = await _group_by_slug(db, slug)
     await _require_group_admin(db, user, group, org)
-    await db.delete(group)  # cascades to memberships
+    await db.delete(group)  # FK cascade drops memberships
     await db.commit()
+    # FalkorDB doesn't know about our FKs — explicit graph drop.
+    from memory_service.core.memory import drop_namespace_graph
+
+    await drop_namespace_graph(f"group:{slug}")
     return None
 
 

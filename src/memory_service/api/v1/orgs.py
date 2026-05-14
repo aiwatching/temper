@@ -145,11 +145,29 @@ async def delete_org(slug: str, user: CurrentUser, db: DBDep) -> None:
     org = await _org_by_slug(db, slug)
     if not user.is_super_admin:
         raise HTTPException(status_code=403, detail="Only super_admin can delete orgs")
-    # FK ondelete='SET NULL' on User.org_id clears membership automatically;
-    # groups inside the org cascade-delete via FK; group memberships cascade
-    # from there.
+
+    # Collect the FalkorDB graph names we need to wipe BEFORE the SQL
+    # cascade runs (after, we can't query Group anymore).
+    from memory_service.core.memory import drop_namespace_graph
+
+    group_slugs = list(
+        (await db.execute(select(Group.slug).where(Group.org_id == org.id)))
+        .scalars()
+        .all()
+    )
+
+    # SQL cleanup: FK ondelete='SET NULL' on User.org_id clears user
+    # membership; ondelete='CASCADE' on Group.org_id drops groups +
+    # their memberships. (Both require SQLite FK enforcement on —
+    # see Database.__init__ in db/session.py.)
     await db.delete(org)
     await db.commit()
+
+    # FalkorDB graphs aren't FK-aware; clean them up explicitly. Each
+    # group had its own graph, plus the org's own org:<slug> graph.
+    for gs in group_slugs:
+        await drop_namespace_graph(f"group:{gs}")
+    await drop_namespace_graph(f"org:{slug}")
     return None
 
 

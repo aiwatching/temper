@@ -1,0 +1,164 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="card" x-data="importPage()" x-init="loadRole()">
+  <h2>Bulk import</h2>
+  <p style="color:var(--muted)">
+    Super_admin can import orgs / groups / users + their assignments in
+    one shot. Paste a JSON payload below, click <strong>Dry run</strong>
+    to see what would happen, then <strong>Apply</strong> for real.
+    Generated passwords for new users are shown <em>once</em> — copy
+    them somewhere safe.
+  </p>
+
+  <template x-if="!isSuperAdmin && roleLoaded">
+    <div class="msg bad">Super_admin required to use bulk import.</div>
+  </template>
+
+  <template x-if="isSuperAdmin">
+    <div>
+      <details style="margin-bottom:12px">
+        <summary style="cursor:pointer; color: var(--accent)">Example payload</summary>
+        <pre style="background:#f6f8fa; padding:12px; border-radius:5px; overflow:auto"><code>{
+  "orgs": [
+    {"slug": "acme", "name": "Acme Corp"}
+  ],
+  "groups": [
+    {"slug": "engineering", "name": "Engineering", "org_slug": "acme"},
+    {"slug": "product",     "name": "Product",     "org_slug": "acme"}
+  ],
+  "users": [
+    {
+      "email": "alice@acme.com",
+      "display_name": "Alice",
+      "org_slug": "acme",
+      "is_org_admin": true,
+      "groups": [{"slug": "engineering", "role": "admin"}]
+    },
+    {
+      "email": "bob@acme.com",
+      "org_slug": "acme",
+      "groups": [{"slug": "engineering", "role": "member"}]
+    },
+    {
+      "email": "carol@acme.com",
+      "org_slug": "acme",
+      "groups": [{"slug": "product", "role": "admin"}]
+    }
+  ]
+}</code></pre>
+      </details>
+
+      <textarea x-model="payload" rows="14"
+        style="font:13px/1.4 SF Mono, Menlo, monospace; width:100%; padding:10px;
+               border:1px solid var(--border); border-radius:5px"
+        placeholder='Paste JSON here'></textarea>
+
+      <p>
+        <button @click="run(true)"  :disabled="running" class="secondary">Dry run</button>
+        <button @click="run(false)" :disabled="running">Apply for real</button>
+        <span x-show="running" style="margin-left:12px; color:var(--muted)">working…</span>
+      </p>
+    </div>
+  </template>
+
+  <template x-if="result && result.errors && result.errors.length">
+    <div class="msg bad">
+      <strong>Errors:</strong>
+      <ul x-show="true">
+        <template x-for="e in result.errors" :key="e"><li x-text="e"></li></template>
+      </ul>
+    </div>
+  </template>
+
+  <template x-if="result && (!result.errors || !result.errors.length)">
+    <div style="margin-top:16px">
+      <div class="msg ok">
+        <span x-text="result.dry_run ? 'Dry run — would apply:' : 'Applied successfully:'"></span>
+      </div>
+      <table>
+        <thead><tr><th>kind</th><th>target</th><th>action</th><th>detail</th></tr></thead>
+        <tbody>
+          <template x-for="(r, i) in result.rows" :key="i">
+            <tr>
+              <td x-text="r.kind"></td>
+              <td><code x-text="r.target"></code></td>
+              <td>
+                <span class="badge"
+                  :class="r.action.startsWith('would') ? 'pending' : r.action.includes('skip') ? 'entity' : 'done'"
+                  x-text="r.action"></span>
+              </td>
+              <td style="color:var(--muted)" x-text="r.detail || '—'"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+
+      <template x-if="result.created_users && result.created_users.length">
+        <div style="margin-top:16px">
+          <h3>Generated passwords — copy now</h3>
+          <p style="color: var(--muted); font-size:12px">
+            These passwords are <strong>not retrievable</strong>. Share with the user securely.
+          </p>
+          <table>
+            <thead><tr><th>email</th><th>user_id</th><th>password</th></tr></thead>
+            <tbody>
+              <template x-for="u in result.created_users" :key="u.email">
+                <tr>
+                  <td x-text="u.email"></td>
+                  <td><code x-text="window.ms.fmtId(u.user_id, 12)"></code></td>
+                  <td>
+                    <code class="token" x-text="u.generated_password || '(supplied)'"></code>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+    </div>
+  </template>
+</section>
+
+<script>
+  function importPage() {
+    return {
+      payload: "",
+      result: null,
+      running: false,
+      isSuperAdmin: false,
+      roleLoaded: false,
+      async loadRole() {
+        window.ms.requireAuth();
+        try {
+          const me = window.ms.me || await window.ms.json("/v1/auth/me");
+          window.ms.me = me;
+          this.isSuperAdmin = me.is_super_admin === true;
+        } finally {
+          this.roleLoaded = true;
+        }
+      },
+      async run(dryRun) {
+        let body;
+        try { body = JSON.parse(this.payload); }
+        catch (e) {
+          this.result = { errors: [`JSON parse failed: ${e.message}`] };
+          return;
+        }
+        body.dry_run = !!dryRun;
+        this.running = true;
+        this.result = null;
+        try {
+          this.result = await window.ms.json("/v1/admin/import", {
+            method: "POST", body: JSON.stringify(body),
+          });
+        } catch (e) {
+          this.result = { errors: [e.message || String(e)] };
+        } finally {
+          this.running = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

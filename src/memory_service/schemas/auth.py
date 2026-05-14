@@ -29,4 +29,5 @@ class UserResponse(BaseModel):
     display_name: str | None
     org_id: str | None
     is_super_admin: bool
+    is_org_admin: bool
     created_at: datetime

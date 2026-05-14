@@ -14,6 +14,11 @@ from pydantic import BaseModel
 
 from memory_service.api.deps import CurrentUser, DBDep
 from memory_service.core import memory
+from memory_service.core.admin_import import run_import
+from memory_service.schemas.admin_import import (
+    BulkImportRequest,
+    BulkImportResponse,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -65,6 +70,23 @@ async def reindex_embeddings(
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
     return ReindexEmbeddingsResponse(**result)
+
+
+@router.post("/import", response_model=BulkImportResponse)
+async def bulk_import(
+    payload: BulkImportRequest, user: CurrentUser, db: DBDep,
+) -> BulkImportResponse:
+    """Bulk-create orgs / groups / users + assignments in one call.
+
+    Super_admin only. Use `dry_run: true` first to validate without
+    mutating — the response lists everything that *would* happen plus
+    any errors. Generated passwords for new users come back in
+    `created_users`; copy them somewhere safe before closing the
+    response (they're not retrievable).
+    """
+    if not user.is_super_admin:
+        raise HTTPException(status_code=403, detail="Bulk import requires super_admin")
+    return await run_import(payload, db)
 
 
 @router.post("/communities/build", response_model=BuildCommunitiesResponse)

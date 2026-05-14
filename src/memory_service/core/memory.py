@@ -735,6 +735,44 @@ class GraphView:
     edges: list[GraphEdge]
 
 
+async def drop_namespace_graph(raw_namespace: str) -> bool:
+    """Drop the FalkorDB graph backing `raw_namespace`. Idempotent.
+
+    Used when an org/group is deleted at the SQL layer — without this,
+    the per-namespace graph hangs around in FalkorDB as orphan data
+    (still searchable by anyone re-creating the same slug, which is a
+    nasty data-leak surprise).
+
+    Returns True if the graph existed and was dropped, False otherwise.
+    Never raises — graph cleanup is best-effort.
+    """
+    try:
+        ns = parse(raw_namespace)
+    except NamespaceError:
+        return False
+    settings = __import__(
+        "memory_service.config", fromlist=["get_settings"]
+    ).get_settings()
+    try:
+        import falkordb
+
+        client = falkordb.FalkorDB(
+            host=settings.falkordb_host,
+            port=settings.falkordb_port,
+            password=settings.falkordb_password,
+        )
+        # GRAPH.DELETE is idempotent in FalkorDB on missing keys (errors
+        # quietly), but the python client raises — swallow it.
+        encoded = ns.as_graphiti_group_id()
+        if encoded not in client.list_graphs():
+            return False
+        client.select_graph(encoded).delete()
+        return True
+    except Exception as exc:
+        _logger.warning("drop_namespace_graph(%s) failed: %s", raw_namespace, exc)
+        return False
+
+
 def _driver_for_namespace(client: Any, ns: Namespace):  # type: ignore[no-untyped-def]
     """Return a Graphiti driver bound to the FalkorDB graph backing `ns`.
 
