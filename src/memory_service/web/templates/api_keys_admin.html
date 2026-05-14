@@ -53,7 +53,10 @@
           </td>
           <td>
             <template x-if="!k.revoked">
-              <button class="danger" @click="revoke(k)">Disable</button>
+              <button class="danger" @click="setRevoked(k, true)">Disable</button>
+            </template>
+            <template x-if="k.revoked">
+              <button class="secondary" @click="setRevoked(k, false)">Enable</button>
             </template>
           </td>
         </tr>
@@ -82,10 +85,14 @@
       filtered() {
         return this.hideRevoked ? this.keys.filter(k => !k.revoked) : this.keys;
       },
-      async revoke(k) {
-        if (!confirm(`Disable key '${k.agent_name}' belonging to ${k.user_email}?`)) return;
+      async setRevoked(k, revoked) {
+        const verb = revoked ? "Disable" : "Re-enable";
+        if (!confirm(`${verb} key '${k.agent_name}' belonging to ${k.user_email}?`)) return;
         try {
-          await window.ms.fetch(`/v1/admin/api-keys/${k.id}`, { method: "DELETE" });
+          await window.ms.json(`/v1/admin/api-keys/${k.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({ revoked }),
+          });
           await this.load();
         } catch (e) { this.error = e.message; }
       },

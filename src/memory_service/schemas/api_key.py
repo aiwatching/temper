@@ -33,3 +33,9 @@ class AdminAPIKeyListItem(APIKeyResponse):
     user_id: str
     user_email: str
     user_username: str | None
+
+
+class APIKeyUpdateRequest(BaseModel):
+    """super_admin toggles a key's revoked state. The auth path filters
+    on `revoked=False`, so flipping back to False reactivates the key."""
+    revoked: bool

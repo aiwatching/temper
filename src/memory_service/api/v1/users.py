@@ -14,6 +14,7 @@ from memory_service.schemas.api_key import (
     AdminAPIKeyListItem,
     APIKeyCreatedResponse,
     APIKeyResponse,
+    APIKeyUpdateRequest,
     CreateAPIKeyRequest,
 )
 
@@ -115,3 +116,41 @@ async def admin_revoke_api_key(key_id: str, user: CurrentUser, db: DBDep) -> Non
     api_key.revoked = True
     await db.commit()
     return None
+
+
+@admin_router.patch("/{key_id}", response_model=AdminAPIKeyListItem)
+async def admin_set_api_key_revoked(
+    key_id: str,
+    payload: APIKeyUpdateRequest,
+    user: CurrentUser,
+    db: DBDep,
+) -> AdminAPIKeyListItem:
+    """super_admin toggles revoked on/off. Use this to re-enable a key
+    that was previously disabled — the plaintext is unchanged, so any
+    agent still holding it works again on the next request."""
+    if not user.is_super_admin:
+        raise HTTPException(status_code=403, detail="Only super_admin")
+    row = (
+        await db.execute(
+            select(APIKey, User)
+            .join(User, User.id == APIKey.user_id)
+            .where(APIKey.id == key_id)
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+    api_key, owner = row
+    api_key.revoked = payload.revoked
+    await db.commit()
+    await db.refresh(api_key)
+    return AdminAPIKeyListItem(
+        id=api_key.id,
+        agent_name=api_key.agent_name,
+        prefix=api_key.prefix,
+        revoked=api_key.revoked,
+        created_at=api_key.created_at,
+        last_used_at=api_key.last_used_at,
+        user_id=owner.id,
+        user_email=owner.email,
+        user_username=owner.username,
+    )
