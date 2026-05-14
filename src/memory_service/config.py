@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     # SSO invite norms. Operators with stricter SLOs can shorten this.
     invite_ttl_hours: int = 24
 
+    # On first boot (empty users table), auto-create a default super_admin
+    # so operators don't have to find a setup wizard. Disable in deploys
+    # that bootstrap via /v1/auth/setup/initial-admin or a config job.
+    create_default_admin: bool = True
+    default_admin_email: str = "admin@example.com"
+    default_admin_password: str = "admin"
+
     # --- PostgreSQL ---
     database_url: str = "postgresql+asyncpg://memory:memory@localhost:5432/memory_service"
 

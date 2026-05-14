@@ -49,12 +49,20 @@ async def _ensure_schema_for_test() -> None:
 
 
 async def _run_bootstrap() -> None:
-    """Promote BOOTSTRAP_SUPER_ADMIN_EMAIL on startup if that user exists."""
-    from memory_service.core.bootstrap import promote_bootstrap_super_admin
+    """Run the order-sensitive startup bootstrap chain:
+
+    1. Seed default admin (only fires on empty DB).
+    2. Promote BOOTSTRAP_SUPER_ADMIN_EMAIL if that user already exists.
+    """
+    from memory_service.core.bootstrap import (
+        create_default_admin_if_empty,
+        promote_bootstrap_super_admin,
+    )
 
     settings = get_settings()
     db = get_database()
     async for session in db.session():
+        await create_default_admin_if_empty(settings, session)
         await promote_bootstrap_super_admin(settings, session)
         break
 

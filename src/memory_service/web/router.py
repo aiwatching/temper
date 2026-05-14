@@ -49,6 +49,13 @@ async def admin_users(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "users.html", {"title": "Users", "wide": True})
 
 
+@router.get("/admin/change-password", response_class=HTMLResponse, include_in_schema=False)
+async def admin_change_password(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "change_password.html", {"title": "Change password"}
+    )
+
+
 @router.get("/admin/me", response_class=HTMLResponse, include_in_schema=False)
 async def admin_me(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "me.html", {"title": "Account"})

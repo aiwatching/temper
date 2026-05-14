@@ -11,13 +11,50 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from memory_service.config import Settings
+from memory_service.core.auth import hash_password
 from memory_service.models import User
 
 _logger = logging.getLogger(__name__)
+
+
+async def create_default_admin_if_empty(
+    settings: Settings, session: AsyncSession
+) -> None:
+    """If `create_default_admin` is True AND the users table is empty,
+    seed the configured default super_admin with `must_change_password`
+    set so the operator is forced to pick their own password on first
+    login. Idempotent — does nothing once any user exists.
+
+    Logs the default credentials prominently (WARNING level) so a fresh
+    deploy doesn't leave the operator guessing.
+    """
+    if not settings.create_default_admin:
+        return
+    count = (await session.execute(select(func.count(User.id)))).scalar_one()
+    if count > 0:
+        return
+
+    email = settings.default_admin_email.strip().lower()
+    user = User(
+        email=email,
+        password_hash=hash_password(settings.default_admin_password),
+        display_name="Default Admin",
+        is_super_admin=True,
+        is_active=True,
+        must_change_password=True,
+    )
+    session.add(user)
+    await session.commit()
+    _logger.warning(
+        "Seeded default super_admin: email=%s password=%s — "
+        "CHANGE THIS IMMEDIATELY on first login (UI will force you to).",
+        email,
+        settings.default_admin_password,
+    )
 
 
 async def promote_bootstrap_super_admin(settings: Settings, session: AsyncSession) -> None:

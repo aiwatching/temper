@@ -38,6 +38,9 @@ class User(Base, UUIDPKMixin, TimestampMixin):
     is_super_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_org_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Set when the account ships with a default / reset password — the
+    # user can log in but is force-routed to the change-password screen.
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Invite flow. Populated when admin creates the user; cleared when
     # the user accepts the invite. Token is the random URL-safe string

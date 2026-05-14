@@ -17,6 +17,7 @@ from memory_service.core.bootstrap import is_bootstrap_super_admin
 from memory_service.models import User
 from memory_service.schemas.auth import (
     AcceptInviteRequest,
+    ChangePasswordRequest,
     InitialAdminRequest,
     LoginRequest,
     RegisterRequest,
@@ -155,6 +156,36 @@ async def login(payload: LoginRequest, db: DBDep, settings: SettingsDep) -> Toke
         )
     token, expires_at = issue_session_token(user.id, settings)
     return TokenResponse(access_token=token, expires_at=expires_at)
+
+
+@router.post(
+    "/change-password", status_code=status.HTTP_204_NO_CONTENT
+)
+async def change_password(
+    payload: ChangePasswordRequest, user: CurrentUser, db: DBDep
+) -> None:
+    """Self-service password change.
+
+    Requires the current password (defends against session hijack
+    setting a new password the legit user doesn't know). Clears
+    `must_change_password` on success so the UI lets the user proceed.
+    """
+    if user.password_hash is None or not verify_password(
+        payload.old_password, user.password_hash
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current password is incorrect",
+        )
+    if payload.new_password == payload.old_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must differ from current",
+        )
+    user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
+    await db.commit()
+    return None
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

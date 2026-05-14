@@ -112,9 +112,19 @@
         localStorage.removeItem("ms_email");
         location.href = "/admin";
       });
-      // Fetch role for the badge — non-blocking.
+      // Fetch role for the badge — non-blocking. Also force-redirect
+      // any logged-in account flagged must_change_password to the
+      // change-password page so they can't navigate elsewhere first.
       window.ms.json("/v1/auth/me").then(me => {
         window.ms.me = me;
+        if (
+          me.must_change_password === true
+          && location.pathname !== "/admin/change-password"
+          && location.pathname !== "/admin/login"
+        ) {
+          location.href = "/admin/change-password";
+          return;
+        }
         const role = me.is_super_admin ? "super_admin"
                    : me.is_org_admin   ? "org_admin"
                    : me.org_id         ? "member"

@@ -31,7 +31,13 @@ class UserResponse(BaseModel):
     is_super_admin: bool
     is_org_admin: bool
     is_active: bool = True
+    must_change_password: bool = False
     created_at: datetime
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class InitialAdminRequest(BaseModel):
