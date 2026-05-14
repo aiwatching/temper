@@ -140,7 +140,7 @@ fact too (cross-agent).
 `;
 
 const MAX_RECALL_HITS = 5;
-const MAX_RECENT_EPISODES = 5;
+const MAX_SOURCE_EPISODES = 3;  // raw content cross-check, only for cited hits
 
 function formatHits(hits: SearchHit[]): string {
   if (hits.length === 0) return "  (no fact hits)";
@@ -155,35 +155,49 @@ function formatHits(hits: SearchHit[]): string {
     .join("\n");
 }
 
-async function fetchRecentEpisodesWithContent(
+/**
+ * Fetch raw content for the source episodes of the cited fact hits.
+ *
+ * Why: Graphiti's entity-summary extraction occasionally flips agency
+ * (e.g. "user wants to call me X" → entity summary "user wants to be
+ * called X"). Showing the LLM the raw episode text alongside the fact
+ * lets it ground-truth check.
+ *
+ * Why NOT "last N episodes regardless of query": unconditional context
+ * leaks every fact into every turn (user asks about scheduling a daily
+ * report → smith mentions the user's nickname out of nowhere). By only
+ * fetching episodes that fact-search actually cited, the LLM sees raw
+ * content ONLY for things relevant to this turn.
+ */
+async function fetchSourceEpisodes(
   t: Temper,
-  namespace: string,
+  hits: SearchHit[],
   limit: number,
 ): Promise<Array<{ ep: EpisodeSummary; content: string }>> {
-  // Need content (which isn't in the list response), so fetch detail
-  // for each — N+1 but small N. The list endpoint is paged by `before`,
-  // so we walk the most recent ones.
-  const summaries = await t.listEpisodes({ namespace, limit });
-  const detailed = await Promise.all(
-    summaries.map(async (ep) => {
+  const seen = new Set<string>();
+  for (const h of hits) {
+    for (const id of h.source_episode_ids ?? []) seen.add(id);
+    if (seen.size >= limit) break;
+  }
+  const ids = [...seen].slice(0, limit);
+  return Promise.all(
+    ids.map(async (id) => {
       try {
-        const detail = await t.getEpisode(ep.episode_id);
-        return { ep, content: detail.content };
+        const detail = await t.getEpisode(id);
+        return { ep: detail as EpisodeSummary, content: detail.content };
       } catch {
-        return { ep, content: "(content fetch failed)" };
+        return null;
       }
     }),
-  );
-  return detailed;
+  ).then((rows) => rows.filter((r): r is { ep: EpisodeSummary; content: string } => r !== null));
 }
 
 function formatEpisodes(items: Array<{ ep: EpisodeSummary; content: string }>): string {
-  if (items.length === 0) return "  (no recent episodes)";
+  if (items.length === 0) return "";
   return items
     .map(({ ep, content }, i) => {
       const when = ep.reference_time ?? ep.created_at;
       const tags = ep.tags?.length ? ` [${ep.tags.join(", ")}]` : "";
-      // Trim noisy whitespace, cap length so the prompt doesn't explode.
       const trimmed = content.replace(/\s+/g, " ").trim().slice(0, 240);
       return `  ${i + 1}. (${when}${tags}) ${trimmed}`;
     })
@@ -212,19 +226,12 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
         const ownScope = `agent:me/${cfg.smithAgentSlug}`;
 
         // Search the two relevant scopes SEPARATELY and merge.
-        // Temper ranks across all requested namespaces into a single
-        // top-N list, so a noisy / high-volume namespace (typically
-        // user:me with months of cross-agent context) crowds out a
-        // sparse one (this agent's own writes). Two queries → merge
-        // → dedup gives Smith's own scope guaranteed airtime.
-        //
-        // Also pull recent RAW episode content from this agent's
-        // scope: Graphiti's fact extraction occasionally flips
-        // agency (e.g. "user wants to call me X" → entity summary
-        // "user wants to be called X"). Showing both the extracted
-        // facts AND the original episode wording lets the LLM
-        // ground-truth check before answering.
-        const [userHits, agentHits, recentOwn] = await Promise.all([
+        // Temper's default search ranks across all requested namespaces
+        // into a single top-N list, so a noisy / high-volume namespace
+        // (typically user:me with months of cross-agent context) crowds
+        // out a sparse one (this agent's own writes). Two queries →
+        // merge → dedup gives Smith's own scope guaranteed airtime.
+        const [userHits, agentHits] = await Promise.all([
           t.search({
             query: event.prompt,
             limit: MAX_RECALL_HITS,
@@ -235,8 +242,6 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
             limit: MAX_RECALL_HITS,
             namespaces: [ownScope],
           }).catch(() => [] as SearchHit[]),
-          fetchRecentEpisodesWithContent(t, ownScope, MAX_RECENT_EPISODES)
-            .catch(() => [] as Array<{ ep: EpisodeSummary; content: string }>),
         ]);
 
         // Dedup hits by fact text — Graphiti often returns both a
@@ -250,25 +255,37 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
           hits.push(h);
         }
 
-        const factsSection = formatHits(hits);
-        const recentSection = formatEpisodes(recentOwn);
+        if (hits.length === 0) {
+          // Nothing relevant — DO NOT inject anything. Leakage
+          // prevention: unconditional context (e.g. "last N episodes
+          // in agent: scope") would make smith randomly volunteer
+          // memories on unrelated questions.
+          console.log(`[smith] auto-recall: 0 hits for "${event.prompt.slice(0, 50)}"`);
+        } else {
+          // Pull source episodes ONLY for the cited hits — gives
+          // raw content cross-check without leaking everything else.
+          const sourceEps = await fetchSourceEpisodes(t, hits, MAX_SOURCE_EPISODES)
+            .catch(() => [] as Array<{ ep: EpisodeSummary; content: string }>);
 
-        recallBlock =
-          "\n═══ Memory recall (auto-retrieved for this turn) ═══\n\n" +
-          "EXTRACTED FACTS (semantic search; Graphiti's extraction may\n" +
-          "occasionally flip agency or lose nuance — cross-check against\n" +
-          "the raw episodes below before answering):\n" +
-          factsSection +
-          "\n\n" +
-          `RECENT EPISODES in your own scope (${ownScope}, raw content):\n` +
-          recentSection +
-          "\n";
+          recallBlock =
+            "\n═══ Memory recall (auto-retrieved for this turn) ═══\n\n" +
+            "Relevant FACTS from memory (Graphiti's extraction may\n" +
+            "flip agency or lose nuance — when in doubt, defer to the\n" +
+            "source episodes below):\n" +
+            formatHits(hits);
+          if (sourceEps.length > 0) {
+            recallBlock +=
+              "\n\nSource EPISODES for the cited facts (raw content):\n" +
+              formatEpisodes(sourceEps);
+          }
+          recallBlock += "\n";
 
-        console.log(
-          `[smith] auto-recall: ${hits.length} fact hits + ${recentOwn.length} recent episodes for "${event.prompt.slice(0, 50)}"`,
-        );
-        for (const [i, h] of hits.entries()) {
-          console.log(`  fact ${i + 1}. ${h.fact ?? h.name ?? "(no fact)"}`);
+          console.log(
+            `[smith] auto-recall: ${hits.length} hits + ${sourceEps.length} source eps for "${event.prompt.slice(0, 50)}"`,
+          );
+          for (const [i, h] of hits.entries()) {
+            console.log(`  ${i + 1}. ${h.fact ?? h.name ?? "(no fact)"}`);
+          }
         }
       } catch (e) {
         console.warn(`[smith] auto-recall failed: ${(e as Error).message} — proceeding without it`);
