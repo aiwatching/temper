@@ -1,0 +1,30 @@
+{
+  "name": "smith",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Personal company-level agent. Memory in TEMPER (HTTP), tool loop in pi-coding-agent, enterprise integration via MCP.",
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.74.0",
+    "@earendil-works/pi-ai": "^0.74.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "hono": "^4.6.0",
+    "@hono/node-server": "^1.13.0",
+    "dotenv": "^16.4.0",
+    "typebox": "^0.34.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^20.11.0"
+  }
+}

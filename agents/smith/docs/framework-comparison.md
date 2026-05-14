@@ -1,136 +1,72 @@
-# Agent framework — comparison for Smith
+# Agent framework — decision
 
-Pending decision before we replace the placeholder in `smith.agent`.
-Our constraints are concrete:
+**Decision: pi-coding-agent (TypeScript).**
 
-- LLM tool-use loop driving a long-running process.
-- **Heavy MCP** — most company internal systems already speak it.
-- **TEMPER** for memory; nothing else owns long-term state.
-- Hand-roll-friendly team — we don't want a framework whose magic we
-  can't read in an afternoon.
+Recorded 2026-05-14. Replaces an earlier draft that compared the
+public agent ecosystem.
 
-## Honest preface
+## Why pi-coding-agent
 
-The user mentioned **`pi-agent`** as a starting point. I (Claude) don't
-recognise that name in the public ecosystem. If it's an internal
-framework, please share the repo / wiki link before we decide —
-adopting it makes huge sense if (a) your company already maintains it
-and (b) it's MCP-aware. The rest of this doc covers the public-
-ecosystem alternatives in case `pi-agent` doesn't fit or doesn't exist.
+- The user's company already builds on it (**openclaw**, **harness** are
+  pi-coding-agent based). Sharing the substrate means Smith inherits
+  the team's hard-won bug list, extension patterns, and operational
+  habits instead of re-discovering them on a parallel stack.
+- MIT, self-hostable, ~50k GitHub stars, weekly releases — mature
+  enough to bet on but pre-1.0 so expect breaking changes.
+- Multi-LLM out of the box (`pi-ai`: Anthropic, OpenAI, DeepSeek,
+  Google, Mistral, OpenRouter, local vLLM, etc.). Matches TEMPER's
+  multi-provider stance.
+- "Primitives, not features" — pi gives us Session / Tool / Extension
+  / ResourceLoader and gets out of the way. Less framework magic to
+  unlearn than LangGraph.
 
-## Candidates
+## Trade-offs we accepted
 
-### A. Hand-roll a minimal loop
+- **TypeScript only.** Smith's runtime can't import `memory_service`
+  directly — has to go through TEMPER's HTTP API. We chose this design
+  earlier (Smith as Temper client) so the language switch costs us
+  nothing structural; we just rewrote ~200 lines of Python scaffold in
+  TS.
+- **pi has no built-in MCP.** Author's deliberate stance — see
+  https://mariozechner.at/posts/2025-11-02-what-if-you-dont-need-mcp/.
+  This is the biggest non-obvious thing. Since we have company-wide
+  MCP infrastructure, we wrote `src/extensions/mcp-bridge.ts`: at
+  startup it connects to every server in `MCP_SERVERS`, lists each
+  server's tools, and registers them as pi tools (`<server>__<tool>`).
+  Tools schema comes from MCP as JSON-Schema; we wrap with
+  `Type.Unsafe<...>` to satisfy pi's TSchema-typed `parameters`.
+- **TypeBox for tool schemas.** Different mental model from Zod / raw
+  JSON-Schema. We use `Type.*` builders for first-party tools and
+  `Type.Unsafe` for MCP-passthrough.
+- **Sub-1.0 SDK.** pi-coding-agent version moves fast. We pin a minor
+  range in `package.json` and read CHANGELOG before bumping.
 
-What it is: ~150 lines of Python around `anthropic` or `openai` SDK.
-Pseudocode:
+## Options we passed on
 
-```python
-tools = [memory_write_spec, memory_search_spec, *mcp_tool_specs]
-messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": msg}]
-while True:
-    rsp = client.messages.create(messages, tools=tools)
-    if rsp.stop_reason == "end_turn":
-        return rsp.content[-1].text
-    for tu in rsp.content:
-        if tu.type == "tool_use":
-            result = await dispatch(tu.name, tu.input)
-            messages.append({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tu.id, "content": result}]})
-```
+Listed for posterity / future revisits.
 
-- **Pros**: every line is yours; framework upgrade churn = zero; trivial
-  to interop with anything; smallest possible surface to debug.
-- **Cons**: you write everything yourself — streaming, parallel tool
-  calls, retries, traces, MCP plumbing. Not a lot, but it's not
-  *nothing*.
-- **MCP fit**: bring your own. The official `mcp` Python SDK gives you
-  `Client` + `list_tools()` + `call_tool()` — adapting that into our
-  tool spec is ~30 lines.
+- **Anthropic Claude Agent SDK** — strongest native MCP support but
+  Claude-only. Would need a separate adapter for the team's non-Claude
+  models, and we'd lose pi alignment with openclaw/harness.
+- **OpenAI Agents SDK** — clean API but OpenAI-first; MCP feels
+  grafted on. Pass.
+- **Pydantic AI** — solid type-safety and pydantic alignment with
+  TEMPER. Strong second choice if pi-coding-agent had been a dead-end.
+- **LangGraph** — overkill for an MVP chat loop. Revisit if Smith
+  grows into multi-step branching workflows.
+- **Hand-roll** — every line yours; zero framework upgrade churn. Pass
+  because pi gives us session / compaction / extension primitives we'd
+  end up writing ourselves.
 
-### B. Anthropic Claude Agent SDK (`claude-agent-sdk` / `anthropic-claude-code` core)
+## Architectural shape Smith adopts from pi
 
-What it is: Anthropic's official, MCP-native agent framework. Same
-core that powers Claude Code.
+Direct mapping pi concept → Smith file:
 
-- **Pros**: best-in-class MCP support (Anthropic basically maintains
-  MCP); built-in tool loop with streaming + parallel calls + auto
-  retries; first-class Claude features (extended thinking, prompt
-  caching). Stable.
-- **Cons**: tied to Anthropic models. If your company is mixed
-  (e.g. some Deepseek / OpenAI / Azure), you'd want a thin layer
-  for non-Anthropic providers anyway.
-- **MCP fit**: ⭐ native. Point it at an MCP server URL, tools show
-  up. Probably the lowest-friction option for the MCP-everywhere story.
-- **Verdict**: the strongest match for our constraints **if you're
-  OK standardising on Claude**.
-
-### C. OpenAI Agents SDK (`openai-agents`)
-
-What it is: OpenAI's official agent loop with handoffs, traces, and
-guardrails. ([Repo](https://github.com/openai/openai-agents-python).)
-
-- **Pros**: clean API; traces work out of the box; `Agent`/`Runner`/
-  `Handoff` primitives compose well; multiple-LLM support via
-  third-party "model adapters."
-- **Cons**: OpenAI-first; MCP is supported but feels grafted on
-  compared to Anthropic. If your LLM is Claude, you're paying for
-  an adapter layer you don't need.
-- **MCP fit**: ✓ supported via `MCPServer` config but less native.
-- **Verdict**: pick if your company's primary LLM is OpenAI.
-
-### D. Pydantic AI
-
-What it is: type-safe agent framework from the pydantic folks. Multi-
-provider out of the box (OpenAI, Anthropic, Gemini, Groq, Ollama,
-many more).
-
-- **Pros**: provider-agnostic from day one — easy to swap LLM in/out;
-  pydantic-native (good fit since TEMPER is also pydantic-heavy);
-  smaller surface than LangGraph; type checking actually helps catch
-  tool-spec drift.
-- **Cons**: smaller community than the big two; MCP support is solid
-  but the docs are sparser than Anthropic's.
-- **MCP fit**: ✓ has `MCPServerStdio` / `MCPServerHTTP` adapters.
-- **Verdict**: strong choice if you want to keep LLM swappable and
-  type-safety matters more than the absolute newest Claude features.
-
-### E. LangGraph
-
-What it is: graph-based orchestration on top of LangChain.
-
-- **Pros**: very flexible for multi-step / branching agents; nice
-  observability with LangSmith; mature MCP integration.
-- **Cons**: significant cognitive load; graph DSL is a real concept to
-  learn; LangChain dependency surface is wide.
-- **Verdict**: probably overkill for an MVP. Revisit when Smith grows
-  beyond a single chat loop into multi-step workflows.
-
-## Recommendation matrix
-
-| Priority for Smith                  | Pick     |
-|-------------------------------------|----------|
-| Smallest surface area               | A        |
-| MCP-native + Claude-only            | B        |
-| Provider-agnostic + type-safe       | D        |
-| OpenAI-only company                 | C        |
-| Future-proof for multi-step graphs  | E        |
-
-## My lean
-
-Given the user's stated context (heavy MCP, mixed reality on LLM
-provider since TEMPER itself does provider switching, "hand-roll
-friendly"), the call is between **A** and **D**:
-
-- **A (hand-roll)** if we treat Smith's tool loop as a learning
-  exercise and want every line in our control. Lowest dependency
-  churn over a year.
-- **D (Pydantic AI)** if we want to ship faster and keep LLM
-  swappable. The pydantic alignment with TEMPER is a real ergonomic
-  win.
-
-If `pi-agent` is an internal company framework and it's MCP-aware,
-that probably beats both — please share what it is.
-
-## Decision
-
-(Fill in after discussion.)
+| pi concept | Smith code | Purpose |
+|---|---|---|
+| `Session` (`createAgentSession`) | `src/session-manager.ts` | one per conversation_id |
+| `Tool` (`defineTool` / `pi.registerTool`) | `src/extensions/*.ts` | memory_* + MCP-bridged tools |
+| `ExtensionContext` factories | `src/session-manager.ts` `extensionFactories` | wire tools at session create |
+| `AuthStorage` + `ModelRegistry` | `src/session-manager.ts` private fields | LLM credentials |
+| `getModel(provider, id)` from `pi-ai` | `src/session-manager.ts` `getOrCreate` | resolve config → Model |
+| `SessionManager.inMemory()` | `src/session-manager.ts` | session repo (MVP) |
