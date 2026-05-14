@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title or "Memory Service" }}</title>
+  <title>{{ title or "TEMPER · Memory Service" }}</title>
   <link rel="stylesheet" href="/admin/static/style.css">
   <script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
 </head>
@@ -14,7 +14,10 @@
     <div class="brand">
       <a href="/admin">
         <span class="logo">●</span>
-        <span class="brand-text">Memory<br><small>Service</small></span>
+        <span class="brand-text">
+          <strong style="letter-spacing:0.12em">TEMPER</strong><br>
+          <small style="opacity:0.7">Memory Service</small>
+        </span>
       </a>
     </div>
 
@@ -199,17 +202,19 @@
     {% if bare %}
       <div class="auth-card">
         <div class="auth-brand">
-          <span class="logo">●</span> Memory Service
+          <span class="logo">●</span>
+          <strong style="letter-spacing:0.12em">TEMPER</strong>
+          <span style="opacity:0.55; font-weight:normal; margin-left:6px">· Memory Service</span>
         </div>
         {% block content %}{% endblock %}
       </div>
     {% else %}
       <header class="page-header">
-        <h1>{{ title or "Memory Service" }}</h1>
+        <h1>{{ title or "TEMPER · Memory Service" }}</h1>
       </header>
       {{ self.content() }}
       <footer>
-        <small>v0.1.0 · Memory Service</small>
+        <small>TEMPER v0.5 · Memory Service</small>
       </footer>
     {% endif %}
   </main>
