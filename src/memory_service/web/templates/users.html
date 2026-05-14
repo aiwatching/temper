@@ -4,8 +4,9 @@
   <h2>Users</h2>
   <p style="color:var(--muted)">
     super_admin sees everyone; org_admin sees their own org's users.
-    To onboard someone, click <strong>+ Add user</strong>, then copy
-    the invite link the server hands back and send it via whatever
+    To onboard someone, click <strong>+ Add user</strong> — the server
+    creates the account with a default starter password (forced to be
+    changed on first login). Tell the user the password through any
     channel you trust.
   </p>
 
@@ -117,17 +118,22 @@
     </div>
   </template>
 
-  <template x-if="lastInvite">
+  <template x-if="lastCredentials">
     <div class="card" style="margin-top:16px; border:2px solid var(--accent)">
-      <h3>Invite link for <code x-text="lastInvite.email"></code></h3>
+      <h3>User created — share these credentials</h3>
       <p style="color: var(--muted); font-size: 12px">
-        Send this URL to the user — it lets them set their password and
-        sign in. Expires at <span x-text="window.ms.fmtDate(lastInvite.expires_at)"></span>.
+        Tell <code x-text="lastCredentials.email"></code> they can sign in with the
+        password below. They'll be forced to change it on first login.
       </p>
-      <code class="token" x-text="lastInvite.url"></code>
+      <table style="margin:8px 0">
+        <tr><th style="width:160px">Login</th>
+            <td><code x-text="lastCredentials.username || lastCredentials.email"></code></td></tr>
+        <tr><th>Starter password</th>
+            <td><code class="token" x-text="lastCredentials.password"></code></td></tr>
+      </table>
       <p>
-        <button class="secondary" @click="copy(lastInvite.url)">Copy</button>
-        <button class="secondary" @click="lastInvite = null">Dismiss</button>
+        <button class="secondary" @click="copy(lastCredentials.password)">Copy password</button>
+        <button class="secondary" @click="lastCredentials = null">Dismiss</button>
       </p>
     </div>
   </template>
@@ -218,7 +224,7 @@
       showCreate: false, creating: false,
       form: {email:"", username:"", display_name:"", org_slug:"", groups_text:"",
              is_org_admin:false, is_super_admin:false},
-      lastInvite: null,
+      lastCredentials: null,
       resetTarget: null, resetMode: "link", resetPwd: "", resetting: false,
       resetResult: null,
       async load() {
@@ -247,10 +253,10 @@
         };
         try {
           const r = await window.ms.json("/v1/users", {method: "POST", body: JSON.stringify(body)});
-          this.lastInvite = {
+          this.lastCredentials = {
             email: r.user.email,
-            url: `${location.origin}${r.invite.accept_path}?token=${encodeURIComponent(r.invite.token)}`,
-            expires_at: r.invite.expires_at,
+            username: r.user.username,
+            password: r.default_password,
           };
           this.showCreate = false;
           this.form = {email:"", username:"", display_name:"", org_slug:"", groups_text:"",

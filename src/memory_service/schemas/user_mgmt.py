@@ -34,6 +34,9 @@ class InviteInfo(BaseModel):
 
     The URL itself is left for the client to assemble — server doesn't
     know its own external hostname reliably. Token + path is enough.
+
+    Only used by the legacy invite-link flow (now opt-in). The default
+    flow gives the user a starter password + force-change instead.
     """
     token: str
     accept_path: str = "/admin/accept-invite"
@@ -42,7 +45,10 @@ class InviteInfo(BaseModel):
 
 class CreateUserResponse(BaseModel):
     user: "UserListItem"
-    invite: InviteInfo
+    # The starter password the admin should tell the new user. Forced
+    # to be changed on first login. Server-side this matches
+    # settings.default_new_user_password — echoed for admin convenience.
+    default_password: str
 
 
 class UserListItem(BaseModel):

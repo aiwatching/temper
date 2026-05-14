@@ -88,6 +88,12 @@ class Settings(BaseSettings):
     default_admin_username: str = "admin"
     default_admin_password: str = "admin"
 
+    # Default password handed to every admin-created user. Since this
+    # service doesn't send email, the admin tells the new user the
+    # password out-of-band; the user is force-changed on first login.
+    # Override if your org has a stricter "starter password" policy.
+    default_new_user_password: str = "12345678"
+
     # --- PostgreSQL ---
     database_url: str = "postgresql+asyncpg://memory:memory@localhost:5432/memory_service"
 

@@ -29,6 +29,7 @@ class TokenResponse(BaseModel):
 class UserResponse(BaseModel):
     id: str
     email: EmailStr
+    username: str | None = None
     display_name: str | None
     org_id: str | None
     is_super_admin: bool

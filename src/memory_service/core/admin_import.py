@@ -147,12 +147,18 @@ async def run_import(payload: BulkImportRequest, db: AsyncSession) -> BulkImport
         elif payload.dry_run:
             user_obj = None  # plan only
         else:
-            password = u.password or _gen_password()
+            # Default-password flow (matches POST /v1/users behavior):
+            # use settings.default_new_user_password unless the caller
+            # supplied an explicit one. Force change on first login.
+            from memory_service.config import get_settings
+
+            password = u.password or get_settings().default_new_user_password
             user_obj = User(
                 email=u.email,
                 display_name=u.display_name,
                 password_hash=hash_password(password),
                 is_super_admin=False,
+                must_change_password=True,
             )
             db.add(user_obj)
             await db.flush()  # need user.id for memberships

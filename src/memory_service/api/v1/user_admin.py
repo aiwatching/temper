@@ -171,19 +171,24 @@ async def create_user(
                 status_code=409, detail=f"Username {requested_username!r} already taken",
             )
 
-    token = _gen_invite_token()
-    expires_at = _invite_expires()
+    # Default-password flow: hash the configured starter password,
+    # mark must_change_password so the user is force-routed to the
+    # change-password screen on first login. No invite token because
+    # we'd have no way to send the URL (no SMTP integration). The admin
+    # tells the user the starter password through whatever channel
+    # they trust.
+    settings = get_settings()
+    default_pw = settings.default_new_user_password
     u = User(
         email=payload.email,
         username=requested_username,
         display_name=payload.display_name,
-        password_hash=None,  # set by accept-invite
+        password_hash=hash_password(default_pw),
         org_id=target_org_id,
         is_super_admin=payload.is_super_admin,
         is_org_admin=payload.is_org_admin,
         is_active=True,
-        invite_token=token,
-        invite_token_expires_at=expires_at,
+        must_change_password=True,
         invited_by_user_id=actor.id,
     )
     db.add(u)
@@ -195,7 +200,7 @@ async def create_user(
 
     return CreateUserResponse(
         user=await _serialize_user(db, u),
-        invite=InviteInfo(token=token, expires_at=expires_at),
+        default_password=default_pw,
     )
 
 
