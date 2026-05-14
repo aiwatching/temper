@@ -57,14 +57,38 @@ export function buildApp(): Hono {
     const pool = getSessionPool();
     const session = await pool.getOrCreate(conversationId);
 
-    // Collect streamed assistant text; pi delivers it via subscribe()
-    // events of type "text_delta". We buffer the whole turn for the MVP
-    // and return one JSON; SSE upgrade lives in a follow-up.
+    // Collect the assistant's final reply via `agent_end` — fires when
+    // the whole turn (including any tool roundtrips) is done and carries
+    // the complete message transcript. `text_delta` events also stream
+    // for short replies, but the model often emits no delta when a turn
+    // is dominated by tool calls; reading from the final transcript
+    // is robust to both cases.
+    //
+    // SSE upgrade will switch to streaming `text_delta` directly through
+    // the response body; agent_end stays as the close signal.
+    // Pull reply + any provider-level error out of the final agent_end.
+    // pi's `prompt()` resolves cleanly even when Anthropic / OpenAI / etc
+    // returned a 4xx — the failure shows up as `stopReason: "error"` on
+    // the last assistant message with the detail in `errorMessage`.
+    // Surface it explicitly so the caller doesn't get a silent empty reply.
     let reply = "";
-    // biome-ignore lint: pi's event types are still moving — typed locally.
+    let stopReason: string | undefined;
+    let errorMessage: string | undefined;
+    // biome-ignore lint: pi's event union is wide — typed locally.
     const unsubscribe = session.subscribe((e: any) => {
-      if (e?.type === "message_update" && e.assistantMessageEvent?.type === "text_delta") {
-        reply += String(e.assistantMessageEvent.delta ?? "");
+      if (e?.type !== "agent_end") return;
+      const msgs: any[] = e.messages ?? [];
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const m = msgs[i];
+        if (m?.role !== "assistant") continue;
+        stopReason = m.stopReason;
+        errorMessage = m.errorMessage;
+        for (const block of m.content ?? []) {
+          if (block?.type === "text" && typeof block.text === "string") {
+            reply += block.text;
+          }
+        }
+        break;
       }
     });
     try {
@@ -72,7 +96,13 @@ export function buildApp(): Hono {
     } finally {
       unsubscribe();
     }
-    return c.json({ conversationId, reply });
+    if (stopReason === "error") {
+      return c.json(
+        { conversationId, error: errorMessage ?? "LLM error (no detail)", stopReason },
+        502,
+      );
+    }
+    return c.json({ conversationId, reply, stopReason });
   });
 
   return app;
