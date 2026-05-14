@@ -18,7 +18,7 @@
 
   <table>
     <thead><tr>
-      <th>email</th><th>name</th><th>org</th><th>role</th>
+      <th>email / username</th><th>name</th><th>org</th><th>role</th>
       <th>status</th><th>created</th><th></th>
     </tr></thead>
     <tbody>
@@ -29,6 +29,11 @@
         <tr>
           <td>
             <strong x-text="u.email"></strong>
+            <template x-if="u.username">
+              <span style="margin-left:6px; color:var(--muted-2); font-size:11px">
+                · <code x-text="u.username"></code>
+              </span>
+            </template>
             <template x-if="me?.id === u.id">
               <span class="badge entity" style="margin-left:6px">you</span>
             </template>
@@ -87,6 +92,7 @@
       <form @submit.prevent="create()" class="stacked" style="max-width:none">
         <div class="filter-grid">
           <div><label>email</label><input type="email" x-model="form.email" required></div>
+          <div><label>username (optional)</label><input type="text" x-model="form.username" placeholder="alice"></div>
           <div><label>display name</label><input type="text" x-model="form.display_name"></div>
           <div><label>org slug (optional)</label><input type="text" x-model="form.org_slug" placeholder="acme"></div>
           <div><label>groups (comma separated)</label><input type="text" x-model="form.groups_text" placeholder="engineering, product"></div>
@@ -210,7 +216,7 @@
       users: [], loading: true, error: null,
       me: null, isSuperAdmin: false,
       showCreate: false, creating: false,
-      form: {email:"", display_name:"", org_slug:"", groups_text:"",
+      form: {email:"", username:"", display_name:"", org_slug:"", groups_text:"",
              is_org_admin:false, is_super_admin:false},
       lastInvite: null,
       resetTarget: null, resetMode: "link", resetPwd: "", resetting: false,
@@ -232,6 +238,7 @@
         const groups = this.form.groups_text.split(",").map(s => s.trim()).filter(Boolean);
         const body = {
           email: this.form.email,
+          username: this.form.username || null,
           display_name: this.form.display_name || null,
           org_slug: this.form.org_slug || null,
           is_org_admin: this.form.is_org_admin,
@@ -246,7 +253,7 @@
             expires_at: r.invite.expires_at,
           };
           this.showCreate = false;
-          this.form = {email:"", display_name:"", org_slug:"", groups_text:"",
+          this.form = {email:"", username:"", display_name:"", org_slug:"", groups_text:"",
                        is_org_admin:false, is_super_admin:false};
           await this.load();
         } catch (e) { this.error = e.message; }

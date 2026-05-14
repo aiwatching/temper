@@ -29,6 +29,11 @@ class User(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "users"
 
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
+    # Optional short login handle (e.g. "admin"). Email stays the record
+    # key; username is purely an alias for the login form.
+    username: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True, default=None
+    )
     # Nullable: invited users have no password until they accept the invite.
     password_hash: Mapped[str | None] = mapped_column(String(255), default=None)
     display_name: Mapped[str | None] = mapped_column(String(255), default=None)

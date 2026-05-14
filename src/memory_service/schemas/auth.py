@@ -13,7 +13,10 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    # Accept either a full email (matched against users.email) or a
+    # short handle (matched against users.username). EmailStr would
+    # reject "admin" outright; we hand-validate further down.
+    email: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=1, max_length=128)
 
 

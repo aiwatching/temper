@@ -89,6 +89,7 @@ async def _serialize_user(db: AsyncSession, u: User) -> UserListItem:
     return UserListItem(
         id=u.id,
         email=u.email,
+        username=u.username,
         display_name=u.display_name,
         org_slug=org_slug,
         is_super_admin=u.is_super_admin,
@@ -159,10 +160,22 @@ async def create_user(
             )
         group_objs.append(g)
 
+    # Reject username collisions up-front for a friendlier error.
+    requested_username = (payload.username or "").strip().lower() or None
+    if requested_username:
+        clash = (
+            await db.execute(select(User).where(User.username == requested_username))
+        ).scalar_one_or_none()
+        if clash is not None:
+            raise HTTPException(
+                status_code=409, detail=f"Username {requested_username!r} already taken",
+            )
+
     token = _gen_invite_token()
     expires_at = _invite_expires()
     u = User(
         email=payload.email,
+        username=requested_username,
         display_name=payload.display_name,
         password_hash=None,  # set by accept-invite
         org_id=target_org_id,

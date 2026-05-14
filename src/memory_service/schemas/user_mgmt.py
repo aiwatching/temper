@@ -18,6 +18,9 @@ class CreateUserRequest(BaseModel):
     password."""
 
     email: EmailStr
+    # Optional short login handle. Email stays the record key; if you
+    # set username, the user can sign in with either.
+    username: str | None = Field(default=None, min_length=1, max_length=64)
     display_name: str | None = Field(default=None, max_length=255)
     org_slug: str | None = None
     is_org_admin: bool = False
@@ -45,6 +48,7 @@ class CreateUserResponse(BaseModel):
 class UserListItem(BaseModel):
     id: str
     email: str
+    username: str | None
     display_name: str | None
     org_slug: str | None
     is_super_admin: bool

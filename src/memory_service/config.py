@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     # that bootstrap via /v1/auth/setup/initial-admin or a config job.
     create_default_admin: bool = True
     default_admin_email: str = "admin@example.com"
+    default_admin_username: str = "admin"
     default_admin_password: str = "admin"
 
     # --- PostgreSQL ---

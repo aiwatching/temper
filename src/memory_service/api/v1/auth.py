@@ -140,7 +140,13 @@ async def accept_invite(
 
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, db: DBDep, settings: SettingsDep) -> TokenResponse:
-    stmt = select(User).where(User.email == str(payload.email).lower())
+    # Identifier can be either an email ("alice@acme.com") or a short
+    # username ("admin"). We dispatch on the presence of `@`.
+    identifier = payload.email.strip().lower()
+    if "@" in identifier:
+        stmt = select(User).where(User.email == identifier)
+    else:
+        stmt = select(User).where(User.username == identifier)
     user = (await db.execute(stmt)).scalar_one_or_none()
     if (
         not user
@@ -152,7 +158,7 @@ async def login(payload: LoginRequest, db: DBDep, settings: SettingsDep) -> Toke
         # user exists but hasn't accepted their invite yet.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
+            detail="Invalid email/username or password",
         )
     token, expires_at = issue_session_token(user.id, settings)
     return TokenResponse(access_token=token, expires_at=expires_at)

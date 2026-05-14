@@ -39,8 +39,10 @@ async def create_default_admin_if_empty(
         return
 
     email = settings.default_admin_email.strip().lower()
+    username = settings.default_admin_username.strip().lower() or None
     user = User(
         email=email,
+        username=username,
         password_hash=hash_password(settings.default_admin_password),
         display_name="Default Admin",
         is_super_admin=True,
@@ -50,8 +52,9 @@ async def create_default_admin_if_empty(
     session.add(user)
     await session.commit()
     _logger.warning(
-        "Seeded default super_admin: email=%s password=%s — "
+        "Seeded default super_admin: username=%s (email=%s) password=%s — "
         "CHANGE THIS IMMEDIATELY on first login (UI will force you to).",
+        username or "(none)",
         email,
         settings.default_admin_password,
     )
