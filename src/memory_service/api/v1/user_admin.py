@@ -29,11 +29,14 @@ from memory_service.models import (
     User,
     UserGroupMembership,
 )
+from memory_service.core.auth import hash_password
 from memory_service.schemas.user_mgmt import (
     CreateUserRequest,
     CreateUserResponse,
     InviteInfo,
     ResendInviteResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     UpdateUserRequest,
     UserListItem,
     UserListResponse,
@@ -282,6 +285,59 @@ async def resend_invite(
     await db.commit()
     return ResendInviteResponse(
         invite=InviteInfo(token=u.invite_token, expires_at=u.invite_token_expires_at)
+    )
+
+
+# ---------- reset password ----------
+
+
+@router.post("/by-id/{user_id}/reset-password", response_model=ResetPasswordResponse)
+async def reset_password(
+    user_id: str,
+    payload: ResetPasswordRequest,
+    actor: CurrentUser,
+    db: DBDep,
+) -> ResetPasswordResponse:
+    """Admin-initiated password reset.
+
+    Two modes (see ResetPasswordRequest docstring). Either way the
+    user lands with `must_change_password=true` — they'll be forced
+    to pick their own on next login.
+    """
+    u = await _user_by_id_for_admin(db, user_id)
+    if not _can_manage_user(actor, u.org_id):
+        raise HTTPException(status_code=403, detail="Not allowed")
+    if u.id == actor.id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Use /v1/auth/change-password to change your own password "
+                "(requires knowing the current one)."
+            ),
+        )
+
+    if payload.new_password:
+        u.password_hash = hash_password(payload.new_password)
+        u.must_change_password = True
+        # Stale invite tokens get cleared — direct-set means we won't
+        # be using them.
+        u.invite_token = None
+        u.invite_token_expires_at = None
+        await db.commit()
+        return ResetPasswordResponse(mode="direct", new_password=payload.new_password)
+
+    # Invite-link mode: keep current password (user might still know
+    # it), issue token, force a change. Doesn't strand them if the URL
+    # gets lost in transit.
+    token = _gen_invite_token()
+    expires_at = _invite_expires()
+    u.invite_token = token
+    u.invite_token_expires_at = expires_at
+    u.must_change_password = True
+    await db.commit()
+    return ResetPasswordResponse(
+        mode="invite_link",
+        invite=InviteInfo(token=token, expires_at=expires_at),
     )
 
 

@@ -73,5 +73,28 @@ class ResendInviteResponse(BaseModel):
     invite: InviteInfo
 
 
+class ResetPasswordRequest(BaseModel):
+    """Two modes:
+
+    - Omit `new_password` (the safer default) → server generates an
+      invite-style token; admin shares the URL with the user, who picks
+      their own password on click.
+    - Supply `new_password` → server hashes + sets it directly; the
+      user is still forced to change on next login. Use when you have
+      no good channel to send a URL but a trusted out-of-band one for
+      a short string.
+    """
+    new_password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class ResetPasswordResponse(BaseModel):
+    mode: Literal["invite_link", "direct"]
+    # Present only when mode=invite_link. The admin formats the URL.
+    invite: InviteInfo | None = None
+    # Echoed back in `mode=direct` so admin can confirm what was set,
+    # since they may have typed it in a small form.
+    new_password: str | None = None
+
+
 # Forward ref for CreateUserResponse.
 CreateUserResponse.model_rebuild()

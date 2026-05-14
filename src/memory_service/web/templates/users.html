@@ -62,6 +62,9 @@
             <template x-if="u.has_pending_invite">
               <button class="secondary" @click="resend(u)">Resend invite</button>
             </template>
+            <template x-if="me?.id !== u.id && u.has_password">
+              <button class="secondary" @click="openReset(u)">Reset password</button>
+            </template>
             <template x-if="me?.id !== u.id && u.is_active">
               <button class="secondary" @click="setActive(u, false)">Disable</button>
             </template>
@@ -122,6 +125,83 @@
       </p>
     </div>
   </template>
+
+  <!-- Reset password modal -->
+  <template x-if="resetTarget">
+    <div class="card" style="margin-top:16px; border:2px solid var(--bad)">
+      <h3>Reset password for <code x-text="resetTarget.email"></code></h3>
+      <p style="color: var(--muted); font-size: 12px">
+        Pick one of two strategies. The user will be forced to set a new
+        password on next login either way.
+      </p>
+
+      <div class="tabs" style="margin-bottom:12px">
+        <button :class="resetMode === 'link' ? 'active' : ''"   @click="resetMode = 'link'">Send invite link (safer)</button>
+        <button :class="resetMode === 'direct' ? 'active' : ''" @click="resetMode = 'direct'">Set temporary password</button>
+      </div>
+
+      <template x-if="resetMode === 'link'">
+        <p style="color:var(--muted); font-size:12px">
+          The user keeps their current password (in case the link gets
+          lost) plus gets a one-time URL that lets them pick a new one.
+          Recommended unless you have an out-of-band channel for the
+          plaintext.
+        </p>
+      </template>
+
+      <template x-if="resetMode === 'direct'">
+        <div>
+          <p style="color:var(--muted); font-size:12px">
+            You type a temporary password; we set it and force-change.
+            Use only when you can hand it over securely (in-person,
+            Signal, etc).
+          </p>
+          <label style="display:block">Temporary password (≥ 8 chars)
+            <input type="text" x-model="resetPwd" minlength="8" placeholder="something-they-can-type-once"
+                   style="width:100%; padding:6px 8px; border:1px solid var(--border); border-radius:4px; font:inherit">
+          </label>
+        </div>
+      </template>
+
+      <p>
+        <button class="danger" @click="doReset()" :disabled="resetting"
+          x-text="resetting ? 'Resetting…' : 'Reset password'"></button>
+        <button class="secondary" @click="cancelReset()">Cancel</button>
+      </p>
+    </div>
+  </template>
+
+  <template x-if="resetResult">
+    <div class="card" style="margin-top:16px; border:2px solid var(--accent)">
+      <h3>Reset done for <code x-text="resetResult.email"></code></h3>
+      <template x-if="resetResult.mode === 'invite_link'">
+        <div>
+          <p style="color: var(--muted); font-size: 12px">
+            Share this URL with the user. Expires at
+            <span x-text="window.ms.fmtDate(resetResult.expires_at)"></span>.
+          </p>
+          <code class="token" x-text="resetResult.url"></code>
+          <p>
+            <button class="secondary" @click="copy(resetResult.url)">Copy</button>
+            <button class="secondary" @click="resetResult = null">Dismiss</button>
+          </p>
+        </div>
+      </template>
+      <template x-if="resetResult.mode === 'direct'">
+        <div>
+          <p style="color: var(--muted); font-size: 12px">
+            Temporary password set. Share via a trusted channel —
+            user will be forced to change it on next login.
+          </p>
+          <code class="token" x-text="resetResult.password"></code>
+          <p>
+            <button class="secondary" @click="copy(resetResult.password)">Copy</button>
+            <button class="secondary" @click="resetResult = null">Dismiss</button>
+          </p>
+        </div>
+      </template>
+    </div>
+  </template>
 </section>
 
 <script>
@@ -133,6 +213,8 @@
       form: {email:"", display_name:"", org_slug:"", groups_text:"",
              is_org_admin:false, is_super_admin:false},
       lastInvite: null,
+      resetTarget: null, resetMode: "link", resetPwd: "", resetting: false,
+      resetResult: null,
       async load() {
         window.ms.requireAuth();
         this.loading = true; this.error = null;
@@ -179,6 +261,49 @@
             expires_at: r.invite.expires_at,
           };
         } catch (e) { this.error = e.message; }
+      },
+      openReset(u) {
+        this.resetTarget = u;
+        this.resetMode = "link";
+        this.resetPwd = "";
+        this.resetResult = null;
+      },
+      cancelReset() {
+        this.resetTarget = null;
+        this.resetPwd = "";
+      },
+      async doReset() {
+        const u = this.resetTarget;
+        if (this.resetMode === "direct" && (!this.resetPwd || this.resetPwd.length < 8)) {
+          this.error = "Temporary password must be at least 8 characters.";
+          return;
+        }
+        this.resetting = true; this.error = null;
+        const body = this.resetMode === "direct" ? { new_password: this.resetPwd } : {};
+        try {
+          const r = await window.ms.json(`/v1/users/by-id/${u.id}/reset-password`, {
+            method: "POST",
+            body: JSON.stringify(body),
+          });
+          if (r.mode === "invite_link") {
+            this.resetResult = {
+              email: u.email,
+              mode: "invite_link",
+              url: `${location.origin}${r.invite.accept_path}?token=${encodeURIComponent(r.invite.token)}`,
+              expires_at: r.invite.expires_at,
+            };
+          } else {
+            this.resetResult = {
+              email: u.email,
+              mode: "direct",
+              password: r.new_password,
+            };
+          }
+          this.resetTarget = null;
+          this.resetPwd = "";
+          await this.load();
+        } catch (e) { this.error = e.message; }
+        finally { this.resetting = false; }
       },
       async setActive(u, active) {
         try {
