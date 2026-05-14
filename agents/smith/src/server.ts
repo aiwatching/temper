@@ -7,11 +7,12 @@
  *   GET  /healthz                       liveness — Temper reachable + LLM creds
  *   POST /chat   body:{message,conversationId?}   single turn
  *
- * Future: streaming SSE on /chat once we wire `session.subscribe()`
- * through to the response body. MVP returns a single JSON when the turn
- * completes.
+ * /chat content negotiation:
+ *   - Accept: text/event-stream       SSE streaming (one event per token)
+ *   - anything else (default)         single JSON {reply, stopReason}
  */
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 
 import { getConfig } from "./config.js";
 import { Temper, TemperError } from "./temper.js";
@@ -106,26 +107,106 @@ async function refreshMeta() {
   } catch (e) { meta.textContent = "(/healthz unreachable)"; }
 }
 
+function addStreamingBubble() {
+  // Like addRow("smith", "") but returns the bubble element so the
+  // stream loop can keep appending text into it.
+  const row = document.createElement("div");
+  row.className = "row smith";
+  const label = document.createElement("div");
+  label.className = "role";
+  label.textContent = "smith";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  bubble.textContent = "";
+  row.appendChild(label);
+  row.appendChild(bubble);
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+  return { row, bubble };
+}
+
 async function sendMessage() {
   const text = msg.value.trim();
   if (!text) return;
   msg.value = "";
   addRow("user", text);
   send.disabled = true;
+
+  const { row, bubble } = addStreamingBubble();
+  const toolHints = new Map();   // toolCallId → DOM node we can swap on tool_end
+
   try {
     const r = await fetch("/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
       body: JSON.stringify({ conversationId, message: text }),
     });
-    const j = await r.json();
-    if (r.ok) {
-      addRow("smith", j.reply || "(empty reply)");
-    } else {
-      addRow("smith", "Error " + r.status + ": " + (j.error || JSON.stringify(j)), true);
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      row.classList.add("err");
+      bubble.textContent = "Error " + r.status + ": " + (j.error || JSON.stringify(j));
+      return;
+    }
+
+    // Parse SSE: events are "event: name\\ndata: payload\\n\\n".
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      // Split into completed events (separated by blank line)
+      let idx;
+      while ((idx = buf.indexOf("\\n\\n")) >= 0) {
+        const raw = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        let evt = "message", data = "";
+        for (const line of raw.split("\\n")) {
+          if (line.startsWith("event:")) evt = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (evt === "delta") {
+          bubble.textContent += data;
+          log.scrollTop = log.scrollHeight;
+        } else if (evt === "tool_start") {
+          try {
+            const t = JSON.parse(data);
+            const span = document.createElement("span");
+            span.style.cssText = "display:inline-block;margin:4px 0;padding:2px 8px;background:#fff8c5;border:1px solid #d4a72c;border-radius:3px;font-size:11px";
+            span.textContent = "↻ " + t.toolName + "…";
+            bubble.appendChild(span);
+            toolHints.set(t.toolCallId, span);
+          } catch (_) {}
+        } else if (evt === "tool_end") {
+          try {
+            const t = JSON.parse(data);
+            const span = toolHints.get(t.toolCallId);
+            if (span) {
+              span.textContent = (t.isError ? "✗ " : "✓ ") + t.toolName;
+              span.style.background = t.isError ? "#ffebe9" : "#dafbe1";
+              span.style.borderColor = t.isError ? "#ff8182" : "#1a7f37";
+            }
+          } catch (_) {}
+        } else if (evt === "error") {
+          try {
+            const e = JSON.parse(data);
+            row.classList.add("err");
+            const errMsg = document.createElement("div");
+            errMsg.style.marginTop = "4px";
+            errMsg.textContent = "LLM error: " + e.error;
+            bubble.appendChild(errMsg);
+          } catch (_) {}
+        }
+        // "done" event closes — no UI action needed; loop exits via reader done.
+      }
+    }
+    if (!bubble.textContent && !row.classList.contains("err")) {
+      bubble.textContent = "(empty reply)";
     }
   } catch (e) {
-    addRow("smith", "Network error: " + e.message, true);
+    row.classList.add("err");
+    bubble.textContent = "Network error: " + e.message;
   } finally {
     send.disabled = false;
     msg.focus();
@@ -193,20 +274,91 @@ export function buildApp(): Hono {
     const pool = getSessionPool();
     const session = await pool.getOrCreate(conversationId);
 
-    // Collect the assistant's final reply via `agent_end` — fires when
-    // the whole turn (including any tool roundtrips) is done and carries
-    // the complete message transcript. `text_delta` events also stream
-    // for short replies, but the model often emits no delta when a turn
-    // is dominated by tool calls; reading from the final transcript
-    // is robust to both cases.
-    //
-    // SSE upgrade will switch to streaming `text_delta` directly through
-    // the response body; agent_end stays as the close signal.
-    // Pull reply + any provider-level error out of the final agent_end.
-    // pi's `prompt()` resolves cleanly even when Anthropic / OpenAI / etc
-    // returned a 4xx — the failure shows up as `stopReason: "error"` on
-    // the last assistant message with the detail in `errorMessage`.
-    // Surface it explicitly so the caller doesn't get a silent empty reply.
+    const wantsSSE = (c.req.header("accept") ?? "").includes("text/event-stream");
+
+    if (wantsSSE) {
+      // Stream `text_delta` tokens as they arrive from pi, then a
+      // terminal "done" event with stopReason. Errors become an "error"
+      // event with the upstream detail so the UI can render them
+      // distinctly from regular content.
+      return streamSSE(c, async (stream) => {
+        let stopReason: string | undefined;
+        let errorMessage: string | undefined;
+        let aborted = false;
+        // biome-ignore lint: pi's event union is wide — typed locally.
+        const unsubscribe = session.subscribe((e: any) => {
+          if (aborted) return;
+          // Stream text deltas as they happen
+          if (
+            e?.type === "message_update" &&
+            e.assistantMessageEvent?.type === "text_delta"
+          ) {
+            const delta = String(e.assistantMessageEvent.delta ?? "");
+            if (delta) stream.writeSSE({ event: "delta", data: delta }).catch(() => {});
+            return;
+          }
+          // Surface tool calls so the UI can show a "calling memory_search…" hint
+          if (e?.type === "tool_execution_start") {
+            stream
+              .writeSSE({
+                event: "tool_start",
+                data: JSON.stringify({
+                  toolName: e.toolName,
+                  toolCallId: e.toolCallId,
+                }),
+              })
+              .catch(() => {});
+            return;
+          }
+          if (e?.type === "tool_execution_end") {
+            stream
+              .writeSSE({
+                event: "tool_end",
+                data: JSON.stringify({
+                  toolName: e.toolName,
+                  toolCallId: e.toolCallId,
+                  isError: !!e.isError,
+                }),
+              })
+              .catch(() => {});
+            return;
+          }
+          // Final turn payload — pull stopReason + any provider error
+          if (e?.type === "agent_end") {
+            const msgs: any[] = e.messages ?? [];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i];
+              if (m?.role !== "assistant") continue;
+              stopReason = m.stopReason;
+              errorMessage = m.errorMessage;
+              break;
+            }
+          }
+        });
+        // If the client disconnects, stop pushing events. pi's
+        // prompt() will keep running in the background; the next
+        // /chat call against this session will queue / wait.
+        stream.onAbort(() => { aborted = true; });
+        try {
+          await session.prompt(message);
+        } finally {
+          unsubscribe();
+        }
+        if (stopReason === "error") {
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({ error: errorMessage ?? "LLM error", stopReason }),
+          });
+        } else {
+          await stream.writeSSE({
+            event: "done",
+            data: JSON.stringify({ stopReason, conversationId }),
+          });
+        }
+      });
+    }
+
+    // ---- Non-SSE path (default) — backward-compatible single JSON ----
     let reply = "";
     let stopReason: string | undefined;
     let errorMessage: string | undefined;
