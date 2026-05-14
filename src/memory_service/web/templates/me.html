@@ -55,7 +55,10 @@
     tbody.innerHTML = keys.map(k => `
       <tr>
         <td>${k.agent_name}</td>
-        <td>${k.agent_slug ? `<code>agent:${k.agent_slug}</code>` : `<em title='Legacy / unscoped key. Writes land in your flat user namespace, shared with other unscoped keys.'>flat user</em>`}</td>
+        <td>
+          ${k.agent_slug ? `<code>agent:${k.agent_slug}</code>` : `<em title='Legacy / unscoped key. Writes land in your flat user namespace, shared with other unscoped keys.'>flat user</em>`}
+          ${k.revoked ? "" : `<button class='edit-scope' data-id='${k.id}' data-slug='${k.agent_slug ?? ""}' style='margin-left:6px; font-size:11px'>edit</button>`}
+        </td>
         <td><code>${k.prefix}</code></td>
         <td>${k.created_at}</td>
         <td>${k.last_used_at ?? "<em>never</em>"}</td>
@@ -66,6 +69,31 @@
       if (!confirm(`Revoke key ${b.dataset.id}? This cannot be undone.`)) return;
       const r = await fetch(`/v1/users/me/api-keys/${b.dataset.id}`, { method: "DELETE", headers: authHeaders });
       if (r.status === 204) loadKeys();
+    }));
+    document.querySelectorAll("button.edit-scope").forEach(b => b.addEventListener("click", async () => {
+      const current = b.dataset.slug || "";
+      const next = prompt(
+        "New agent_slug (lowercase letters, digits, hyphens; ≤64 chars).\n" +
+        "Leave blank to clear (key becomes legacy / unscoped — writes go to flat user:<id>).\n\n" +
+        "Note: the key plaintext stays the same. Agents holding it keep working, but\n" +
+        "their future writes/reads route to the new namespace. Old data isn't moved.",
+        current,
+      );
+      if (next === null) return;  // user hit cancel
+      const trimmed = next.trim();
+      const body = { agent_slug: trimmed === "" ? null : trimmed };
+      const r = await fetch(`/v1/users/me/api-keys/${b.dataset.id}/scope`, {
+        method: "PATCH", headers: authHeaders, body: JSON.stringify(body),
+      });
+      if (r.ok) { loadKeys(); return; }
+      let detail = `HTTP ${r.status}`;
+      try {
+        const err = await r.json();
+        detail = Array.isArray(err.detail)
+          ? err.detail.map(e => `${(e.loc || []).slice(1).join('.') || '?'}: ${e.msg}`).join("; ")
+          : err.detail || detail;
+      } catch (_) {}
+      alert("Update failed: " + detail);
     }));
   }
 

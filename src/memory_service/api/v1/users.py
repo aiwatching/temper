@@ -4,6 +4,8 @@ Org-level user admin endpoints land in Phase 1.3.
 """
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -15,9 +17,23 @@ from memory_service.schemas.api_key import (
     AdminAPIKeyListItem,
     APIKeyCreatedResponse,
     APIKeyResponse,
+    APIKeyScopeUpdate,
     APIKeyUpdateRequest,
     CreateAPIKeyRequest,
 )
+
+
+_SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _slugify_agent_name(name: str) -> str | None:
+    """Best-effort agent_name → agent_slug. Mirrors the integrate.html
+    JS so server and UI agree. Returns None when the result would be
+    empty (e.g. an emoji-only name) — the caller falls back to a NULL
+    agent_slug (legacy / unscoped) so creation still succeeds.
+    """
+    s = _SLUG_INVALID_RE.sub("-", name.lower()).strip("-")[:64].strip("-")
+    return s or None
 
 router = APIRouter(prefix="/users/me/api-keys", tags=["api-keys"])
 admin_router = APIRouter(prefix="/admin/api-keys", tags=["api-keys"])
@@ -36,11 +52,17 @@ async def create_api_key(
     Two keys with the same slug share that scope on purpose; the DB
     unique constraint blocks accidental duplicates.
     """
+    # When the caller didn't pin a slug, derive one from agent_name so every
+    # new key is scoped by default (matches the integrate-page JS behaviour
+    # but also covers raw API / memctl / curl creations).
+    effective_slug = payload.agent_slug
+    if effective_slug is None:
+        effective_slug = _slugify_agent_name(payload.agent_name)
     plaintext = generate_api_key()
     api_key = APIKey(
         user_id=user.id,
         agent_name=payload.agent_name,
-        agent_slug=payload.agent_slug,
+        agent_slug=effective_slug,
         key_hash=hash_api_key(plaintext),
         prefix=api_key_prefix(plaintext),
     )
@@ -49,13 +71,19 @@ async def create_api_key(
         await db.commit()
     except IntegrityError:
         await db.rollback()
+        derived_hint = ""
+        if payload.agent_slug is None and effective_slug is not None:
+            derived_hint = (
+                f" (slug was auto-derived from agent_name; pass "
+                f"agent_slug explicitly to override)"
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
                 f"You already have an active key with agent_slug "
-                f"{payload.agent_slug!r}. Revoke it first, or pick a "
-                "different slug — two keys with the same slug share memory, "
-                "which is fine if that's what you want."
+                f"{effective_slug!r}{derived_hint}. Revoke / rename the existing "
+                "one, or pick a different slug — two keys with the same slug "
+                "share memory, which is fine if that's what you want."
             ),
         ) from None
     await db.refresh(api_key)
@@ -76,6 +104,47 @@ async def list_api_keys(user: CurrentUser, db: DBDep) -> list[APIKey]:
     """List every API key the caller owns, including revoked ones."""
     stmt = select(APIKey).where(APIKey.user_id == user.id).order_by(APIKey.created_at.desc())
     return list((await db.execute(stmt)).scalars().all())
+
+
+@router.patch("/{key_id}/scope", response_model=APIKeyResponse)
+async def update_api_key_scope(
+    key_id: str,
+    payload: APIKeyScopeUpdate,
+    user: CurrentUser,
+    db: DBDep,
+) -> APIKey:
+    """Owner rebinds this key's agent_slug.
+
+    Send `{"agent_slug": null}` to clear the scope (key becomes legacy /
+    unscoped — its writes go to flat user:<id>). Send a slug to switch.
+    Key plaintext is unchanged; existing agents holding the key keep
+    working, but their future writes/reads route to the new namespace.
+
+    Data already written under the old slug stays where it is. The
+    default cross-agent search still surfaces it because
+    `readable_namespaces_for()` enumerates every slug ever attached to
+    one of your keys.
+    """
+    stmt = select(APIKey).where(APIKey.id == key_id, APIKey.user_id == user.id)
+    api_key = (await db.execute(stmt)).scalar_one_or_none()
+    if api_key is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
+    api_key.agent_slug = payload.agent_slug
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"You already have another key with agent_slug "
+                f"{payload.agent_slug!r}. Two keys sharing a slug is allowed "
+                "(that's how memory sharing works), but the DB constraint "
+                "blocks duplicates — revoke / rename the existing one first."
+            ),
+        ) from None
+    await db.refresh(api_key)
+    return api_key
 
 
 @router.delete("/{key_id}", status_code=status.HTTP_204_NO_CONTENT)

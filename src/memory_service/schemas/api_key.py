@@ -50,3 +50,19 @@ class APIKeyUpdateRequest(BaseModel):
     """super_admin toggles a key's revoked state. The auth path filters
     on `revoked=False`, so flipping back to False reactivates the key."""
     revoked: bool
+
+
+class APIKeyScopeUpdate(BaseModel):
+    """Owner (or super_admin) rebinds the key's agent_slug. Send
+    null to clear the scope (key becomes legacy / unscoped, writes go
+    to flat user:<id>); send a slug to switch / set the scope.
+
+    The key plaintext is unchanged — agents holding it keep working —
+    but their future writes/reads route to the new namespace. Data
+    written under the old slug stays where it was (still readable via
+    explicit `namespace=agent:<id>/<old-slug>` and via the user's
+    default cross-agent search).
+    """
+    agent_slug: str | None = Field(
+        ..., pattern=_AGENT_SLUG_PATTERN, max_length=64
+    )
