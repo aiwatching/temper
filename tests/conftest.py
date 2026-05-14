@@ -16,6 +16,16 @@ os.environ["SECRET_KEY"] = "test-secret-do-not-use-in-prod"
 # Stub LLM key so Graphiti init paths in tests don't trip on missing creds.
 os.environ.setdefault("LLM_API_KEY", "test")
 os.environ.setdefault("EMBEDDING_API_KEY", "test")
+# Existing tests rely on /v1/auth/register to seed users quickly.
+# The production default flipped to invite-only; explicitly enable
+# self-reg for the test harness so we don't have to rewrite every
+# fixture through the admin/invite flow.
+os.environ["ALLOW_SELF_REGISTRATION"] = "true"
+# Skip the default-admin seed so the tests' "register first user" path
+# gets a clean DB. Otherwise every test fixture would start with one
+# extra admin@example.com row, which a few of the assertions depend on
+# *not* being there.
+os.environ["CREATE_DEFAULT_ADMIN"] = "false"
 
 
 @pytest_asyncio.fixture

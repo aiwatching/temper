@@ -69,10 +69,12 @@ class Settings(BaseSettings):
     # origins so credentialed requests stay scoped.
     cors_allow_origins: str = ""
 
-    # Self-registration policy. Dev default = True (single-machine
-    # hacking). Production should set False so /v1/auth/register 403s
-    # and onboarding flows only through admin-issued invites.
-    allow_self_registration: bool = True
+    # Self-registration policy. Default = False — onboarding flows
+    # only through admin-issued invites (POST /v1/users + invite token).
+    # Set True ONLY for open-signup demos. The admin UI no longer
+    # surfaces a Register button regardless of this flag; toggling it
+    # only affects whether POST /v1/auth/register is reachable.
+    allow_self_registration: bool = False
 
     # How long an invite token stays valid. 24h matches most enterprise
     # SSO invite norms. Operators with stricter SLOs can shorten this.

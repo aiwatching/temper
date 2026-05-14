@@ -2,39 +2,21 @@
 {% block content %}
 <h2>Sign in</h2>
 
-<div class="tabs">
-  <button class="active" data-tab="login">Login</button>
-  {% if allow_self_registration %}
-  <button data-tab="register">Register</button>
-  {% endif %}
-</div>
-
 <form id="login-form" class="stacked">
   <label>Email <input type="email" name="email" required autofocus></label>
   <label>Password <input type="password" name="password" minlength="8" required></label>
   <button type="submit">Sign in</button>
 </form>
 
-{% if allow_self_registration %}
-<form id="register-form" class="stacked" style="display:none">
-  <label>Email <input type="email" name="email" required></label>
-  <label>Display name (optional) <input type="text" name="display_name"></label>
-  <label>Password (≥ 8 chars) <input type="password" name="password" minlength="8" required></label>
-  <button type="submit">Create account</button>
-</form>
-{% endif %}
-
 <div id="msg"></div>
 
 <div class="auth-foot">
   <a href="/admin/forgot">Forgot password?</a>
-  {% if not allow_self_registration %}
-    <span>Invite-only — contact your admin</span>
-  {% endif %}
+  <span>Invite-only — contact your admin</span>
 </div>
 
 <script>
-  // If already signed in, skip the form.
+  // Already signed in → skip the form.
   if (localStorage.getItem("ms_token")) {
     location.replace("/admin");
   }
@@ -42,21 +24,6 @@
   const msg = (text, cls="ok") => {
     document.getElementById("msg").innerHTML = `<div class="msg ${cls}">${text}</div>`;
   };
-
-  document.querySelectorAll(".tabs button").forEach(b => {
-    b.addEventListener("click", () => {
-      document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("active"));
-      b.classList.add("active");
-      const tab = b.dataset.tab;
-      document.getElementById("login-form").style.display = tab === "login" ? "" : "none";
-      const reg = document.getElementById("register-form");
-      if (reg) reg.style.display = tab === "register" ? "" : "none";
-      document.getElementById("msg").innerHTML = "";
-    });
-  });
-  if (location.hash === "#register") {
-    document.querySelector('[data-tab="register"]')?.click();
-  }
 
   document.getElementById("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -68,20 +35,6 @@
     localStorage.setItem("ms_token", data.access_token);
     localStorage.setItem("ms_email", fd.get("email"));
     location.href = "/admin";
-  });
-
-  const regForm = document.getElementById("register-form");
-  if (regForm) regForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.target);
-    const body = JSON.stringify(Object.fromEntries(fd));
-    const r = await fetch("/v1/auth/register", { method: "POST", headers: {"Content-Type":"application/json"}, body });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({detail: "unknown"}));
-      msg(`Registration failed: ${err.detail || r.status}`, "bad"); return;
-    }
-    msg("Account created. Switching to login…", "ok");
-    setTimeout(() => document.querySelector('[data-tab="login"]').click(), 600);
   });
 </script>
 {% endblock %}

@@ -24,15 +24,8 @@ async def admin_index(request: Request) -> HTMLResponse:
 
 @router.get("/admin/login", response_class=HTMLResponse, include_in_schema=False)
 async def admin_login(request: Request) -> HTMLResponse:
-    from memory_service.config import get_settings
-
     return templates.TemplateResponse(
-        request, "login.html",
-        {
-            "title": "Sign in",
-            "bare": True,
-            "allow_self_registration": get_settings().allow_self_registration,
-        },
+        request, "login.html", {"title": "Sign in", "bare": True},
     )
 
 
