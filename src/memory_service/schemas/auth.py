@@ -30,4 +30,17 @@ class UserResponse(BaseModel):
     org_id: str | None
     is_super_admin: bool
     is_org_admin: bool
+    is_active: bool = True
     created_at: datetime
+
+
+class InitialAdminRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+    display_name: str | None = Field(default=None, max_length=255)
+
+
+class AcceptInviteRequest(BaseModel):
+    token: str = Field(min_length=20, max_length=64)
+    password: str = Field(min_length=8, max_length=128)
+    display_name: str | None = Field(default=None, max_length=255)

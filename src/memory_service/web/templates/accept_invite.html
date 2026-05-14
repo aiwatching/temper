@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="acceptPage()" x-init="init()">
+  <h2>Accept invite</h2>
+  <p style="color:var(--muted)">
+    You were invited to this Memory Service. Pick a password to activate
+    your account — you'll be signed in immediately.
+  </p>
+
+  <template x-if="!token">
+    <div class="msg bad">
+      Invite token missing from the URL. The link should look like
+      <code>/admin/accept-invite?token=…</code>. Ask whoever invited
+      you for a fresh link.
+    </div>
+  </template>
+
+  <template x-if="token">
+    <form @submit.prevent="submit()" class="stacked">
+      <label>Display name (optional) <input type="text" x-model="displayName"></label>
+      <label>Password (≥ 8 chars) <input type="password" x-model="password" minlength="8" required></label>
+      <label>Confirm password <input type="password" x-model="confirm" required></label>
+      <button type="submit" :disabled="busy">
+        <span x-text="busy ? 'Activating…' : 'Set password + sign in'"></span>
+      </button>
+    </form>
+  </template>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+</section>
+
+<script>
+  function acceptPage() {
+    return {
+      token: "", password: "", confirm: "", displayName: "",
+      busy: false, error: null,
+      init() {
+        const p = new URLSearchParams(location.search);
+        this.token = p.get("token") || "";
+      },
+      async submit() {
+        if (this.password !== this.confirm) {
+          this.error = "Passwords don't match.";
+          return;
+        }
+        this.busy = true; this.error = null;
+        try {
+          const r = await fetch("/v1/auth/accept-invite", {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({
+              token: this.token, password: this.password,
+              display_name: this.displayName || null,
+            }),
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${r.status}`);
+          }
+          const tok = await r.json();
+          // Look up email so the header shows it after redirect.
+          localStorage.setItem("ms_token", tok.access_token);
+          try {
+            const me = await fetch("/v1/auth/me", {
+              headers: {"Authorization": `Bearer ${tok.access_token}`}
+            }).then(r => r.json());
+            localStorage.setItem("ms_email", me.email);
+          } catch {}
+          location.href = "/admin";
+        } catch (e) {
+          this.error = e.message || String(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

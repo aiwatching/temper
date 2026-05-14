@@ -1,8 +1,10 @@
-"""/v1/auth — register, login, current user."""
+"""/v1/auth — register, login, current user, invite acceptance."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from memory_service.api.deps import CurrentUser, DBDep, SettingsDep
@@ -14,6 +16,8 @@ from memory_service.core.auth import (
 from memory_service.core.bootstrap import is_bootstrap_super_admin
 from memory_service.models import User
 from memory_service.schemas.auth import (
+    AcceptInviteRequest,
+    InitialAdminRequest,
     LoginRequest,
     RegisterRequest,
     TokenResponse,
@@ -27,11 +31,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def register(
     payload: RegisterRequest, db: DBDep, settings: SettingsDep
 ) -> User:
-    """Create a new user account. Returns the created user (no token).
+    """Create a new user account via self-registration.
 
-    The first registered user whose address matches BOOTSTRAP_SUPER_ADMIN_EMAIL
-    is auto-promoted to super admin — convenience for fresh installs.
+    Disabled when ALLOW_SELF_REGISTRATION=false (production default) —
+    in that mode, admins onboard users via POST /v1/users instead.
     """
+    if not settings.allow_self_registration:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Self-registration is disabled on this server. "
+                "Ask an admin to invite you via POST /v1/users."
+            ),
+        )
     email = str(payload.email).lower()
     user = User(
         email=email,
@@ -53,12 +65,90 @@ async def register(
     return user
 
 
+@router.post(
+    "/setup/initial-admin",
+    status_code=status.HTTP_201_CREATED,
+    response_model=UserResponse,
+)
+async def initial_admin_setup(
+    payload: InitialAdminRequest, db: DBDep
+) -> User:
+    """One-shot setup endpoint: create the first super_admin.
+
+    Only works while the users table is empty. After the first user
+    exists, returns 409 — admin management goes through /v1/users from
+    then on. This is the "fresh deploy, no env var" onboarding path.
+    """
+    count = (await db.execute(select(func.count(User.id)))).scalar_one()
+    if count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Initial-admin setup already done; use the admin UI or "
+                "POST /v1/users to add more users."
+            ),
+        )
+    email = str(payload.email).lower()
+    user = User(
+        email=email,
+        password_hash=hash_password(payload.password),
+        display_name=payload.display_name,
+        is_super_admin=True,
+        is_active=True,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.post(
+    "/accept-invite",
+    response_model=TokenResponse,
+)
+async def accept_invite(
+    payload: AcceptInviteRequest, db: DBDep, settings: SettingsDep
+) -> TokenResponse:
+    """User clicks the invite URL → sets a password → gets a session
+    token (auto-login). Token is single-use: cleared on success.
+    """
+    user = (
+        await db.execute(select(User).where(User.invite_token == payload.token))
+    ).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Invalid or already-used invite token")
+    # SQLite drops tzinfo on round-trip; normalize before comparing.
+    if user.invite_token_expires_at is not None:
+        expires = user.invite_token_expires_at
+        if expires.tzinfo is None:
+            expires = expires.replace(tzinfo=UTC)
+        if expires < datetime.now(UTC):
+            raise HTTPException(status_code=410, detail="Invite token expired — ask admin to resend")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account is disabled")
+    user.password_hash = hash_password(payload.password)
+    user.invite_token = None
+    user.invite_token_expires_at = None
+    if payload.display_name and not user.display_name:
+        user.display_name = payload.display_name
+    await db.commit()
+    await db.refresh(user)
+    token, expires_at = issue_session_token(user.id, settings)
+    return TokenResponse(access_token=token, expires_at=expires_at)
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(payload: LoginRequest, db: DBDep, settings: SettingsDep) -> TokenResponse:
     stmt = select(User).where(User.email == str(payload.email).lower())
     user = (await db.execute(stmt)).scalar_one_or_none()
-    if not user or not user.is_active or not verify_password(payload.password, user.password_hash):
-        # Generic message — don't leak which half is wrong.
+    if (
+        not user
+        or not user.is_active
+        or user.password_hash is None
+        or not verify_password(payload.password, user.password_hash)
+    ):
+        # Generic message — don't leak which half is wrong, or that the
+        # user exists but hasn't accepted their invite yet.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password",

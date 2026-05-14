@@ -24,7 +24,29 @@ async def admin_index(request: Request) -> HTMLResponse:
 
 @router.get("/admin/login", response_class=HTMLResponse, include_in_schema=False)
 async def admin_login(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "login.html", {"title": "Login"})
+    from memory_service.config import get_settings
+
+    return templates.TemplateResponse(
+        request, "login.html",
+        {"title": "Login", "allow_self_registration": get_settings().allow_self_registration},
+    )
+
+
+@router.get("/admin/setup", response_class=HTMLResponse, include_in_schema=False)
+async def admin_setup(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "setup.html", {"title": "Setup"})
+
+
+@router.get("/admin/accept-invite", response_class=HTMLResponse, include_in_schema=False)
+async def admin_accept_invite(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "accept_invite.html", {"title": "Accept invite"}
+    )
+
+
+@router.get("/admin/users", response_class=HTMLResponse, include_in_schema=False)
+async def admin_users(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "users.html", {"title": "Users", "wide": True})
 
 
 @router.get("/admin/me", response_class=HTMLResponse, include_in_schema=False)

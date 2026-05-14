@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="usersPage()" x-init="load()">
+  <h2>Users</h2>
+  <p style="color:var(--muted)">
+    super_admin sees everyone; org_admin sees their own org's users.
+    To onboard someone, click <strong>+ Add user</strong>, then copy
+    the invite link the server hands back and send it via whatever
+    channel you trust.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <p>
+    <button @click="showCreate = true">+ Add user</button>
+    <button class="secondary" @click="load()">Refresh</button>
+  </p>
+
+  <table>
+    <thead><tr>
+      <th>email</th><th>name</th><th>org</th><th>role</th>
+      <th>status</th><th>created</th><th></th>
+    </tr></thead>
+    <tbody>
+      <template x-if="!loading && users.length === 0">
+        <tr><td colspan="7"><em>No users visible.</em></td></tr>
+      </template>
+      <template x-for="u in users" :key="u.id">
+        <tr>
+          <td>
+            <strong x-text="u.email"></strong>
+            <template x-if="me?.id === u.id">
+              <span class="badge entity" style="margin-left:6px">you</span>
+            </template>
+          </td>
+          <td x-text="u.display_name || '—'"></td>
+          <td><code x-text="u.org_slug || '—'"></code></td>
+          <td>
+            <template x-if="u.is_super_admin">
+              <span class="badge fact">super_admin</span>
+            </template>
+            <template x-if="!u.is_super_admin && u.is_org_admin">
+              <span class="badge community">org_admin</span>
+            </template>
+            <template x-if="!u.is_super_admin && !u.is_org_admin">
+              <span style="color:var(--muted); font-size:11px">member</span>
+            </template>
+          </td>
+          <td>
+            <template x-if="!u.is_active">
+              <span class="badge failed">disabled</span>
+            </template>
+            <template x-if="u.is_active && u.has_pending_invite">
+              <span class="badge pending" title="Invite pending — user hasn't accepted yet">invite pending</span>
+            </template>
+            <template x-if="u.is_active && !u.has_pending_invite && u.has_password">
+              <span class="badge done">active</span>
+            </template>
+          </td>
+          <td x-text="window.ms.fmtDate(u.created_at)"></td>
+          <td>
+            <template x-if="u.has_pending_invite">
+              <button class="secondary" @click="resend(u)">Resend invite</button>
+            </template>
+            <template x-if="me?.id !== u.id && u.is_active">
+              <button class="secondary" @click="setActive(u, false)">Disable</button>
+            </template>
+            <template x-if="me?.id !== u.id && !u.is_active">
+              <button class="secondary" @click="setActive(u, true)">Enable</button>
+            </template>
+            <template x-if="isSuperAdmin && me?.id !== u.id">
+              <button class="danger" @click="remove(u)">Delete</button>
+            </template>
+          </td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+
+  <!-- Create user dialog -->
+  <template x-if="showCreate">
+    <div class="card" style="margin-top:16px; border:2px solid var(--accent)">
+      <h3>Add user</h3>
+      <form @submit.prevent="create()" class="stacked" style="max-width:none">
+        <div class="filter-grid">
+          <div><label>email</label><input type="email" x-model="form.email" required></div>
+          <div><label>display name</label><input type="text" x-model="form.display_name"></div>
+          <div><label>org slug (optional)</label><input type="text" x-model="form.org_slug" placeholder="acme"></div>
+          <div><label>groups (comma separated)</label><input type="text" x-model="form.groups_text" placeholder="engineering, product"></div>
+        </div>
+        <div style="display:flex; gap:18px; align-items:center; margin:4px 0">
+          <label style="display:flex; flex-direction:row; align-items:center; gap:6px">
+            <input type="checkbox" x-model="form.is_org_admin"> Org admin
+          </label>
+          <template x-if="isSuperAdmin">
+            <label style="display:flex; flex-direction:row; align-items:center; gap:6px">
+              <input type="checkbox" x-model="form.is_super_admin"> Super admin
+            </label>
+          </template>
+        </div>
+        <div>
+          <button type="submit" :disabled="creating">
+            <span x-text="creating ? 'Inviting…' : 'Create + generate invite'"></span>
+          </button>
+          <button type="button" class="secondary" @click="showCreate = false">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="lastInvite">
+    <div class="card" style="margin-top:16px; border:2px solid var(--accent)">
+      <h3>Invite link for <code x-text="lastInvite.email"></code></h3>
+      <p style="color: var(--muted); font-size: 12px">
+        Send this URL to the user — it lets them set their password and
+        sign in. Expires at <span x-text="window.ms.fmtDate(lastInvite.expires_at)"></span>.
+      </p>
+      <code class="token" x-text="lastInvite.url"></code>
+      <p>
+        <button class="secondary" @click="copy(lastInvite.url)">Copy</button>
+        <button class="secondary" @click="lastInvite = null">Dismiss</button>
+      </p>
+    </div>
+  </template>
+</section>
+
+<script>
+  function usersPage() {
+    return {
+      users: [], loading: true, error: null,
+      me: null, isSuperAdmin: false,
+      showCreate: false, creating: false,
+      form: {email:"", display_name:"", org_slug:"", groups_text:"",
+             is_org_admin:false, is_super_admin:false},
+      lastInvite: null,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        try {
+          this.me = window.ms.me || await window.ms.json("/v1/auth/me");
+          window.ms.me = this.me;
+          this.isSuperAdmin = this.me.is_super_admin === true;
+          const data = await window.ms.json("/v1/users");
+          this.users = data.users;
+        } catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      async create() {
+        this.creating = true; this.error = null;
+        const groups = this.form.groups_text.split(",").map(s => s.trim()).filter(Boolean);
+        const body = {
+          email: this.form.email,
+          display_name: this.form.display_name || null,
+          org_slug: this.form.org_slug || null,
+          is_org_admin: this.form.is_org_admin,
+          is_super_admin: this.form.is_super_admin,
+          group_slugs: groups,
+        };
+        try {
+          const r = await window.ms.json("/v1/users", {method: "POST", body: JSON.stringify(body)});
+          this.lastInvite = {
+            email: r.user.email,
+            url: `${location.origin}${r.invite.accept_path}?token=${encodeURIComponent(r.invite.token)}`,
+            expires_at: r.invite.expires_at,
+          };
+          this.showCreate = false;
+          this.form = {email:"", display_name:"", org_slug:"", groups_text:"",
+                       is_org_admin:false, is_super_admin:false};
+          await this.load();
+        } catch (e) { this.error = e.message; }
+        finally { this.creating = false; }
+      },
+      async resend(u) {
+        try {
+          const r = await window.ms.json(`/v1/users/by-id/${u.id}/resend-invite`, {method: "POST"});
+          this.lastInvite = {
+            email: u.email,
+            url: `${location.origin}${r.invite.accept_path}?token=${encodeURIComponent(r.invite.token)}`,
+            expires_at: r.invite.expires_at,
+          };
+        } catch (e) { this.error = e.message; }
+      },
+      async setActive(u, active) {
+        try {
+          await window.ms.json(`/v1/users/by-id/${u.id}`, {
+            method: "PATCH",
+            body: JSON.stringify({is_active: active}),
+          });
+          await this.load();
+        } catch (e) { this.error = e.message; }
+      },
+      async remove(u) {
+        if (!confirm(`Hard-delete ${u.email}? Their personal data stays in the graph but the account is gone.`)) return;
+        try {
+          await window.ms.fetch(`/v1/users/by-id/${u.id}`, {method: "DELETE"});
+          await this.load();
+        } catch (e) { this.error = e.message; }
+      },
+      copy(text) {
+        navigator.clipboard?.writeText(text);
+      },
+    };
+  }
+</script>
+{% endblock %}

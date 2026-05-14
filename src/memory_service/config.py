@@ -69,6 +69,15 @@ class Settings(BaseSettings):
     # origins so credentialed requests stay scoped.
     cors_allow_origins: str = ""
 
+    # Self-registration policy. Dev default = True (single-machine
+    # hacking). Production should set False so /v1/auth/register 403s
+    # and onboarding flows only through admin-issued invites.
+    allow_self_registration: bool = True
+
+    # How long an invite token stays valid. 24h matches most enterprise
+    # SSO invite norms. Operators with stricter SLOs can shorten this.
+    invite_ttl_hours: int = 24
+
     # --- PostgreSQL ---
     database_url: str = "postgresql+asyncpg://memory:memory@localhost:5432/memory_service"
 

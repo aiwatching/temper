@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="setupPage()" x-init="check()">
+  <h2>Initial setup</h2>
+
+  <template x-if="loading">
+    <p style="color:var(--muted)"><em>Checking…</em></p>
+  </template>
+
+  <template x-if="!loading && !needed">
+    <div>
+      <div class="msg ok">This server is already set up. Use the login page.</div>
+      <p><a href="/admin/login">Go to login →</a></p>
+    </div>
+  </template>
+
+  <template x-if="!loading && needed">
+    <div>
+      <p style="color:var(--muted)">
+        No accounts exist yet. Create the first super_admin to bootstrap
+        this service. After this, all other users are added via the
+        admin UI (no self-registration).
+      </p>
+
+      <form @submit.prevent="submit()" class="stacked">
+        <label>Email <input type="email" x-model="email" required></label>
+        <label>Display name (optional) <input type="text" x-model="displayName"></label>
+        <label>Password (≥ 8 chars) <input type="password" x-model="password" minlength="8" required></label>
+        <button type="submit" :disabled="busy">
+          <span x-text="busy ? 'Creating…' : 'Create initial admin'"></span>
+        </button>
+      </form>
+      <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+    </div>
+  </template>
+</section>
+
+<script>
+  function setupPage() {
+    return {
+      loading: true, needed: false,
+      email: "", displayName: "", password: "",
+      busy: false, error: null,
+      async check() {
+        try {
+          // If we can post to setup with an obvious-fail payload and get
+          // 409, setup is done. Otherwise (422 for empty body, but the
+          // logic check is BEFORE validation) — actually simpler: just
+          // try GET /v1/health to see if backend is up, then attempt
+          // setup with real data on click; if 409, switch to "already done".
+          await fetch("/v1/health");
+          this.needed = true;  // assume needed; submit will reveal otherwise
+        } finally {
+          this.loading = false;
+        }
+      },
+      async submit() {
+        this.busy = true; this.error = null;
+        try {
+          const r = await fetch("/v1/auth/setup/initial-admin", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+              email: this.email,
+              password: this.password,
+              display_name: this.displayName || null,
+            }),
+          });
+          if (r.status === 409) {
+            this.needed = false;
+            this.error = "Already set up — redirecting to login…";
+            setTimeout(() => location.href = "/admin/login", 1200);
+            return;
+          }
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${r.status}`);
+          }
+          // Auto-login the new super_admin.
+          const login = await fetch("/v1/auth/login", {
+            method: "POST", headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({email: this.email, password: this.password}),
+          });
+          const tok = await login.json();
+          localStorage.setItem("ms_token", tok.access_token);
+          localStorage.setItem("ms_email", this.email);
+          location.href = "/admin";
+        } catch (e) {
+          this.error = e.message || String(e);
+        } finally {
+          this.busy = false;
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}
