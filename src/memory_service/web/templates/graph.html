@@ -38,15 +38,15 @@
   <div style="margin-top:8px;">
     <strong style="font-size:12px;color:#57606a;">Quick pick:</strong>
     <div id="ns-chips" style="margin-top:6px;">
-      <span class="ns-chip active" data-ns="user:me">user:me</span>
-      <span class="ns-chip" data-ns="public">public</span>
+      <span class="ns-chip active" data-ns="__all__" title="Merge every namespace you can read into one view (handy for an overview; nodes are deduped by id).">★ All readable</span>
     </div>
   </div>
   <form id="ns-form" style="display:flex; gap:8px; margin-top:8px; align-items:end;">
     <label style="flex:1;">Namespace
-      <input type="text" id="namespace" placeholder="user:me, group:<slug>, org:<slug>, public" style="width:100%;">
+      <input type="text" id="namespace" placeholder="user:me | agent:me/<slug> | group:<slug> | org:<slug> | public | __all__" style="width:100%;">
     </label>
     <label>Limit
+      <small style="display:block;font-size:10px;color:#57606a;">per namespace</small>
       <input type="number" id="limit" value="200" min="10" max="2000" style="width:90px;">
     </label>
     <button type="submit">Load</button>
@@ -98,24 +98,33 @@
     });
   }
 
-  async function loadOrgGroupChips() {
-    // Pre-populate chips for every org/group the caller is in — saves typing.
+  // The full list of namespaces the caller can read. Held in module
+  // scope so the __all__ fetch fan-out doesn't re-query the server.
+  let readableNamespaces = [];
+
+  async function loadNamespaceChips() {
     try {
-      const [orgs, groups] = await Promise.all([
-        fetch("/v1/orgs",   { headers: auth }).then(r => r.ok ? r.json() : []),
-        fetch("/v1/groups", { headers: auth }).then(r => r.ok ? r.json() : []),
-      ]);
+      const r = await fetch("/v1/namespaces", { headers: auth });
+      if (!r.ok) return;
+      const body = await r.json();
+      readableNamespaces = body.namespaces || [];
       const wrap = document.getElementById("ns-chips");
-      for (const o of orgs)   addChip(wrap, `org:${o.slug}`);
-      for (const g of groups) addChip(wrap, `group:${g.slug}`);
+      for (const ns of readableNamespaces) {
+        // Label agent: with a leaf-only form so the chip stays readable
+        // (the full agent:<uuid>/<slug> is too long).
+        const label = ns.kind === "agent"
+          ? `agent:${ns.value.split("/").slice(1).join("/")}`
+          : ns.raw;
+        addChip(wrap, ns.raw, label);
+      }
     } catch (e) { /* non-fatal */ }
   }
 
-  function addChip(wrap, raw) {
+  function addChip(wrap, raw, label) {
     const chip = document.createElement("span");
     chip.className = "ns-chip";
     chip.dataset.ns = raw;
-    chip.textContent = raw;
+    chip.textContent = label || raw;
     chip.addEventListener("click", () => load(raw));
     wrap.appendChild(chip);
   }
@@ -133,8 +142,9 @@
   async function load(ns) {
     document.getElementById("namespace").value = ns;
     highlightChip(ns);
-    setStatus(`<em>Loading <code>${ns}</code>…</em>`);
     const limit = document.getElementById("limit").value || 200;
+    if (ns === "__all__") { return loadAll(limit); }
+    setStatus(`<em>Loading <code>${ns}</code>…</em>`);
     const params = new URLSearchParams({ namespace: ns, limit });
     const r = await fetch(`/v1/graph?${params}`, { headers: auth });
     if (!r.ok) {
@@ -145,6 +155,56 @@
     const data = await r.json();
     renderGraph(data);
     setStatus(`<code>${data.namespace}</code> — ${data.nodes.length} nodes, ${data.edges.length} edges.`);
+  }
+
+  async function loadAll(limit) {
+    if (!readableNamespaces.length) {
+      setStatus("No readable namespaces yet — try refreshing.", "bad");
+      return;
+    }
+    setStatus(`<em>Loading ${readableNamespaces.length} namespaces…</em>`);
+    const results = await Promise.all(
+      readableNamespaces.map(ns => {
+        const params = new URLSearchParams({ namespace: ns.raw, limit });
+        return fetch(`/v1/graph?${params}`, { headers: auth })
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null);
+      })
+    );
+    // Merge. Nodes are deduped by id. Edges by (source, target, type, name)
+    // so identical RELATES_TO edges from two namespace dumps collapse, but
+    // distinct facts with the same endpoints stay distinct.
+    const seenNodes = new Map();
+    const seenEdges = new Map();
+    let okCount = 0;
+    let nsCount = 0;
+    for (const r of results) {
+      if (!r) continue;
+      okCount++;
+      nsCount++;
+      for (const n of r.nodes) {
+        if (!seenNodes.has(n.id)) {
+          seenNodes.set(n.id, { ...n, _namespaces: [r.namespace] });
+        } else {
+          seenNodes.get(n.id)._namespaces.push(r.namespace);
+        }
+      }
+      for (const e of r.edges) {
+        const key = `${e.source}|${e.target}|${e.type}|${e.name || ""}`;
+        if (!seenEdges.has(key)) seenEdges.set(key, e);
+      }
+    }
+    const merged = {
+      namespace: `__all__ (${okCount}/${readableNamespaces.length} namespaces)`,
+      nodes: [...seenNodes.values()],
+      edges: [...seenEdges.values()],
+    };
+    renderGraph(merged);
+    setStatus(
+      `Merged ${okCount}/${readableNamespaces.length} namespaces — ` +
+      `${merged.nodes.length} unique nodes, ${merged.edges.length} unique edges. ` +
+      `<small style='color:#57606a'>(per-namespace limit: ${limit})</small>`,
+    );
   }
 
   function renderGraph(data) {
@@ -211,12 +271,16 @@
 
   function showNode(n) {
     if (!n) return;
+    const nsList = n._namespaces && n._namespaces.length
+      ? `<dt>namespaces</dt><dd>${n._namespaces.map(ns => `<code style="font-size:11px">${escape(ns)}</code>`).join("<br>")}</dd>`
+      : "";
     document.getElementById("node-detail").innerHTML = `
       <strong>${n.kind}</strong> · <code style="font-size:11px;">${n.id.slice(0,12)}…</code>
       <dl>
         <dt>name</dt><dd>${escape(n.name) || "<em>—</em>"}</dd>
         ${n.summary ? `<dt>summary</dt><dd><pre>${escape(n.summary)}</pre></dd>` : ""}
         ${n.content ? `<dt>content</dt><dd><pre>${escape(n.content)}</pre></dd>` : ""}
+        ${nsList}
       </dl>
     `;
   }
@@ -244,7 +308,8 @@
     return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
   }
 
-  loadOrgGroupChips();
-  load("user:me");
+  // Need the namespace list before "All readable" can fan out. Once chips
+  // are loaded, kick off the initial render.
+  loadNamespaceChips().then(() => load("__all__"));
 </script>
 {% endblock %}
