@@ -9,6 +9,7 @@
   </p>
 
   <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="copyToast"><div class="msg ok" x-text="copyToast"></div></template>
 
   <!-- Connection facts -->
   <table style="margin:8px 0">
@@ -37,9 +38,17 @@
       <td>
         <!-- Active key (just created / rotated / pasted) — embedded into the snippets. -->
         <template x-if="apiKey">
-          <div style="margin-bottom:8px">
-            <code class="token" x-text="apiKey"></code>
-            <button class="secondary" style="margin-left:8px" @click="apiKey = ''">Clear</button>
+          <div style="margin-bottom:8px; padding:8px 10px; background:#fff8e1; border:1px solid #f0c674; border-radius:6px">
+            <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+              <code class="token" x-text="apiKey" style="user-select:all"></code>
+              <button class="secondary" @click="copy(apiKey, 'API key')">Copy key</button>
+              <button class="secondary" @click="clearKey()">Clear</button>
+            </div>
+            <p style="margin:6px 0 0; font-size:11px; color:#7a5a00">
+              <span x-text="freshKey ? '⚠️ Plaintext shown ONCE — save it now (clipboard, password manager, or copy the full snippet below). ' : ''"></span>
+              Kept in this browser tab's sessionStorage so refresh / tab-switch
+              won't lose it. Cleared when you close the tab or click <em>Clear</em>.
+            </p>
           </div>
         </template>
 
@@ -118,7 +127,9 @@
         Ollama, etc. — anything that can issue HTTPS calls.
       </p>
       <textarea readonly :value="prompts.system" rows="22" class="snippet"></textarea>
-      <button class="secondary" @click="copy(prompts.system)">Copy</button>
+      <button class="secondary" @click="copy(prompts.system, 'system prompt')">
+        Copy snippet<span x-text="apiKey ? ' (with API key)' : ' (with placeholder)'"></span>
+      </button>
     </div>
   </template>
 
@@ -130,7 +141,9 @@
         it on every session and call the memory service as instructed.
       </p>
       <textarea readonly :value="prompts.claude" rows="22" class="snippet"></textarea>
-      <button class="secondary" @click="copy(prompts.claude)">Copy</button>
+      <button class="secondary" @click="copy(prompts.claude, 'CLAUDE.md snippet')">
+        Copy snippet<span x-text="apiKey ? ' (with API key)' : ' (with placeholder)'"></span>
+      </button>
     </div>
   </template>
 
@@ -142,7 +155,9 @@
         described as plain HTTP calls so the agent's tool layer can wrap them.
       </p>
       <textarea readonly :value="prompts.forge" rows="22" class="snippet"></textarea>
-      <button class="secondary" @click="copy(prompts.forge)">Copy</button>
+      <button class="secondary" @click="copy(prompts.forge, 'Forge instructions')">
+        Copy snippet<span x-text="apiKey ? ' (with API key)' : ' (with placeholder)'"></span>
+      </button>
     </div>
   </template>
 </section>
@@ -170,11 +185,13 @@
       me: null, error: null,
       baseUrl: location.origin,
       apiKey: "",          // populated only when user creates / rotates / pastes
+      freshKey: false,     // true if apiKey came from this-session create/rotate
       pastedKey: "",
       existingKeys: [],
       selectedKeyId: "",
       rotating: false,
       active: "system",
+      copyToast: "",       // transient "Copied X to clipboard" feedback
       tabs: [
         { id: "system", label: "Generic system prompt" },
         { id: "claude", label: "CLAUDE.md" },
@@ -183,11 +200,35 @@
       async load() {
         window.ms.requireAuth();
         this.error = null;
+        // Restore the last freshly-generated key from sessionStorage so a
+        // refresh / tab-switch doesn't lose the plaintext before the user
+        // had a chance to copy it.
+        try {
+          const stash = sessionStorage.getItem("ms_integrate_apikey");
+          if (stash) {
+            const o = JSON.parse(stash);
+            this.apiKey = o.key || "";
+            this.selectedKeyId = o.id || "";
+            this.freshKey = !!o.fresh;
+          }
+        } catch (_) { /* ignore */ }
         try {
           this.me = window.ms.me || await window.ms.json("/v1/auth/me");
           window.ms.me = this.me;
           await this.loadKeys();
         } catch (e) { this.error = e.message; }
+      },
+      stash(key, id, fresh) {
+        try {
+          sessionStorage.setItem("ms_integrate_apikey", JSON.stringify({
+            key, id, fresh,
+          }));
+        } catch (_) { /* quota / safari private — non-fatal */ }
+      },
+      clearKey() {
+        this.apiKey = "";
+        this.freshKey = false;
+        try { sessionStorage.removeItem("ms_integrate_apikey"); } catch (_) {}
       },
       async loadKeys() {
         try {
@@ -216,6 +257,8 @@
           )) return;
         }
         this.apiKey = v;
+        this.freshKey = false;
+        this.stash(v, this.selectedKeyId, false);
         this.pastedKey = "";
       },
       async createKey() {
@@ -228,8 +271,10 @@
             body: JSON.stringify({ agent_name: name }),
           });
           this.apiKey = r.key;
+          this.freshKey = true;
           await this.loadKeys();
           this.selectedKeyId = r.id;
+          this.stash(r.key, r.id, true);
         } catch (e) { this.error = e.message; }
       },
       async rotateSelected() {
@@ -249,14 +294,22 @@
             body: JSON.stringify({ agent_name: k.agent_name }),
           });
           this.apiKey = fresh.key;
+          this.freshKey = true;
+          this.stash(fresh.key, fresh.id, true);
           await window.ms.fetch(`/v1/users/me/api-keys/${k.id}`, { method: "DELETE" });
           await this.loadKeys();
           this.selectedKeyId = fresh.id;
         } catch (e) { this.error = e.message; }
         finally { this.rotating = false; }
       },
-      copy(text) {
-        navigator.clipboard?.writeText(text);
+      async copy(text, label) {
+        try {
+          await navigator.clipboard.writeText(text);
+          this.copyToast = `Copied ${label || 'text'} to clipboard.`;
+          setTimeout(() => { this.copyToast = ""; }, 2200);
+        } catch (e) {
+          this.error = "Clipboard blocked by the browser. Select the text and Cmd/Ctrl+C.";
+        }
       },
       get namespace() {
         return this.me ? `user:${this.me.id}` : "user:<your-id>";
