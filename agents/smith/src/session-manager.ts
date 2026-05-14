@@ -6,11 +6,15 @@
  * handle multiple users / chat windows in parallel we keep one Session
  * per conversation_id and create on demand.
  *
- * MVP: in-memory only. Restart wipes mid-conversation history; semantic
- * memory stays put in TEMPER. Replace this with a disk-backed or
- * Temper-backed implementation when conversation continuity across
- * restarts matters.
+ * Sessions are now disk-persisted as JSONL — one file per conversation_id
+ * under `<cwd>/.data/smith-sessions/<id>.jsonl`. Restart resumes prior
+ * conversation history. Semantic memory still flows through TEMPER (the
+ * two layers complement each other: JSONL = "what was just said in this
+ * thread", TEMPER = "what I know about this user across all threads").
  */
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, resolve as resolvePath } from "node:path";
+
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -30,6 +34,42 @@ type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 // System prompt lives in src/extensions/smith-personality.ts and is
 // injected via pi's `before_agent_start` event — see comments there
 // for why this is non-optional for the memory discipline to fire.
+
+/**
+ * Sanitise a conversation_id into something safe to use as a filename.
+ * Whitelist alnum + dash + underscore; anything else collapses to '_'.
+ * 64-char cap. Falls back to "default" for an empty input.
+ */
+function safeConvId(raw: string): string {
+  const cleaned = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+  return cleaned || "default";
+}
+
+function sessionFilePath(conversationId: string): string {
+  const root = resolvePath(process.cwd(), ".data", "smith-sessions");
+  mkdirSync(root, { recursive: true });
+  return join(root, `${safeConvId(conversationId)}.jsonl`);
+}
+
+/**
+ * Get a pi SessionManager pointed at the conversation's JSONL file.
+ * - File exists → resumes (loads prior entries, points the manager at it).
+ * - File missing → touch empty + open; pi's setSessionFile() detects the
+ *   empty file, calls newSession() internally, and starts writing a
+ *   fresh session header at our chosen path.
+ *
+ * Returns the path too so the caller can log / surface it.
+ */
+function loadSessionManager(conversationId: string): {
+  sm: PiSessionManager;
+  path: string;
+  resumed: boolean;
+} {
+  const path = sessionFilePath(conversationId);
+  const resumed = existsSync(path);
+  if (!resumed) writeFileSync(path, "");      // touch so open() accepts it
+  return { sm: PiSessionManager.open(path), path, resumed };
+}
 
 class SmithSessionPool {
   private sessions = new Map<string, AgentSession>();
@@ -116,12 +156,17 @@ class SmithSessionPool {
     });
     await resourceLoader.reload();
 
+    const { sm: piSession, path: sessPath, resumed } = loadSessionManager(conversationId);
+    console.log(
+      `[smith] session ${resumed ? "resumed" : "created"}: convId=${conversationId} → ${sessPath}`,
+    );
+
     const { session } = await createAgentSession({
       model,
       authStorage: this.authStorage,
       modelRegistry: this.modelRegistry,
       resourceLoader,
-      sessionManager: PiSessionManager.inMemory(),
+      sessionManager: piSession,
       // Disable pi's built-in coding tools (read / bash / edit / write /
       // grep / find / ls). They're useful in the coding-agent CLI but
       // irrelevant for an enterprise personal assistant and would just
