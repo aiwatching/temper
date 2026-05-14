@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card" x-data="acceptPage()" x-init="init()">
+<div x-data="acceptPage()" x-init="init()">
   <h2>Accept invite</h2>
   <p style="color:var(--muted)">
     You were invited to this Memory Service. Pick a password to activate
@@ -27,7 +27,11 @@
   </template>
 
   <template x-if="error"><div class="msg bad" x-text="error"></div></template>
-</section>
+
+  <div class="auth-foot">
+    <a href="/admin/login">Already have an account? Sign in</a>
+  </div>
+</div>
 
 <script>
   function acceptPage() {

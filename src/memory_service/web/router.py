@@ -28,19 +28,32 @@ async def admin_login(request: Request) -> HTMLResponse:
 
     return templates.TemplateResponse(
         request, "login.html",
-        {"title": "Login", "allow_self_registration": get_settings().allow_self_registration},
+        {
+            "title": "Sign in",
+            "bare": True,
+            "allow_self_registration": get_settings().allow_self_registration,
+        },
     )
 
 
 @router.get("/admin/setup", response_class=HTMLResponse, include_in_schema=False)
 async def admin_setup(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "setup.html", {"title": "Setup"})
+    return templates.TemplateResponse(
+        request, "setup.html", {"title": "Initial setup", "bare": True}
+    )
 
 
 @router.get("/admin/accept-invite", response_class=HTMLResponse, include_in_schema=False)
 async def admin_accept_invite(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
-        request, "accept_invite.html", {"title": "Accept invite"}
+        request, "accept_invite.html", {"title": "Accept invite", "bare": True}
+    )
+
+
+@router.get("/admin/forgot", response_class=HTMLResponse, include_in_schema=False)
+async def admin_forgot(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "forgot.html", {"title": "Forgot password", "bare": True}
     )
 
 

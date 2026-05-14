@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card" x-data="setupPage()" x-init="check()">
+<div x-data="setupPage()" x-init="check()">
   <h2>Initial setup</h2>
 
   <template x-if="loading">
@@ -33,7 +33,11 @@
       <template x-if="error"><div class="msg bad" x-text="error"></div></template>
     </div>
   </template>
-</section>
+
+  <div class="auth-foot">
+    <a href="/admin/login">Sign in instead</a>
+  </div>
+</div>
 
 <script>
   function setupPage() {

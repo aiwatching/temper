@@ -1,48 +1,44 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <div class="tabs">
-    <button class="active" data-tab="login">Login</button>
-    {% if allow_self_registration %}
-    <button data-tab="register">Register</button>
-    {% endif %}
-  </div>
+<h2>Sign in</h2>
 
-  <form id="login-form" class="stacked">
-    <label>Email <input type="email" name="email" required></label>
-    <label>Password <input type="password" name="password" minlength="8" required></label>
-    <button type="submit">Sign in</button>
-  </form>
-
+<div class="tabs">
+  <button class="active" data-tab="login">Login</button>
   {% if allow_self_registration %}
-  <form id="register-form" class="stacked" style="display:none">
-    <label>Email <input type="email" name="email" required></label>
-    <label>Display name (optional) <input type="text" name="display_name"></label>
-    <label>Password (≥ 8 chars) <input type="password" name="password" minlength="8" required></label>
-    <button type="submit">Create account</button>
-  </form>
-  {% else %}
-  <p style="color:var(--muted); font-size:12px; margin-top:14px">
-    <strong>Self-registration disabled.</strong> An admin needs to add
-    you via the user management page. If you've already been added,
-    use the invite link they sent you.
-  </p>
+  <button data-tab="register">Register</button>
   {% endif %}
+</div>
 
-  <div id="msg"></div>
+<form id="login-form" class="stacked">
+  <label>Email <input type="email" name="email" required autofocus></label>
+  <label>Password <input type="password" name="password" minlength="8" required></label>
+  <button type="submit">Sign in</button>
+</form>
 
-  <hr style="margin:20px 0; border:0; border-top:1px solid var(--border)">
-  <p style="color: var(--muted); font-size: 12px; margin: 0">
-    <strong>How super_admin works:</strong> register with the email matching
-    <code>BOOTSTRAP_SUPER_ADMIN_EMAIL</code> in <code>.env</code>; that account is
-    auto-promoted on first login. Super_admin is the only account that can
-    create orgs and write to the <code>public</code> namespace. The bootstrap
-    flag is idempotent — drop it from <code>.env</code> after first boot if you
-    don't want it re-promoting.
-  </p>
-</section>
+{% if allow_self_registration %}
+<form id="register-form" class="stacked" style="display:none">
+  <label>Email <input type="email" name="email" required></label>
+  <label>Display name (optional) <input type="text" name="display_name"></label>
+  <label>Password (≥ 8 chars) <input type="password" name="password" minlength="8" required></label>
+  <button type="submit">Create account</button>
+</form>
+{% endif %}
+
+<div id="msg"></div>
+
+<div class="auth-foot">
+  <a href="/admin/forgot">Forgot password?</a>
+  {% if not allow_self_registration %}
+    <span>Invite-only — contact your admin</span>
+  {% endif %}
+</div>
 
 <script>
+  // If already signed in, skip the form.
+  if (localStorage.getItem("ms_token")) {
+    location.replace("/admin");
+  }
+
   const msg = (text, cls="ok") => {
     document.getElementById("msg").innerHTML = `<div class="msg ${cls}">${text}</div>`;
   };
@@ -52,26 +48,30 @@
       document.querySelectorAll(".tabs button").forEach(x => x.classList.remove("active"));
       b.classList.add("active");
       const tab = b.dataset.tab;
-      document.getElementById("login-form").style.display    = tab === "login"    ? "" : "none";
-      document.getElementById("register-form").style.display = tab === "register" ? "" : "none";
+      document.getElementById("login-form").style.display = tab === "login" ? "" : "none";
+      const reg = document.getElementById("register-form");
+      if (reg) reg.style.display = tab === "register" ? "" : "none";
       document.getElementById("msg").innerHTML = "";
     });
   });
-  if (location.hash === "#register") document.querySelector('[data-tab="register"]').click();
+  if (location.hash === "#register") {
+    document.querySelector('[data-tab="register"]')?.click();
+  }
 
   document.getElementById("login-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const body = JSON.stringify(Object.fromEntries(fd));
     const r = await fetch("/v1/auth/login", { method: "POST", headers: {"Content-Type":"application/json"}, body });
-    if (!r.ok) { msg(`Login failed (${r.status})`, "bad"); return; }
+    if (!r.ok) { msg("Invalid email or password", "bad"); return; }
     const data = await r.json();
     localStorage.setItem("ms_token", data.access_token);
     localStorage.setItem("ms_email", fd.get("email"));
-    location.href = "/admin/me";
+    location.href = "/admin";
   });
 
-  document.getElementById("register-form").addEventListener("submit", async (e) => {
+  const regForm = document.getElementById("register-form");
+  if (regForm) regForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
     const body = JSON.stringify(Object.fromEntries(fd));

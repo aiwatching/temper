@@ -7,7 +7,9 @@
   <link rel="stylesheet" href="/admin/static/style.css">
   <script defer src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js"></script>
 </head>
-<body class="app">
+<body class="{% if bare %}auth-shell{% else %}app{% endif %}">
+
+{% if not bare %}
   <aside class="sidebar">
     <div class="brand">
       <a href="/admin">
@@ -52,6 +54,7 @@
       <span id="auth-status" class="auth-status"></span>
     </div>
   </aside>
+{% endif %}
 
   <script>
     // Shared API helper used by every page's Alpine component.
@@ -83,6 +86,19 @@
       },
     };
 
+    // Auth gate: pages NOT marked `public_page=True` on the backend
+    // bounce anonymous visitors to /admin/login. Driven from a tiny
+    // allowlist in the template var below so it stays close to the
+    // route definitions.
+    {% if not bare %}
+    (function () {
+      if (!window.ms.token()) {
+        location.replace("/admin/login");
+        return;
+      }
+    })();
+    {% endif %}
+
     // Highlight the nav link matching the current path.
     (function () {
       const path = location.pathname;
@@ -94,11 +110,11 @@
     })();
 
     // Auth status footer block. Shows email + role badge derived from
-    // /v1/auth/me (we cache the result in window.ms.me so other pages
-    // can call window.ms.role() / window.ms.isSuperAdmin() without
-    // hitting the API a second time).
+    // /v1/auth/me. Only runs when the sidebar is present (auth-only
+    // pages don't have this element).
     (function () {
       const el = document.getElementById("auth-status");
+      if (!el) return;
       const token = localStorage.getItem("ms_token");
       const email = localStorage.getItem("ms_email");
       if (!token || !email) {
@@ -110,7 +126,7 @@
         e.preventDefault();
         localStorage.removeItem("ms_token");
         localStorage.removeItem("ms_email");
-        location.href = "/admin";
+        location.href = "/admin/login";
       });
       // Fetch role for the badge — non-blocking. Also force-redirect
       // any logged-in account flagged must_change_password to the
@@ -120,7 +136,6 @@
         if (
           me.must_change_password === true
           && location.pathname !== "/admin/change-password"
-          && location.pathname !== "/admin/login"
         ) {
           location.href = "/admin/change-password";
           return;
@@ -151,14 +166,23 @@
     window.ms.isSuperAdmin = () => window.ms.me?.is_super_admin === true;
   </script>
 
-  <main class="content {% if wide %}wide{% endif %}">
-    <header class="page-header">
-      <h1>{{ title or "Memory Service" }}</h1>
-    </header>
-    {% block content %}{% endblock %}
-    <footer>
-      <small>v0.1.0 · Memory Service</small>
-    </footer>
+  <main class="{% if bare %}auth-main{% else %}content{% if wide %} wide{% endif %}{% endif %}">
+    {% if bare %}
+      <div class="auth-card">
+        <div class="auth-brand">
+          <span class="logo">●</span> Memory Service
+        </div>
+        {% block content %}{% endblock %}
+      </div>
+    {% else %}
+      <header class="page-header">
+        <h1>{{ title or "Memory Service" }}</h1>
+      </header>
+      {{ self.content() }}
+      <footer>
+        <small>v0.1.0 · Memory Service</small>
+      </footer>
+    {% endif %}
   </main>
 </body>
 </html>

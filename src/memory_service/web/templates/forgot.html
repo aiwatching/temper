@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Forgot your password?</h2>
+
+<p style="color: var(--muted); font-size: 13px; line-height: 1.5">
+  This server doesn't send emails. To reset your password, contact
+  your administrator — they can issue a reset link from
+  <code>/admin/users</code> → <strong>Reset password</strong>.
+</p>
+
+<p style="color: var(--muted); font-size: 13px; line-height: 1.5">
+  If you <em>are</em> the administrator and you've lost your own
+  password, log into the host running this service and run:
+</p>
+
+<pre style="background:#f6f8fa; padding:10px; border-radius:5px; font-size:12px; overflow:auto">DATABASE_URL=... \
+python -m memory_service.reset_password your-email@example.com</pre>
+
+<p style="color: var(--muted); font-size: 13px">
+  That prints a one-time URL you can use to set a new password.
+</p>
+
+<div class="auth-foot">
+  <a href="/admin/login">← Back to sign in</a>
+</div>
+{% endblock %}

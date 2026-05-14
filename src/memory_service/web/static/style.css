@@ -27,6 +27,43 @@ body {
   color: var(--fg);
 }
 
+/* ---------- Auth shell: centered single-card layout ---------- */
+
+body.auth-shell {
+  background: linear-gradient(180deg, #f6f7f9 0%, #e8eaef 100%);
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.auth-main { width: 100%; max-width: 420px; }
+.auth-card {
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 32px 28px;
+  box-shadow: 0 6px 24px rgba(31, 35, 40, 0.06);
+}
+.auth-brand {
+  font-size: 18px; font-weight: 700;
+  margin-bottom: 18px;
+  color: var(--fg);
+  display: flex; align-items: center; gap: 8px;
+}
+.auth-brand .logo { color: var(--accent); font-size: 20px; }
+.auth-card h2 { margin: 0 0 4px; font-size: 18px; }
+.auth-card > .stacked { max-width: none; }
+.auth-card .tabs { gap: 8px; margin-bottom: 16px; }
+.auth-card a { color: var(--accent); text-decoration: none; }
+.auth-card a:hover { text-decoration: underline; }
+.auth-card .auth-foot {
+  margin-top: 18px; padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+  font-size: 12px; color: var(--muted-2);
+  display: flex; justify-content: space-between; gap: 12px;
+}
+
 /* ---------- App shell: sidebar + main content ---------- */
 
 body.app {
