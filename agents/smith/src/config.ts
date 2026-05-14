@@ -9,7 +9,11 @@
  */
 import "dotenv/config";
 
-type LlmProvider = "anthropic" | "openai" | "deepseek" | "google" | "ollama";
+// pi-ai's KnownProvider includes many; we surface only the ones we've
+// actually validated. Ollama is NOT a pi-ai KnownProvider — if you need
+// local models point an openai-compatible URL at pi via custom config
+// (out of scope for the MVP).
+type LlmProvider = "anthropic" | "openai" | "deepseek" | "google";
 
 export interface SmithConfig {
   // Temper
@@ -76,10 +80,6 @@ export function mapEnvForPi(cfg: SmithConfig): void {
       break;
     case "google":
       process.env.GEMINI_API_KEY = cfg.llmApiKey;
-      break;
-    case "ollama":
-      // ollama runs locally without a key; pi-ai treats it via base URL config.
-      // No env var to set.
       break;
   }
   // Disable pi's install-telemetry attribution headers explicitly — we may

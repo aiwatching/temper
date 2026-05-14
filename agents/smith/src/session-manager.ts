@@ -27,22 +27,21 @@ import { mcpBridgeExtension } from "./extensions/mcp-bridge.js";
 // biome-ignore lint: pi's AgentSession type isn't re-exported cleanly yet.
 type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
-const SYSTEM_PROMPT = `You are Smith, a personal company-level assistant.
-
-You have two tool surfaces:
-  1. memory_search / memory_write — long-term memory in TEMPER (private to
-     this user, scoped to your agent identity). Use memory_search at task
-     start and whenever the user references prior context; use memory_write
-     to record durable facts (preferences, decisions, identity info).
-     One discrete fact per write. Never store credentials or unconsented PII.
-  2. Internal company tools, bridged from MCP servers — tool names are
-     prefixed with the server name (e.g. \`jira__search\`, \`files__read\`).
-
-Default to terse, action-oriented responses. Surface only the top 1–3
-memory hits, paraphrased — never read raw JSON to the user.
-
-Today's date in the user's timezone is whatever the latest message
-timestamp implies — don't assume.`.trim();
+// TODO(systemPrompt): pi has no createAgentSession.systemPrompt option.
+// The intended path is either a Skill (markdown bundle) or an extension
+// that hooks the `before_provider_request` event and injects a system
+// message. For MVP we rely on the tool descriptions to teach the model
+// what memory_search/memory_write are for; revisit once tool calls work
+// end-to-end so we can A/B against a real personality prompt.
+//
+// Keeping the draft here so we don't lose the wording:
+//
+//   You are Smith, a personal company-level assistant.
+//   You have two tool surfaces:
+//     1. memory_search / memory_write — long-term memory in TEMPER ...
+//     2. Internal company tools bridged from MCP servers ...
+//   Default to terse, action-oriented responses. Surface only the top
+//   1–3 memory hits, paraphrased — never read raw JSON to the user.
 
 class SmithSessionPool {
   private sessions = new Map<string, AgentSession>();
@@ -54,11 +53,20 @@ class SmithSessionPool {
     if (existing) return existing;
 
     const cfg = getConfig();
-    const model = getModel(cfg.llmProvider, cfg.llmModel);
+    // pi-ai's getModel is generic over its compile-time MODELS catalog —
+    // it constrains modelId to keys of MODELS[provider] which we can't
+    // satisfy from an arbitrary env string. Cast through `never`; the
+    // runtime lookup inside pi-ai either resolves to a Model or returns
+    // undefined, which we then surface as a friendly error.
+    const model = getModel(
+      cfg.llmProvider as never,
+      cfg.llmModel as never,
+    );
     if (!model) {
       throw new Error(
         `Unknown LLM model: provider=${cfg.llmProvider} model=${cfg.llmModel}. ` +
-        "Check the pi-ai catalog or add it via authStorage.",
+        "Check pi-ai's catalog in node_modules/@earendil-works/pi-ai/dist/models.generated.d.ts " +
+        "or register a custom model via authStorage.",
       );
     }
 
@@ -80,7 +88,12 @@ class SmithSessionPool {
       modelRegistry: this.modelRegistry,
       resourceLoader,
       sessionManager: PiSessionManager.inMemory(),
-      systemPrompt: SYSTEM_PROMPT,
+      // Disable pi's built-in coding tools (read / bash / edit / write /
+      // grep / find / ls). They're useful in the coding-agent CLI but
+      // irrelevant for an enterprise personal assistant and would just
+      // pollute the model's tool surface. Extension-registered tools
+      // (memory_*, MCP-bridged) stay enabled.
+      noTools: "builtin",
     });
     this.sessions.set(conversationId, session);
     return session;
