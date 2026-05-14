@@ -33,3 +33,6 @@ data/
 *.sqlite3
 logs/
 .forge/
+*.swp
+*.swo
+.*.sw?
