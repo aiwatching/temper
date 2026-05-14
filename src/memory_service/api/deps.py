@@ -52,6 +52,11 @@ async def _user_from_api_key(key: str, db: AsyncSession) -> User | None:
     api_key, user = row
     # Touch last_used_at (best-effort — failure here shouldn't break auth)
     api_key.last_used_at = datetime.now(UTC)
+    # Stash the key's agent_slug on the User instance so default namespace
+    # resolution (core.namespaces.default_namespace_for) picks it up. Set
+    # to None explicitly for legacy keys so a stale attr from a previous
+    # request can't leak across.
+    user._default_agent_slug = api_key.agent_slug  # type: ignore[attr-defined]
     return user
 
 

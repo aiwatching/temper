@@ -30,7 +30,16 @@
       <th>Default namespace</th>
       <td>
         <code x-text="namespace"></code>
-        <small style="color:var(--muted); margin-left:6px">private to you</small>
+        <template x-if="effectiveAgentSlug">
+          <small style="color:var(--muted); margin-left:6px">
+            scoped to agent <code x-text="effectiveAgentSlug"></code> — isolated from your other agents
+          </small>
+        </template>
+        <template x-if="!effectiveAgentSlug">
+          <small style="color:var(--muted); margin-left:6px">
+            flat user namespace — shared across <strong>all</strong> your agents using legacy keys
+          </small>
+        </template>
       </td>
     </tr>
     <tr>
@@ -59,7 +68,8 @@
                   style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; min-width:280px">
             <option value="">— pick one of your keys —</option>
             <template x-for="k in activeKeys" :key="k.id">
-              <option :value="k.id" x-text="`${k.agent_name}  ·  ${k.prefix}`"></option>
+              <option :value="k.id"
+                      x-text="`${k.agent_name}  ·  ${k.prefix}  ·  ${k.agent_slug ? 'agent:'+k.agent_slug : 'flat user:'}`"></option>
             </template>
           </select>
           <template x-if="selectedKey">
@@ -97,13 +107,40 @@
         </template>
 
         <!-- Or create a brand-new key. -->
-        <div style="margin-top:6px">
-          <button class="secondary" @click="createKey()">+ Create new key</button>
-          <small style="color:var(--muted); margin-left:8px">
-            For a fresh agent that doesn't exist yet.
-          </small>
-        </div>
-
+        <template x-if="!showCreate">
+          <div style="margin-top:6px">
+            <button class="secondary" @click="openCreate()">+ Create new key</button>
+            <small style="color:var(--muted); margin-left:8px">
+              For a fresh agent that doesn't exist yet.
+            </small>
+          </div>
+        </template>
+        <template x-if="showCreate">
+          <div style="margin-top:6px; padding:10px 12px; border:1px solid var(--border); border-radius:6px; background:var(--bg-2,#fafafa)">
+            <h4 style="margin:0 0 6px">New API key</h4>
+            <div style="display:grid; grid-template-columns:140px 1fr; gap:6px 10px; align-items:center; font-size:13px">
+              <label>agent name</label>
+              <input type="text" x-model="newKey.agent_name" placeholder="english-coach-laptop"
+                     @input="syncSlug()"
+                     style="padding:4px 6px; border:1px solid var(--border); border-radius:4px">
+              <label>agent slug</label>
+              <div>
+                <input type="text" x-model="newKey.agent_slug" placeholder="english-coach"
+                       pattern="[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?"
+                       @input="newKey._slugTouched = true"
+                       style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-family:monospace; width:240px">
+                <small style="color:var(--muted); margin-left:6px">
+                  scopes memory to <code>agent:&lt;you&gt;/<span x-text="newKey.agent_slug || '…'"></span></code>;
+                  clear to share with all your agents (legacy)
+                </small>
+              </div>
+            </div>
+            <div style="margin-top:8px">
+              <button class="secondary" @click="submitCreate()" :disabled="!newKey.agent_name">Create</button>
+              <button class="secondary" @click="showCreate = false">Cancel</button>
+            </div>
+          </div>
+        </template>
         <p style="color:var(--muted); font-size:11px; margin:6px 0 0">
           Plaintext is only shown once. Save it somewhere — or come back and
           Rotate to get a new one. Manage all your keys on <a href="/admin/me">My API keys</a>.
@@ -185,11 +222,14 @@
       me: null, error: null,
       baseUrl: location.origin,
       apiKey: "",          // populated only when user creates / rotates / pastes
+      activeKeyAgentSlug: "", // agent_slug of the key currently driving the snippet
       freshKey: false,     // true if apiKey came from this-session create/rotate
       pastedKey: "",
       existingKeys: [],
       selectedKeyId: "",
       rotating: false,
+      showCreate: false,
+      newKey: { agent_name: "", agent_slug: "", _slugTouched: false },
       active: "system",
       copyToast: "",       // transient "Copied X to clipboard" feedback
       tabs: [
@@ -209,6 +249,7 @@
             const o = JSON.parse(stash);
             this.apiKey = o.key || "";
             this.selectedKeyId = o.id || "";
+            this.activeKeyAgentSlug = o.agent_slug || "";
             this.freshKey = !!o.fresh;
           }
         } catch (_) { /* ignore */ }
@@ -218,15 +259,16 @@
           await this.loadKeys();
         } catch (e) { this.error = e.message; }
       },
-      stash(key, id, fresh) {
+      stash(key, id, agentSlug, fresh) {
         try {
           sessionStorage.setItem("ms_integrate_apikey", JSON.stringify({
-            key, id, fresh,
+            key, id, agent_slug: agentSlug || "", fresh,
           }));
         } catch (_) { /* quota / safari private — non-fatal */ }
       },
       clearKey() {
         this.apiKey = "";
+        this.activeKeyAgentSlug = "";
         this.freshKey = false;
         try { sessionStorage.removeItem("ms_integrate_apikey"); } catch (_) {}
       },
@@ -257,24 +299,45 @@
           )) return;
         }
         this.apiKey = v;
+        this.activeKeyAgentSlug = this.selectedKey ? (this.selectedKey.agent_slug || "") : "";
         this.freshKey = false;
-        this.stash(v, this.selectedKeyId, false);
+        this.stash(v, this.selectedKeyId, this.activeKeyAgentSlug, false);
         this.pastedKey = "";
       },
-      async createKey() {
-        const name = prompt("Name this agent (e.g. 'claude-code-laptop')",
-                            "agent-" + new Date().toISOString().slice(0, 10));
+      // ---- create new ----
+      openCreate() {
+        this.showCreate = true;
+        const ts = new Date().toISOString().slice(0, 10);
+        this.newKey = { agent_name: "agent-" + ts, agent_slug: "agent-" + ts, _slugTouched: false };
+      },
+      syncSlug() {
+        // Keep agent_slug in sync with agent_name until the user edits the
+        // slug directly. Slugify: lowercase, non-alnum → hyphen, collapse.
+        if (this.newKey._slugTouched) return;
+        const s = (this.newKey.agent_name || "")
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 64);
+        this.newKey.agent_slug = s;
+      },
+      async submitCreate() {
+        const name = (this.newKey.agent_name || "").trim();
+        const slug = (this.newKey.agent_slug || "").trim();
         if (!name) return;
+        const body = { agent_name: name };
+        if (slug) body.agent_slug = slug;  // omit → server stores NULL (legacy / unscoped)
         try {
           const r = await window.ms.json("/v1/users/me/api-keys", {
-            method: "POST",
-            body: JSON.stringify({ agent_name: name }),
+            method: "POST", body: JSON.stringify(body),
           });
           this.apiKey = r.key;
+          this.activeKeyAgentSlug = r.agent_slug || "";
           this.freshKey = true;
+          this.stash(r.key, r.id, this.activeKeyAgentSlug, true);
           await this.loadKeys();
           this.selectedKeyId = r.id;
-          this.stash(r.key, r.id, true);
+          this.showCreate = false;
         } catch (e) { this.error = e.message; }
       },
       async rotateSelected() {
@@ -283,20 +346,24 @@
         if (!confirm(
           `Rotate key '${k.agent_name}'?\n` +
           "The old key (prefix " + k.prefix + ") is revoked immediately — " +
-          "anyone still using it stops working — and a fresh key is generated."
+          "anyone still using it stops working — and a fresh key is generated " +
+          "with the same agent_slug so memory scope is preserved."
         )) return;
         this.rotating = true; this.error = null;
         try {
-          // Create the fresh key with the same name first, so even if revoke
-          // fails the user has the new plaintext in hand.
+          // Revoke FIRST in the rotate case — the unique (user_id, agent_slug)
+          // constraint would otherwise reject the new key. We still recover
+          // gracefully if the create fails (the user can re-create manually).
+          await window.ms.fetch(`/v1/users/me/api-keys/${k.id}`, { method: "DELETE" });
+          const body = { agent_name: k.agent_name };
+          if (k.agent_slug) body.agent_slug = k.agent_slug;
           const fresh = await window.ms.json("/v1/users/me/api-keys", {
-            method: "POST",
-            body: JSON.stringify({ agent_name: k.agent_name }),
+            method: "POST", body: JSON.stringify(body),
           });
           this.apiKey = fresh.key;
+          this.activeKeyAgentSlug = fresh.agent_slug || "";
           this.freshKey = true;
-          this.stash(fresh.key, fresh.id, true);
-          await window.ms.fetch(`/v1/users/me/api-keys/${k.id}`, { method: "DELETE" });
+          this.stash(fresh.key, fresh.id, this.activeKeyAgentSlug, true);
           await this.loadKeys();
           this.selectedKeyId = fresh.id;
         } catch (e) { this.error = e.message; }
@@ -311,8 +378,17 @@
           this.error = "Clipboard blocked by the browser. Select the text and Cmd/Ctrl+C.";
         }
       },
+      get effectiveAgentSlug() {
+        // The scope embedded in the active key. When the user pastes a key
+        // we pull this from the selected key row; on rotate / create we
+        // pull from the API response. Falls back to "" (legacy / unscoped).
+        return this.activeKeyAgentSlug || "";
+      },
       get namespace() {
-        return this.me ? `user:${this.me.id}` : "user:<your-id>";
+        if (!this.me) return "user:<your-id>";
+        return this.effectiveAgentSlug
+          ? `agent:${this.me.id}/${this.effectiveAgentSlug}`
+          : `user:${this.me.id}`;
       },
       get key() {
         return this.apiKey || "YOUR_API_KEY";
@@ -342,11 +418,21 @@
           `Auth header:        X-API-Key: ${key}`,
           `Default namespace:  ${ns}    (omit \`namespace\` in any body to use this)`,
           "",
-          "Other namespaces you may have access to (check with the user):",
-          "  user:<id>     — private to one user",
-          "  group:<slug>  — shared inside a team",
-          "  org:<slug>    — read-only for members; super_admin writes",
-          "  public        — everyone-authenticated read",
+          "Namespace shapes you may use explicitly:",
+          "  user:<id>             — the user's flat namespace, shared across",
+          "                          ALL of their agents (cross-agent recall)",
+          "  agent:<id>/<slug>     — one named agent under a user; isolated",
+          "                          from other agents unless they use the",
+          "                          same slug (explicit memory sharing)",
+          "  agent:me/<slug>       — shortcut for the caller's own agent slug",
+          "  user:me               — shortcut for the caller's user namespace",
+          "  group:<slug>          — shared inside a team",
+          "  org:<slug>            — read-only for members; super_admin writes",
+          "  public                — everyone-authenticated read",
+          "",
+          "Practical rule: by default just omit `namespace` and your default",
+          "scope is used. Write to `user:me` explicitly only when you want",
+          "the user's other agents to see this fact too.",
           "",
           "═══ Mental model ═══",
           "",
@@ -488,6 +574,14 @@
           `- Base URL: \`${base}\``,
           `- Header on every request: \`X-API-Key: ${key}\``,
           `- Default namespace: \`${ns}\` (omit \`namespace\` to use it)`,
+          "- Namespace shapes:",
+          "  - `agent:<id>/<slug>` — one named agent's private memory (the",
+          "    default when an API key has agent_slug set)",
+          "  - `user:<id>` (or `user:me`) — the user's flat namespace, shared",
+          "    across ALL their agents — opt into this only when you want",
+          "    cross-agent recall",
+          "  - `group:<slug>` / `org:<slug>` — team / org-level sharing",
+          "  - `public` — everyone-authenticated read",
           "",
           "### Concepts",
           "",
@@ -616,6 +710,15 @@
           `  Endpoint:           ${base}`,
           `  Auth header:        X-API-Key: ${key}`,
           `  Default namespace:  ${ns}    (omit \`namespace\` to use this)`,
+          "",
+          "Namespace shapes:",
+          "  agent:<id>/<slug>   one named agent's private memory (default",
+          "                      when the API key has agent_slug set)",
+          "  user:<id> / user:me the user's flat namespace, shared across",
+          "                      ALL their agents — opt in for cross-agent recall",
+          "  group:<slug>        team-level sharing",
+          "  org:<slug>          org-level sharing (read for members)",
+          "  public              everyone-authenticated read",
           "",
           "═══ Vocabulary ═══",
           "  episode    raw event you record (one fact per episode)",

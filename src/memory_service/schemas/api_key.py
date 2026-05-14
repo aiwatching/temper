@@ -6,8 +6,18 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+_AGENT_SLUG_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
+
+
 class CreateAPIKeyRequest(BaseModel):
     agent_name: str = Field(min_length=1, max_length=128)
+    # When set, requests via this key default to namespace
+    # `agent:<user_id>/<agent_slug>`. Two keys with the same slug (same user)
+    # share memory — that's how you opt into cross-agent recall on purpose.
+    # Leave null to keep the legacy unscoped behaviour (writes to user:<id>).
+    agent_slug: str | None = Field(
+        default=None, pattern=_AGENT_SLUG_PATTERN, max_length=64
+    )
 
 
 class APIKeyResponse(BaseModel):
@@ -15,6 +25,7 @@ class APIKeyResponse(BaseModel):
 
     id: str
     agent_name: str
+    agent_slug: str | None = None
     prefix: str
     revoked: bool
     created_at: datetime

@@ -22,12 +22,12 @@
 
   <table>
     <thead><tr>
-      <th>user</th><th>agent</th><th>prefix</th><th>created</th>
+      <th>user</th><th>agent</th><th>scope</th><th>prefix</th><th>created</th>
       <th>last used</th><th>status</th><th></th>
     </tr></thead>
     <tbody>
       <template x-if="!loading && filtered().length === 0">
-        <tr><td colspan="7"><em>No API keys.</em></td></tr>
+        <tr><td colspan="8"><em>No API keys.</em></td></tr>
       </template>
       <template x-for="k in filtered()" :key="k.id">
         <tr>
@@ -40,6 +40,14 @@
             </template>
           </td>
           <td x-text="k.agent_name"></td>
+          <td>
+            <template x-if="k.agent_slug">
+              <code x-text="'agent:'+k.agent_slug"></code>
+            </template>
+            <template x-if="!k.agent_slug">
+              <em style="color:var(--muted)" title="Legacy / unscoped key — writes to flat user:&lt;id&gt; namespace">flat user</em>
+            </template>
+          </td>
           <td><code x-text="k.prefix"></code></td>
           <td x-text="window.ms.fmtDate(k.created_at)"></td>
           <td x-text="k.last_used_at ? window.ms.fmtDate(k.last_used_at) : '—'"></td>

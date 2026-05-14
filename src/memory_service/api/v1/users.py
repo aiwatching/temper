@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from memory_service.api.deps import CurrentUser, DBDep
 from memory_service.core.auth import api_key_prefix, generate_api_key, hash_api_key
@@ -28,20 +29,40 @@ async def create_api_key(
     user: CurrentUser,
     db: DBDep,
 ) -> APIKeyCreatedResponse:
-    """Create + return a new API key. **Plaintext is returned only here.**"""
+    """Create + return a new API key. **Plaintext is returned only here.**
+
+    `agent_slug` (when given) becomes the key's routing scope: requests
+    authed by this key default to namespace `agent:<user_id>/<slug>`.
+    Two keys with the same slug share that scope on purpose; the DB
+    unique constraint blocks accidental duplicates.
+    """
     plaintext = generate_api_key()
     api_key = APIKey(
         user_id=user.id,
         agent_name=payload.agent_name,
+        agent_slug=payload.agent_slug,
         key_hash=hash_api_key(plaintext),
         prefix=api_key_prefix(plaintext),
     )
     db.add(api_key)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"You already have an active key with agent_slug "
+                f"{payload.agent_slug!r}. Revoke it first, or pick a "
+                "different slug — two keys with the same slug share memory, "
+                "which is fine if that's what you want."
+            ),
+        ) from None
     await db.refresh(api_key)
     return APIKeyCreatedResponse(
         id=api_key.id,
         agent_name=api_key.agent_name,
+        agent_slug=api_key.agent_slug,
         prefix=api_key.prefix,
         revoked=api_key.revoked,
         created_at=api_key.created_at,
@@ -91,6 +112,7 @@ async def admin_list_all_api_keys(
         AdminAPIKeyListItem(
             id=k.id,
             agent_name=k.agent_name,
+            agent_slug=k.agent_slug,
             prefix=k.prefix,
             revoked=k.revoked,
             created_at=k.created_at,
@@ -146,6 +168,7 @@ async def admin_set_api_key_revoked(
     return AdminAPIKeyListItem(
         id=api_key.id,
         agent_name=api_key.agent_name,
+        agent_slug=api_key.agent_slug,
         prefix=api_key.prefix,
         revoked=api_key.revoked,
         created_at=api_key.created_at,

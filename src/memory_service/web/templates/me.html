@@ -18,8 +18,8 @@
 
   <h3>Existing keys</h3>
   <table id="keys-table">
-    <thead><tr><th>Agent</th><th>Prefix</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr></thead>
-    <tbody><tr><td colspan="6"><em>Loading…</em></td></tr></tbody>
+    <thead><tr><th>Agent</th><th>Scope</th><th>Prefix</th><th>Created</th><th>Last used</th><th>Status</th><th></th></tr></thead>
+    <tbody><tr><td colspan="7"><em>Loading…</em></td></tr></tbody>
   </table>
 </section>
 
@@ -44,17 +44,18 @@
 
   async function loadKeys() {
     const tbody = document.querySelector("#keys-table tbody");
-    tbody.innerHTML = `<tr><td colspan='6'><em>Loading…</em></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan='7'><em>Loading…</em></td></tr>`;
     const r = await fetch("/v1/users/me/api-keys", { headers: authHeaders });
-    if (!r.ok) { tbody.innerHTML = `<tr><td colspan='6' class='bad'>Failed (${r.status})</td></tr>`; return; }
+    if (!r.ok) { tbody.innerHTML = `<tr><td colspan='7' class='bad'>Failed (${r.status})</td></tr>`; return; }
     const keys = await r.json();
     if (keys.length === 0) {
-      tbody.innerHTML = "<tr><td colspan='6'><em>No keys yet.</em></td></tr>";
+      tbody.innerHTML = "<tr><td colspan='7'><em>No keys yet.</em></td></tr>";
       return;
     }
     tbody.innerHTML = keys.map(k => `
       <tr>
         <td>${k.agent_name}</td>
+        <td>${k.agent_slug ? `<code>agent:${k.agent_slug}</code>` : `<em title='Legacy / unscoped key. Writes land in your flat user namespace, shared with other unscoped keys.'>flat user</em>`}</td>
         <td><code>${k.prefix}</code></td>
         <td>${k.created_at}</td>
         <td>${k.last_used_at ?? "<em>never</em>"}</td>
