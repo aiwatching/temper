@@ -12,7 +12,7 @@ Use cases:
        when investigating extraction regressions.
 
 Usage:
-    export MS_BASE_URL=http://localhost:8000
+    export MS_BASE_URL=http://localhost:18088
     export MS_API_KEY=mk_yourkeyhere
 
     # default corpus — 8 sentences covering name/place/relation cases
@@ -61,7 +61,7 @@ DEFAULT_CORPUS = [
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base-url", default=os.environ.get("MS_BASE_URL", "http://localhost:8000"))
+    ap.add_argument("--base-url", default=os.environ.get("MS_BASE_URL", "http://localhost:18088"))
     ap.add_argument("--key", default=os.environ.get("MS_API_KEY"))
     ap.add_argument("--namespace", default=None, help="Override target namespace")
     ap.add_argument("--stdin", action="store_true", help="Read sentences from stdin, one per line")

@@ -8,7 +8,7 @@
 #   cp .env.prod.example .env.prod
 #   <fill in secrets>
 #   docker compose up -d
-#   curl http://localhost:8000/v1/health
+#   curl http://localhost:18088/v1/health
 #
 # Volumes are named so `docker compose down` keeps data; use
 # `docker compose down -v` to wipe.
@@ -71,7 +71,7 @@ services:
     ports:
       # Default: only the local host can reach the API. Set MS_BIND=0.0.0.0
       # in .env.prod if you really want it open (and put nginx in front).
-      - "${MS_BIND:-127.0.0.1}:${MS_PORT:-8000}:8000"
+      - "${MS_BIND:-127.0.0.1}:${MS_PORT:-18088}:18088"
 
 volumes:
   postgres_data:

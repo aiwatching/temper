@@ -10,8 +10,8 @@ normal dev install) puts `memctl` on `$PATH`.
 ## Quick start
 
 ```bash
-# 1. point at your service (defaults to http://localhost:8000)
-memctl --base-url http://localhost:8000 login --email you@example.com
+# 1. point at your service (defaults to http://localhost:18088)
+memctl --base-url http://localhost:18088 login --email you@example.com
 # OR if you already have an API key
 memctl set-key mk_yourkeyhere
 
@@ -34,7 +34,7 @@ Each command picks credentials in this order (first hit wins):
 4. `~/.config/memctl/config.toml`
 
 Base URL has its own precedence: `--base-url` → `MEMCTL_BASE_URL` →
-`MS_BASE_URL` → config file → `http://localhost:8000`.
+`MS_BASE_URL` → config file → `http://localhost:18088`.
 
 The config file is created by `login` and `set-key` and is chmod 0600.
 Wipe with `memctl logout`.

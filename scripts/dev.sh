@@ -10,7 +10,7 @@
 #   4. Start uvicorn with a SQLite dev database under .data/.
 #
 # Usage:
-#   scripts/dev.sh                  # default: 127.0.0.1:8000, opens browser
+#   scripts/dev.sh                  # default: 127.0.0.1:18088, opens browser
 #   MS_PORT=8080 scripts/dev.sh     # custom port
 #   MS_HOST=0.0.0.0 scripts/dev.sh  # bind all interfaces
 #   OPEN_BROWSER=0 scripts/dev.sh   # don't auto-open /admin
@@ -29,7 +29,7 @@ cd "$(dirname "$0")/.."
 
 # Use a memory-service-specific env name so we don't collide with PORT/HOST
 # that other tools (e.g. Forge sets PORT=8403 globally) might export.
-PORT="${MS_PORT:-8000}"
+PORT="${MS_PORT:-18088}"
 HOST="${MS_HOST:-127.0.0.1}"
 
 say()   { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }

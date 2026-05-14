@@ -73,10 +73,10 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 USER app
 
-EXPOSE 8000
+EXPOSE 18088
 
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
-  CMD curl -fsS http://localhost:8000/v1/health | grep -q '"status":"ok"' || exit 1
+  CMD curl -fsS http://localhost:18088/v1/health | grep -q '"status":"ok"' || exit 1
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["uvicorn", "memory_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "memory_service.main:app", "--host", "0.0.0.0", "--port", "18088"]

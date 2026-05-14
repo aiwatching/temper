@@ -15,7 +15,7 @@ Profiles (all share a single configured user / API key):
   write-async  POST /v1/episodes?async_extract=true — returns immediately
 
 Usage:
-    export MS_BASE_URL=http://localhost:8000
+    export MS_BASE_URL=http://localhost:18088
     export MS_API_KEY=mk_...
     python3 scripts/test/bench.py                  # default profile mix
     python3 scripts/test/bench.py --only write-async --num 100 --concurrency 30
@@ -126,7 +126,7 @@ def print_row(profile_name, r):
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default=os.environ.get("MS_BASE_URL", "http://localhost:8000"))
+    ap.add_argument("--base", default=os.environ.get("MS_BASE_URL", "http://localhost:18088"))
     ap.add_argument("--key", default=os.environ.get("MS_API_KEY"))
     ap.add_argument("--only", action="append", help="run only this profile (repeatable)")
     ap.add_argument("--skip", action="append", default=[], help="skip this profile (repeatable)")

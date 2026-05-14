@@ -19,7 +19,7 @@ git clone <repo> memory-service && cd memory-service
 cp .env.prod.example .env.prod
 $EDITOR .env.prod   # fill in the REQUIRED section
 docker compose --env-file .env.prod up -d --build
-curl http://localhost:8000/v1/health
+curl http://localhost:18088/v1/health
 ```
 
 Health response must show every component `ok: true`:
@@ -61,7 +61,7 @@ Optional but **strongly recommended**:
 
 | Port | Reachable from | What |
 |---|---|---|
-| 8000 (host) | depends on `MS_BIND` | Memory Service REST API |
+| 18088 (host) | depends on `MS_BIND` | Memory Service REST API |
 | 3000 (host) | `127.0.0.1` only | FalkorDB Browser UI (graph viz) |
 | postgres | internal compose net only | not exposed to host |
 | falkordb RESP | internal compose net only | not exposed to host |

@@ -9,7 +9,7 @@ This is the live counterpart to `english_agent_minimal.py`:
 
 Run as a REPL:
 
-    export MS_BASE_URL=http://localhost:8000
+    export MS_BASE_URL=http://localhost:18088
     export MS_API_KEY=mk_yourkeyhere
     export LLM_BASE_URL=http://nac-ai.fortinet-us.com:7001/v1
     export LLM_API_KEY=sk-...
@@ -33,7 +33,7 @@ import httpx
 
 # ---- config (env-driven) ------------------------------------------------
 
-MS_BASE_URL = os.environ.get("MS_BASE_URL", "http://localhost:8000").rstrip("/")
+MS_BASE_URL = os.environ.get("MS_BASE_URL", "http://localhost:18088").rstrip("/")
 MS_API_KEY = os.environ.get("MS_API_KEY") or sys.exit("MS_API_KEY env var required")
 
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1").rstrip("/")

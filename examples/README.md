@@ -16,10 +16,10 @@ Run:
 
 ```bash
 # 1. Get an API key (one-time, via the admin page or curl)
-open http://localhost:8000/admin/me
+open http://localhost:18088/admin/me
 
 # 2. Point the example at your service + key
-export MS_BASE_URL=http://localhost:8000
+export MS_BASE_URL=http://localhost:18088
 export MS_API_KEY=mk_yourkeyhere
 
 python3 examples/english_agent_minimal.py
@@ -41,7 +41,7 @@ Same recall→prompt→reply→remember pattern, but the LLM call is
 interactive REPL — so you can actually chat with it.
 
 ```bash
-export MS_BASE_URL=http://localhost:8000
+export MS_BASE_URL=http://localhost:18088
 export MS_API_KEY=mk_yourkeyhere
 export LLM_BASE_URL=http://nac-ai.fortinet-us.com:7001/v1   # forti-k2 gateway
 export LLM_API_KEY=sk-yourtokenhere

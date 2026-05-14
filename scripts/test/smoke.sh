@@ -16,13 +16,13 @@
 #
 # Usage:
 #   API_KEY=mk_... scripts/test/smoke.sh
-#   API_KEY=mk_... BASE=http://localhost:8000 scripts/test/smoke.sh
+#   API_KEY=mk_... BASE=http://localhost:18088 scripts/test/smoke.sh
 #
 # Requires: curl, jq, python3.
 
 set -uo pipefail
 
-BASE="${BASE:-http://localhost:8000}"
+BASE="${BASE:-http://localhost:18088}"
 API_KEY="${API_KEY:-}"
 
 if [[ -z "$API_KEY" ]]; then

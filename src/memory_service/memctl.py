@@ -28,7 +28,7 @@ import httpx
 
 CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "memctl"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
-DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_BASE_URL = "http://localhost:18088"
 
 
 # ---------- config -------------------------------------------------------

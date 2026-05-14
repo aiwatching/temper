@@ -46,7 +46,7 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("-n", "--num", type=int, default=200, help="total requests")
     ap.add_argument("-c", "--concurrency", type=int, default=20, help="concurrent in-flight")
-    ap.add_argument("--base", default=os.environ.get("BASE", "http://localhost:8000"))
+    ap.add_argument("--base", default=os.environ.get("BASE", "http://localhost:18088"))
     ap.add_argument("--path", default="/v1/auth/me")
     args = ap.parse_args()
 

@@ -40,7 +40,7 @@ deps only when `pyproject.toml` changes, brings up the local embedding
 backend via `scripts/start_embedding.sh`, and starts uvicorn with an
 auto-managed SQLite dev DB. Re-run as often as you want.
 
-Once started, the browser opens automatically at `http://localhost:8000/admin`.
+Once started, the browser opens automatically at `http://localhost:18088/admin`.
 
 ### With Docker Compose (full stack including Postgres + FalkorDB)
 

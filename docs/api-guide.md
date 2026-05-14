@@ -1,7 +1,7 @@
 # Memory Service API Guide
 
 A working tour of the v0.1 API. Every block here is a real curl you can
-paste; the service is live at `http://localhost:8000` after `scripts/dev.sh`.
+paste; the service is live at `http://localhost:18088` after `scripts/dev.sh`.
 
 The auto-generated Swagger UI at `/docs` mirrors this exhaustively —
 use that for parameter shapes; this doc focuses on **flows** an agent
@@ -11,7 +11,7 @@ or operator actually performs.
 
 ## 0. Conventions
 
-- Base URL: `http://localhost:8000` (or whatever `MS_PORT` you set).
+- Base URL: `http://localhost:18088` (or whatever `MS_PORT` you set).
 - Auth: every business endpoint accepts either:
   - `Authorization: Bearer <jwt>` from `/v1/auth/login` — for humans/console,
   - `X-API-Key: mk_...` from `/v1/users/me/api-keys` — for agents.
@@ -24,7 +24,7 @@ or operator actually performs.
 ## 1. Create an account
 
 ```bash
-curl -X POST http://localhost:8000/v1/auth/register \
+curl -X POST http://localhost:18088/v1/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email":"you@example.com","password":"correct-horse-battery","display_name":"You"}'
 ```
@@ -35,7 +35,7 @@ get `is_super_admin: true` automatically.
 ## 2. Log in (humans)
 
 ```bash
-TOKEN=$(curl -s -X POST http://localhost:8000/v1/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:18088/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"you@example.com","password":"correct-horse-battery"}' | jq -r .access_token)
 ```
@@ -46,7 +46,7 @@ be revoked server-side in v0.1 — clients drop them.
 ## 3. Mint an API key (agents)
 
 ```bash
-KEY=$(curl -s -X POST http://localhost:8000/v1/users/me/api-keys \
+KEY=$(curl -s -X POST http://localhost:18088/v1/users/me/api-keys \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"agent_name":"english-agent"}' | jq -r .key)
@@ -61,7 +61,7 @@ Revoke:
 ```bash
 KEY_ID=...  # from the create response or GET .../api-keys
 curl -X DELETE -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8000/v1/users/me/api-keys/$KEY_ID
+  http://localhost:18088/v1/users/me/api-keys/$KEY_ID
 ```
 
 Revoked keys keep their row (for audit); auth rejects them.
@@ -93,7 +93,7 @@ Tips:
 ## 5. Write a memory (`/v1/episodes`)
 
 ```bash
-curl -X POST http://localhost:8000/v1/episodes \
+curl -X POST http://localhost:18088/v1/episodes \
   -H "X-API-Key: $KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -138,7 +138,7 @@ Optional fields:
 ## 6. Search memory (`/v1/search`)
 
 ```bash
-curl -G http://localhost:8000/v1/search \
+curl -G http://localhost:18088/v1/search \
   --data-urlencode 'query=Who is Jerry'\''s English teacher?' \
   -H "X-API-Key: $KEY"
 ```
@@ -148,7 +148,7 @@ Defaults search across **every namespace you can read** —
 explicitly with `namespaces=`:
 
 ```bash
-curl -G http://localhost:8000/v1/search \
+curl -G http://localhost:18088/v1/search \
   --data-urlencode 'query=teacher' \
   --data-urlencode 'namespaces=user:me,public' \
   -H "X-API-Key: $KEY"
@@ -203,16 +203,16 @@ old fact is kept so you can do time-travel queries.
 
 ```bash
 # Newest 20 of yours
-curl -H "X-API-Key: $KEY" http://localhost:8000/v1/episodes?limit=20
+curl -H "X-API-Key: $KEY" http://localhost:18088/v1/episodes?limit=20
 
 # Pin to a namespace
-curl -H "X-API-Key: $KEY" "http://localhost:8000/v1/episodes?namespace=user:me"
+curl -H "X-API-Key: $KEY" "http://localhost:18088/v1/episodes?namespace=user:me"
 
 # Single episode detail — original content, extracted entities + facts
-curl -H "X-API-Key: $KEY" http://localhost:8000/v1/episodes/<episode_id>
+curl -H "X-API-Key: $KEY" http://localhost:18088/v1/episodes/<episode_id>
 
 # Delete (creator or super_admin only)
-curl -X DELETE -H "X-API-Key: $KEY" http://localhost:8000/v1/episodes/<episode_id>
+curl -X DELETE -H "X-API-Key: $KEY" http://localhost:18088/v1/episodes/<episode_id>
 ```
 
 `DELETE` removes the Graphiti episodic node and detaches every entity
@@ -224,7 +224,7 @@ from this episode also drop.
 ## 8. Health
 
 ```bash
-curl http://localhost:8000/v1/health
+curl http://localhost:18088/v1/health
 ```
 
 Returns 200 always; check `status` and `checks.<component>.ok`. Useful
@@ -241,7 +241,7 @@ service, so per-component status is the truth.
 - **CLI**: `docs/memctl.md` — `memctl` wraps everything in this guide
   so you don't have to keep typing `-H "X-API-Key: ..."`.
 - **Permissions deep-dive**: `docs/permissions.md`.
-- **Swagger**: `http://localhost:8000/docs`.
+- **Swagger**: `http://localhost:18088/docs`.
 
 ---
 
@@ -252,23 +252,23 @@ on top of the per-user default. Quick flow:
 
 ```bash
 # (super_admin only) create an org
-curl -X POST http://localhost:8000/v1/orgs \
+curl -X POST http://localhost:18088/v1/orgs \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"slug":"acme","name":"Acme Corp"}'
 
 # add a user to it; pass is_org_admin=true if they should manage the org
-curl -X POST http://localhost:8000/v1/orgs/acme/members \
+curl -X POST http://localhost:18088/v1/orgs/acme/members \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"user_id":"<uuid>","is_org_admin":false}'
 
 # any org member can create a group; creator becomes group admin
-curl -X POST http://localhost:8000/v1/groups \
+curl -X POST http://localhost:18088/v1/groups \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"slug":"engineers","name":"Engineering"}'
 
 # group admins (or org admin / super_admin) invite others
-curl -X POST http://localhost:8000/v1/groups/engineers/members \
+curl -X POST http://localhost:18088/v1/groups/engineers/members \
   -H "Authorization: Bearer $TOKEN" \
   -d '{"user_id":"<uuid>","role":"member"}'
 ```
@@ -276,7 +276,7 @@ curl -X POST http://localhost:8000/v1/groups/engineers/members \
 Once seated, write into the shared namespace:
 
 ```bash
-curl -X POST http://localhost:8000/v1/episodes \
+curl -X POST http://localhost:18088/v1/episodes \
   -H "X-API-Key: $KEY" \
   -d '{"namespace":"group:engineers","content":"Our service uses Redis 7."}'
 ```

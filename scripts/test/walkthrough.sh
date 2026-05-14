@@ -2,7 +2,7 @@
 # Walk through every feature added this session.
 #
 # Assumes:
-#   - scripts/dev.sh started cleanly (service on :8000, FalkorDB on :6380,
+#   - scripts/dev.sh started cleanly (service on :18088, FalkorDB on :6380,
 #     ollama embedding on :11434)
 #   - MS_API_KEY is exported in the current shell, OR the script will
 #     create a throwaway one against the running service
@@ -15,7 +15,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 
-BASE="http://localhost:8000"
+BASE="http://localhost:18088"
 NS="user:me"   # all writes/reads use the caller's own namespace by default
 
 say()  { printf "\n\033[1;36m▸ %s\033[0m\n" "$*"; }

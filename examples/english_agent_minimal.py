@@ -10,7 +10,7 @@ The agent's own LLM call is left as a stub — you plug in your favourite.
 The memory side is what this file exists to demonstrate.
 
 Usage:
-    export MS_BASE_URL=http://localhost:8000
+    export MS_BASE_URL=http://localhost:18088
     export MS_API_KEY=mk_...                  # from /v1/users/me/api-keys
     python3 examples/english_agent_minimal.py
 
@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 
 import httpx
 
-BASE = os.environ.get("MS_BASE_URL", "http://localhost:8000").rstrip("/")
+BASE = os.environ.get("MS_BASE_URL", "http://localhost:18088").rstrip("/")
 API_KEY = os.environ.get("MS_API_KEY") or sys.exit("MS_API_KEY env var is required")
 AGENT_NAME = "english-agent"
 

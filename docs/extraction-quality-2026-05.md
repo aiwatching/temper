@@ -114,7 +114,7 @@ Concrete tradeoff guidance:
 ```bash
 # Stop the existing service, then:
 LLM_PROVIDER=<one>  LLM_API_KEY=...  LLM_MODEL=...  LLM_BASE_URL=... \
-  uvicorn memory_service.main:app --port 8000 ...
+  uvicorn memory_service.main:app --port 18088 ...
 python3 scripts/test/extract.py --json --cleanup > /tmp/extract-<one>.json
 ```
 

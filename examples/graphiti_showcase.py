@@ -6,7 +6,7 @@ synthetic example so you can see the behavior end-to-end. After it
 finishes, open the admin graph viewer to see the resulting knowledge
 graph visually:
 
-  http://localhost:8000/admin/graph        # our viewer
+  http://localhost:18088/admin/graph        # our viewer
   http://localhost:3000/                   # FalkorDB's own Browser
 
 Scenarios:
@@ -25,7 +25,7 @@ Scenarios:
                                           different answers.
 
 Usage:
-    export MS_BASE_URL=http://localhost:8000
+    export MS_BASE_URL=http://localhost:18088
     export MS_API_KEY=mk_yourkeyhere
 
     python3 examples/graphiti_showcase.py             # run all
@@ -301,7 +301,7 @@ def scenario_attribution(c: httpx.Client, args) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base-url", default=os.environ.get("MS_BASE_URL", "http://localhost:8000"))
+    ap.add_argument("--base-url", default=os.environ.get("MS_BASE_URL", "http://localhost:18088"))
     ap.add_argument("--key", default=os.environ.get("MS_API_KEY"))
     ap.add_argument("--namespace", default=None, help="Override target namespace")
     ap.add_argument("--cleanup", action="store_true", help="Delete demo episodes after the run")
@@ -332,7 +332,7 @@ def main() -> int:
 
     print("\n" + "═" * 78)
     print("  Done. Now look at the graph visually:")
-    print("    • Our viewer:        http://localhost:8000/admin/graph")
+    print("    • Our viewer:        http://localhost:18088/admin/graph")
     print("    • FalkorDB browser:  http://localhost:3000/")
     print("═" * 78)
 

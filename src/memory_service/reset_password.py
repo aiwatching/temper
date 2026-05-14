@@ -38,7 +38,7 @@ async def _main() -> int:
     )
     ap.add_argument(
         "--invite-base-url",
-        default="http://localhost:8000",
+        default="http://localhost:18088",
         help="Used to build the printable invite URL (default localhost).",
     )
     args = ap.parse_args()
