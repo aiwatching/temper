@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .stats-grid  { display: grid; grid-template-columns: 1fr; gap: 18px; margin-top: 8px; }
+  .stat-card   { border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; background: var(--bg-2,#fafafa); }
+  .stat-card h3 { margin: 0 0 8px; font-size: 14px; }
+  .filter-row  { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 12px; }
+  .filter-row label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .filter-row select, .filter-row input { padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; }
+  .bar-chart   { display: block; width: 100%; height: 180px; }
+  .bar         { fill: #54aeff; }
+  .bar:hover   { fill: #0969da; }
+  .bar-label   { font-size: 10px; fill: #57606a; }
+  .bar-tick    { fill: #57606a; font-size: 10px; }
+  .timeline    { max-height: 60vh; overflow-y: auto; border: 1px solid var(--border); border-radius: 6px; }
+  .timeline-row { display: grid; grid-template-columns: 160px 1fr 100px; gap: 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); align-items: baseline; font-size: 13px; }
+  .timeline-row:last-child { border-bottom: 0; }
+  .timeline-row .when { color: var(--muted); font-family: monospace; font-size: 11px; white-space: nowrap; }
+  .timeline-row .ns   { font-size: 11px; color: var(--muted-2,#57606a); }
+  .timeline-row .agent{ font-size: 11px; color: var(--muted); }
+  .timeline-row .content { word-break: break-word; }
+  .timeline-row.expanded { background: #fbfdff; }
+  .timeline-row.expanded .content pre { white-space: pre-wrap; background: #fff; border: 1px solid var(--border); padding: 8px; border-radius: 4px; margin: 6px 0 0; font-size: 12px; }
+  .day-divider { padding: 6px 12px; background: #f4f6f8; font-size: 11px; color: var(--muted); border-bottom: 1px solid var(--border); position: sticky; top: 0; }
+  .kpi-row     { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+  .kpi         { padding: 6px 12px; border: 1px solid var(--border); border-radius: 4px; background: #fff; min-width: 110px; }
+  .kpi .v      { font-size: 22px; font-weight: 600; }
+  .kpi .k      { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+</style>
+
+<section class="card" x-data="statsPage()" x-init="load()">
+  <h2>Memory stats</h2>
+  <p style="color:var(--muted)">
+    How much memory has been written, when, and where. Counts are UTC days
+    (one bar per day). The timeline below lists each episode in newest-first
+    order — click a row to peek at the content.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <div class="filter-row">
+    <label>Window
+      <select x-model.number="days" @change="reload()">
+        <option :value="7">last 7 days</option>
+        <option :value="14">last 14 days</option>
+        <option :value="30">last 30 days</option>
+        <option :value="90">last 90 days</option>
+        <option :value="365">last 365 days</option>
+      </select>
+    </label>
+    <label>Namespace
+      <select x-model="namespace" @change="reload()">
+        <option value="">(all you can read)</option>
+        <template x-for="ns in namespaces" :key="ns.raw">
+          <option :value="ns.raw" x-text="nsLabel(ns)"></option>
+        </template>
+      </select>
+    </label>
+    <button class="secondary" @click="reload()">Refresh</button>
+  </div>
+
+  <div class="stats-grid">
+    <!-- KPIs -->
+    <div class="kpi-row">
+      <div class="kpi"><div class="v" x-text="daily.total"></div><div class="k">episodes in window</div></div>
+      <div class="kpi"><div class="v" x-text="avgPerDay"></div><div class="k">avg / day</div></div>
+      <div class="kpi"><div class="v" x-text="busiestDay.count"></div><div class="k">busiest day (<span x-text="busiestDay.date || '—'"></span>)</div></div>
+      <div class="kpi"><div class="v" x-text="daily.points.length"></div><div class="k">days bucketed</div></div>
+    </div>
+
+    <!-- Bar chart -->
+    <div class="stat-card">
+      <h3>Daily writes <small style="font-weight:normal;color:var(--muted)">— <span x-text="daily.from_date"></span> → <span x-text="daily.to_date"></span> (UTC)</small></h3>
+      <template x-if="daily.points.length === 0">
+        <p style="color:var(--muted)"><em>Loading…</em></p>
+      </template>
+      <template x-if="daily.points.length > 0">
+        <svg class="bar-chart" :viewBox="`0 0 ${chart.w} ${chart.h}`" preserveAspectRatio="none">
+          <!-- y-axis ticks -->
+          <template x-for="t in chart.yTicks" :key="t">
+            <g>
+              <line :x1="chart.padL" :x2="chart.w" :y1="t.y" :y2="t.y" stroke="#eef0f3" />
+              <text class="bar-tick" :x="chart.padL - 4" :y="t.y + 3" text-anchor="end" x-text="t.v"></text>
+            </g>
+          </template>
+          <!-- bars -->
+          <template x-for="(p, i) in daily.points" :key="p.date">
+            <g>
+              <rect class="bar"
+                    :x="chart.padL + i * chart.barStep"
+                    :y="chart.barY(p.count)"
+                    :width="chart.barW"
+                    :height="chart.barH(p.count)">
+                <title x-text="`${p.date} — ${p.count}`"></title>
+              </rect>
+              <text x-show="(i % chart.labelEvery) === 0"
+                    class="bar-label"
+                    :x="chart.padL + i * chart.barStep + chart.barW/2"
+                    :y="chart.h - 4"
+                    text-anchor="middle"
+                    x-text="p.date.slice(5)"></text>
+            </g>
+          </template>
+        </svg>
+      </template>
+    </div>
+
+    <!-- Timeline -->
+    <div class="stat-card">
+      <h3>Timeline <small style="font-weight:normal;color:var(--muted)">— most recent first</small></h3>
+      <div class="timeline">
+        <template x-if="!episodes.length && !loadingMore">
+          <div style="padding:14px; color:var(--muted)"><em>No episodes in window.</em></div>
+        </template>
+        <template x-for="(ep, i) in episodes" :key="ep.episode_id">
+          <div>
+            <template x-if="dayChanged(i)">
+              <div class="day-divider" x-text="ep.created_at.slice(0,10)"></div>
+            </template>
+            <div class="timeline-row" :class="{expanded: ep.episode_id === expandedId}" @click="toggle(ep)">
+              <div class="when" x-text="fmtTime(ep.created_at)"></div>
+              <div class="content">
+                <div>
+                  <span class="ns" x-text="ep.namespace"></span>
+                  <span class="agent" x-text="'· ' + (ep.created_by_agent || '(no agent)')"></span>
+                  <template x-if="ep.tags && ep.tags.length">
+                    <span style="margin-left:6px">
+                      <template x-for="t in ep.tags" :key="t">
+                        <span class="badge" style="margin-right:3px" x-text="t"></span>
+                      </template>
+                    </span>
+                  </template>
+                </div>
+                <template x-if="ep.episode_id === expandedId">
+                  <div>
+                    <template x-if="expandedLoading"><em style="color:var(--muted)">loading…</em></template>
+                    <template x-if="expandedDetail">
+                      <pre x-text="expandedDetail.content"></pre>
+                    </template>
+                  </div>
+                </template>
+              </div>
+              <div class="when" x-text="ep.source_type"></div>
+            </div>
+          </div>
+        </template>
+      </div>
+      <template x-if="nextCursor">
+        <p style="margin-top:8px">
+          <button class="secondary" @click="loadMore()" :disabled="loadingMore">
+            <span x-text="loadingMore ? 'Loading…' : 'Load older episodes'"></span>
+          </button>
+        </p>
+      </template>
+    </div>
+  </div>
+</section>
+
+<script>
+  function statsPage() {
+    return {
+      error: null,
+      days: 14,
+      namespace: "",
+      namespaces: [],
+      daily: { from_date: "", to_date: "", total: 0, points: [] },
+      episodes: [],
+      nextCursor: null,
+      loadingMore: false,
+      expandedId: "",
+      expandedDetail: null,
+      expandedLoading: false,
+      async load() {
+        window.ms.requireAuth();
+        this.error = null;
+        try {
+          const nss = await window.ms.json("/v1/namespaces");
+          this.namespaces = nss.namespaces || [];
+        } catch (_) { this.namespaces = []; }
+        await this.reload();
+      },
+      async reload() {
+        this.error = null;
+        this.episodes = [];
+        this.nextCursor = null;
+        this.expandedId = "";
+        try {
+          await Promise.all([this.loadDaily(), this.loadTimeline()]);
+        } catch (e) { this.error = e.message; }
+      },
+      async loadDaily() {
+        const qs = new URLSearchParams({ days: this.days });
+        if (this.namespace) qs.set("namespace", this.namespace);
+        this.daily = await window.ms.json(`/v1/stats/episodes/daily?${qs}`);
+      },
+      async loadTimeline() {
+        const qs = new URLSearchParams({ limit: 50 });
+        if (this.namespace) qs.set("namespace", this.namespace);
+        const r = await window.ms.json(`/v1/episodes?${qs}`);
+        this.episodes = r.episodes || [];
+        this.nextCursor = r.next_cursor || null;
+      },
+      async loadMore() {
+        if (!this.nextCursor || this.loadingMore) return;
+        this.loadingMore = true;
+        try {
+          const qs = new URLSearchParams({ limit: 50, before: this.nextCursor });
+          if (this.namespace) qs.set("namespace", this.namespace);
+          const r = await window.ms.json(`/v1/episodes?${qs}`);
+          this.episodes.push(...(r.episodes || []));
+          this.nextCursor = r.next_cursor || null;
+        } catch (e) { this.error = e.message; }
+        finally { this.loadingMore = false; }
+      },
+      async toggle(ep) {
+        if (this.expandedId === ep.episode_id) {
+          this.expandedId = "";
+          this.expandedDetail = null;
+          return;
+        }
+        this.expandedId = ep.episode_id;
+        this.expandedDetail = null;
+        this.expandedLoading = true;
+        try {
+          this.expandedDetail = await window.ms.json(`/v1/episodes/${ep.episode_id}`);
+        } catch (e) { this.error = e.message; }
+        finally { this.expandedLoading = false; }
+      },
+      dayChanged(i) {
+        if (i === 0) return true;
+        return this.episodes[i].created_at.slice(0,10) !== this.episodes[i-1].created_at.slice(0,10);
+      },
+      fmtTime(s) { return s ? s.replace("T", " ").slice(0, 19) : ""; },
+      nsLabel(ns) {
+        if (ns.kind === "agent") {
+          const parts = ns.value.split("/");
+          return `agent:${parts.slice(1).join("/")}`;
+        }
+        return ns.raw;
+      },
+      get avgPerDay() {
+        if (!this.daily.points.length) return "0";
+        return (this.daily.total / this.daily.points.length).toFixed(1);
+      },
+      get busiestDay() {
+        if (!this.daily.points.length) return { date: "", count: 0 };
+        return this.daily.points.reduce(
+          (best, p) => p.count > best.count ? p : best,
+          { date: "", count: 0 },
+        );
+      },
+      // --- chart geometry ---
+      get chart() {
+        const w = 800, h = 180;
+        const padL = 28, padR = 6, padT = 8, padB = 18;
+        const n = Math.max(1, this.daily.points.length);
+        const maxV = Math.max(1, ...this.daily.points.map(p => p.count));
+        const barStep = (w - padL - padR) / n;
+        const barW = Math.max(2, barStep * 0.7);
+        const plotH = h - padT - padB;
+        const ticks = niceTicks(maxV, 4);
+        return {
+          w, h, padL,
+          barStep, barW,
+          barY: v => padT + plotH * (1 - v / ticks.top),
+          barH: v => plotH * (v / ticks.top),
+          // every ~10 bars get a date label so it stays readable
+          labelEvery: Math.max(1, Math.ceil(n / 10)),
+          yTicks: ticks.values.map(v => ({ v, y: padT + plotH * (1 - v / ticks.top) })),
+        };
+      },
+    };
+  }
+  // "Nice" integer ticks for the y-axis. Returns { top, values }.
+  function niceTicks(max, count) {
+    const step = Math.max(1, Math.ceil(max / count));
+    const top = step * count;
+    const values = [];
+    for (let v = 0; v <= top; v += step) values.push(v);
+    return { top, values };
+  }
+</script>
+{% endblock %}
