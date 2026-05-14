@@ -68,7 +68,17 @@
       },
       async fetch(path, opts = {}) {
         const r = await fetch(path, { ...opts, headers: { ...this.authHeaders(), ...(opts.headers || {}) } });
-        if (r.status === 401) { location.href = "/admin/login"; throw new Error("unauthenticated"); }
+        if (r.status === 401) {
+          // Stale or invalid token: wipe localStorage before redirecting
+          // so /admin/login doesn't auto-bounce us back ("already signed
+          // in" check), which would otherwise loop forever.
+          localStorage.removeItem("ms_token");
+          localStorage.removeItem("ms_email");
+          if (location.pathname !== "/admin/login") {
+            location.replace("/admin/login");
+          }
+          throw new Error("unauthenticated");
+        }
         return r;
       },
       async json(path, opts = {}) {
