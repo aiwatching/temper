@@ -22,25 +22,14 @@ import {
 import { getConfig, type SmithConfig } from "./config.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
 import { mcpBridgeExtension } from "./extensions/mcp-bridge.js";
+import { smithPersonalityExtension } from "./extensions/smith-personality.js";
 
 // biome-ignore lint: pi's AgentSession type isn't re-exported cleanly yet.
 type AgentSession = Awaited<ReturnType<typeof createAgentSession>>["session"];
 
-// TODO(systemPrompt): pi has no createAgentSession.systemPrompt option.
-// The intended path is either a Skill (markdown bundle) or an extension
-// that hooks the `before_provider_request` event and injects a system
-// message. For MVP we rely on the tool descriptions to teach the model
-// what memory_search/memory_write are for; revisit once tool calls work
-// end-to-end so we can A/B against a real personality prompt.
-//
-// Keeping the draft here so we don't lose the wording:
-//
-//   You are Smith, a personal company-level assistant.
-//   You have two tool surfaces:
-//     1. memory_search / memory_write — long-term memory in TEMPER ...
-//     2. Internal company tools bridged from MCP servers ...
-//   Default to terse, action-oriented responses. Surface only the top
-//   1–3 memory hits, paraphrased — never read raw JSON to the user.
+// System prompt lives in src/extensions/smith-personality.ts and is
+// injected via pi's `before_agent_start` event — see comments there
+// for why this is non-optional for the memory discipline to fire.
 
 class SmithSessionPool {
   private sessions = new Map<string, AgentSession>();
@@ -118,7 +107,9 @@ class SmithSessionPool {
       agentDir: process.cwd(),                  // we don't ship ~/.pi-style assets
       extensionFactories: [
         // Order matters: temper-memory must be available even if MCP
-        // setup fails partway through.
+        // setup fails partway through. Personality goes first so the
+        // system prompt is in place before any tool sees a turn.
+        (pi) => smithPersonalityExtension(pi),
         (pi) => temperMemoryExtension(pi),
         (pi) => { void mcpBridgeExtension(pi); }, // fire-and-forget; awaits inside
       ],
