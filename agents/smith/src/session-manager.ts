@@ -18,9 +18,8 @@ import {
   AuthStorage,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
-import { getModel } from "@earendil-works/pi-ai";
 
-import { getConfig } from "./config.js";
+import { getConfig, type SmithConfig } from "./config.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
 import { mcpBridgeExtension } from "./extensions/mcp-bridge.js";
 
@@ -47,26 +46,70 @@ class SmithSessionPool {
   private sessions = new Map<string, AgentSession>();
   private authStorage = AuthStorage.create();
   private modelRegistry = ModelRegistry.create(this.authStorage);
+  private customProviderRegistered = false;
+
+  /**
+   * One-shot: when LLM_BASE_URL is set we register the configured
+   * model against the configured provider on pi's ModelRegistry. This
+   * works for two cases:
+   *
+   *   1. A brand-new provider name (e.g. "forti") — registry stores it.
+   *   2. A built-in provider name (e.g. "deepseek") — registry override
+   *      replaces the catalog model list with ours. Useful when a
+   *      corporate gateway emulates an OpenAI-style API for its own
+   *      model id (here: "forti-k2") that's not in pi-ai's catalog.
+   *
+   * Idempotent: called once per process. `compat.supportsDeveloperRole`
+   * + `supportsReasoningEffort` are both off — most internal gateways
+   * don't speak those modern OpenAI extensions yet, and turning them
+   * off keeps the wire-format conservative.
+   */
+  private ensureCustomProvider(cfg: SmithConfig): void {
+    if (this.customProviderRegistered || !cfg.llmBaseUrl) return;
+    this.modelRegistry.registerProvider(cfg.llmProvider, {
+      baseUrl: cfg.llmBaseUrl,
+      // String value is the ENV VAR NAME pi reads at request time.
+      // LLM_API_KEY is already in process.env via dotenv.
+      apiKey: "LLM_API_KEY",
+      api: "openai-completions",
+      authHeader: true,
+      models: [
+        {
+          id: cfg.llmModel,
+          name: cfg.llmModel,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 128_000,
+          maxTokens: 4096,
+          compat: {
+            supportsDeveloperRole: false,
+            supportsReasoningEffort: false,
+          },
+        },
+      ],
+    });
+    this.customProviderRegistered = true;
+  }
 
   async getOrCreate(conversationId: string): Promise<AgentSession> {
     const existing = this.sessions.get(conversationId);
     if (existing) return existing;
 
     const cfg = getConfig();
-    // pi-ai's getModel is generic over its compile-time MODELS catalog —
-    // it constrains modelId to keys of MODELS[provider] which we can't
-    // satisfy from an arbitrary env string. Cast through `never`; the
-    // runtime lookup inside pi-ai either resolves to a Model or returns
-    // undefined, which we then surface as a friendly error.
-    const model = getModel(
-      cfg.llmProvider as never,
-      cfg.llmModel as never,
-    );
+    this.ensureCustomProvider(cfg);
+
+    // Pull the resolved Model from the registry — works for built-in
+    // providers (catalog) and for custom ones we just registered.
+    const model = this.modelRegistry.find(cfg.llmProvider, cfg.llmModel);
     if (!model) {
       throw new Error(
-        `Unknown LLM model: provider=${cfg.llmProvider} model=${cfg.llmModel}. ` +
-        "Check pi-ai's catalog in node_modules/@earendil-works/pi-ai/dist/models.generated.d.ts " +
-        "or register a custom model via authStorage.",
+        `Model not found: provider=${cfg.llmProvider} model=${cfg.llmModel}. ` +
+        (cfg.llmBaseUrl
+          ? "Custom-provider registration was attempted; check baseUrl and LLM_PROVIDER spelling."
+          : "Either pick a model in pi-ai's catalog " +
+            "(node_modules/@earendil-works/pi-ai/dist/models.generated.d.ts) " +
+            "or set LLM_BASE_URL to register a custom OpenAI-compatible gateway."),
       );
     }
 
