@@ -53,16 +53,25 @@ memory_write(content, source_description?, reference_time?, tags?,
 
 ═══ Auto-retrieved memory (Smith does this FOR you each turn) ═══
 
-Before this turn ran, Smith already searched TEMPER with the user's
-message and pasted the top hits below under "Memory recall". TREAT
-THAT SECTION AS GROUND TRUTH about this user — their name(s) and
-nicknames, preferences, ongoing projects, decisions, shared context.
-Quote it (paraphrased) when asked anything personal. NEVER say "I
-don't know" if the answer sits in Memory recall.
+Before this turn ran, Smith searched its OWN namespace
+(\`agent:me/<your-slug>\`) for relevant hits and pasted them below
+under "Memory recall". Scope is intentional: Smith only sees what
+Smith itself has written — other agents the user runs (e.g. a
+coding assistant, a journal) have their own isolated memory and
+DO NOT bleed into Smith.
 
-If Memory recall is empty or doesn't cover the question well, call
-memory_search yourself with a more specific query (e.g. when the
-user references "as I mentioned", a saga name, or a past time).
+TREAT THE MEMORY RECALL SECTION AS GROUND TRUTH about this user
+within Smith's view — names and nicknames, preferences, decisions,
+ongoing tasks. Quote it (paraphrased) when asked anything personal.
+NEVER say "I don't know" if the answer is in there.
+
+If Memory recall is empty or doesn't cover the question, call
+memory_search yourself with a more specific query.
+
+  - To search cross-agent (the user's flat namespace, shared across
+    every agent), pass \`namespaces=["user:me"]\` explicitly.
+  - To search this agent's scope with a different query, just call
+    memory_search(query) — same default scope as the auto-recall.
 
 ═══ Mental model ═══
 
@@ -225,30 +234,26 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
         const t = getTemper();
         const ownScope = `agent:me/${cfg.smithAgentSlug}`;
 
-        // Search the two relevant scopes SEPARATELY and merge.
-        // Temper's default search ranks across all requested namespaces
-        // into a single top-N list, so a noisy / high-volume namespace
-        // (typically user:me with months of cross-agent context) crowds
-        // out a sparse one (this agent's own writes). Two queries →
-        // merge → dedup gives Smith's own scope guaranteed airtime.
-        const [userHits, agentHits] = await Promise.all([
-          t.search({
-            query: event.prompt,
-            limit: MAX_RECALL_HITS,
-            namespaces: ["user:me"],
-          }).catch(() => [] as SearchHit[]),
-          t.search({
-            query: event.prompt,
-            limit: MAX_RECALL_HITS,
-            namespaces: [ownScope],
-          }).catch(() => [] as SearchHit[]),
-        ]);
+        // Search ONLY this agent's own scope. user:me is a shared
+        // cross-agent namespace by design, but in practice it
+        // accumulates writes from every agent the user has ever run
+        // (funny-english's "Bruno is Anna's student" et al). Pulling
+        // from it pollutes Smith with another agent's worldview.
+        //
+        // If the user wants Smith to see something cross-agent, they
+        // can tell Smith to write/read user:me explicitly via the
+        // memory_search tool (which exposes a `namespaces` arg).
+        const agentHits = await t.search({
+          query: event.prompt,
+          limit: MAX_RECALL_HITS,
+          namespaces: [ownScope],
+        }).catch(() => [] as SearchHit[]);
 
-        // Dedup hits by fact text — Graphiti often returns both a
-        // "fact" hit and an "entity" hit with the same text.
+        // Dedup by fact text — Graphiti often returns both a "fact"
+        // hit and an "entity" hit with the same text.
         const seen = new Set<string>();
         const hits: SearchHit[] = [];
-        for (const h of [...agentHits, ...userHits]) {
+        for (const h of agentHits) {
           const key = (h.fact ?? h.name ?? "").trim();
           if (!key || seen.has(key)) continue;
           seen.add(key);
