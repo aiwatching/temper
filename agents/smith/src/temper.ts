@@ -117,8 +117,11 @@ export class Temper {
     if (args.edgeTypes?.length) params.edge_types = args.edgeTypes.join(",");
     if (args.asOf) params.as_of = args.asOf;
     if (args.center) params.center = args.center;
-    const body = await this.req<{ hits?: SearchHit[] }>("GET", "/v1/search", { params });
-    return body.hits ?? [];
+    // NOTE: TEMPER returns `facts`, not `hits`. The variable name in the
+    // client API stays SearchHit because that's what callers expect to
+    // see in tool output — the wire field is just where it lives.
+    const body = await this.req<{ facts?: SearchHit[] }>("GET", "/v1/search", { params });
+    return body.facts ?? [];
   }
 
   async health(): Promise<unknown> {

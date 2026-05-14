@@ -29,6 +29,13 @@ export interface SmithConfig {
   // LLM gateways (e.g. http://nac-ai.fortinet-us.com:7001/v1). Leave
   // empty to use pi-ai's built-in provider for cfg.llmProvider.
   llmBaseUrl: string;
+  // The slug used when the operator created Smith's TEMPER API key
+  // (on /admin/integrate). Used to scope auto-recall searches to the
+  // user's flat namespace + this agent's own writes, so we don't have
+  // to compete with other agents' (typically larger) namespaces for
+  // ranking slots. Default "smith" matches the README's setup
+  // instructions; change only if you used a different slug.
+  smithAgentSlug: string;
   // MCP
   mcpServers: string;  // raw env, parsed lazily by smith/extensions/mcp-bridge
   // HTTP control plane
@@ -52,6 +59,7 @@ function loadConfig(): SmithConfig {
     llmApiKey: require_("LLM_API_KEY", process.env.LLM_API_KEY),
     llmModel: require_("LLM_MODEL", process.env.LLM_MODEL),
     llmBaseUrl: (process.env.LLM_BASE_URL ?? "").trim(),
+    smithAgentSlug: (process.env.SMITH_AGENT_SLUG ?? "smith").trim(),
     mcpServers: (process.env.MCP_SERVERS ?? "").trim(),
     smithHost: require_("SMITH_HOST", process.env.SMITH_HOST, "127.0.0.1"),
     smithPort: Number(require_("SMITH_PORT", process.env.SMITH_PORT, "18099")),
