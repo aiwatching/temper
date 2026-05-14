@@ -73,18 +73,23 @@ case "${EMBEDDING_PROVIDER:-ollama}" in
     # 2. ensure ollama serve is running
     if ollama_running; then
       ok "ollama serve already running on :11434"
+      # Don't write the pid marker — we didn't start it, dev.sh shouldn't
+      # stop it on exit either (might belong to another app).
     else
       say "starting ollama serve in background..."
       nohup ollama serve >/tmp/ollama.log 2>&1 &
+      OLLAMA_PID=$!
+      echo "$OLLAMA_PID" > /tmp/temper-ollama.pid
       # wait up to 5s for it to come up
       for i in 1 2 3 4 5; do
         sleep 1
         if ollama_running; then break; fi
       done
       if ollama_running; then
-        ok "ollama serve started (logs: /tmp/ollama.log)"
+        ok "ollama serve started (pid=$OLLAMA_PID, logs: /tmp/ollama.log)"
       else
         fail "ollama serve did not become ready within 5s. Check /tmp/ollama.log"
+        rm -f /tmp/temper-ollama.pid
         exit 1
       fi
     fi

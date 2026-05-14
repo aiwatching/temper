@@ -36,6 +36,22 @@ say()   { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 ok()    { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 warn()  { printf '  \033[33m!\033[0m %s\n' "$*"; }
 
+# Stop the ollama process we started (if any) on shutdown. The pid file
+# is only written by start_embedding.sh when *we* started ollama —
+# if it was already running before dev.sh ran, we leave it alone.
+cleanup() {
+  if [[ -f /tmp/temper-ollama.pid ]]; then
+    local pid
+    pid="$(cat /tmp/temper-ollama.pid 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      printf '\n  stopping ollama (pid=%s)...\n' "$pid"
+      kill "$pid" 2>/dev/null || true
+    fi
+    rm -f /tmp/temper-ollama.pid
+  fi
+}
+trap cleanup EXIT INT TERM
+
 # ---- 1. venv + deps ------------------------------------------------------
 
 say "Python environment"
