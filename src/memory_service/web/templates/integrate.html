@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="integratePage()" x-init="load()">
+  <h2>Connect an agent</h2>
+  <p style="color:var(--muted)">
+    These snippets are pre-filled with <em>your</em> identifiers — base
+    URL, API key, default namespace. Pick a tab, hit <strong>Copy</strong>,
+    and paste into your agent. The memory becomes accessible right away.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+
+  <!-- Connection facts -->
+  <table style="margin:8px 0">
+    <tr>
+      <th style="width:180px">Base URL</th>
+      <td>
+        <input type="text" x-model="baseUrl" style="width:340px; padding:4px 6px; border:1px solid var(--border); border-radius:4px">
+        <small style="color:var(--muted); margin-left:6px">
+          Edit if your agent reaches this service on a different host (e.g. via Docker bridge).
+        </small>
+      </td>
+    </tr>
+    <tr>
+      <th>Your user id</th>
+      <td><code x-text="me?.id || '…'"></code></td>
+    </tr>
+    <tr>
+      <th>Default namespace</th>
+      <td>
+        <code x-text="namespace"></code>
+        <small style="color:var(--muted); margin-left:6px">private to you</small>
+      </td>
+    </tr>
+    <tr>
+      <th>API key</th>
+      <td>
+        <template x-if="apiKey">
+          <code class="token" x-text="apiKey"></code>
+        </template>
+        <template x-if="!apiKey">
+          <span>
+            <em style="color:var(--muted)">No fresh key in this session.</em>
+            <button class="secondary" style="margin-left:6px" @click="createKey()">
+              Create one now
+            </button>
+            <small style="color:var(--muted); margin-left:6px">
+              or manually paste a key you saved from
+              <a href="/admin/me">My API keys</a> →
+              <input type="text" x-model="pastedKey" placeholder="mk_…"
+                     style="padding:3px 6px; border:1px solid var(--border); border-radius:4px; font-family:monospace; width:240px">
+              <button class="secondary" @click="apiKey = pastedKey; pastedKey = ''" :disabled="!pastedKey">Use it</button>
+            </small>
+          </span>
+        </template>
+        <p style="color:var(--muted); font-size:11px; margin:4px 0 0">
+          Plaintext is only shown once. If you lose it, create a new one on
+          <a href="/admin/me">My API keys</a> and revoke the old one.
+        </p>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Tabs -->
+  <div class="tabs" style="margin-top:18px">
+    <template x-for="t in tabs" :key="t.id">
+      <button :class="active === t.id ? 'active' : ''" @click="active = t.id" x-text="t.label"></button>
+    </template>
+  </div>
+
+  <!-- Generic system prompt -->
+  <template x-if="active === 'system'">
+    <div>
+      <p style="color:var(--muted); font-size:12px; margin:6px 0">
+        Paste into any LLM agent's system prompt. Works with OpenAI, Anthropic,
+        Ollama, etc. — anything that can issue HTTPS calls.
+      </p>
+      <textarea readonly :value="prompts.system" rows="22" class="snippet"></textarea>
+      <button class="secondary" @click="copy(prompts.system)">Copy</button>
+    </div>
+  </template>
+
+  <!-- CLAUDE.md -->
+  <template x-if="active === 'claude'">
+    <div>
+      <p style="color:var(--muted); font-size:12px; margin:6px 0">
+        Append to your project's <code>CLAUDE.md</code>. Claude Code will read
+        it on every session and call the memory service as instructed.
+      </p>
+      <textarea readonly :value="prompts.claude" rows="22" class="snippet"></textarea>
+      <button class="secondary" @click="copy(prompts.claude)">Copy</button>
+    </div>
+  </template>
+
+  <!-- Forge -->
+  <template x-if="active === 'forge'">
+    <div>
+      <p style="color:var(--muted); font-size:12px; margin:6px 0">
+        Paste into your Forge agent's instructions field. The endpoints are
+        described as plain HTTP calls so the agent's tool layer can wrap them.
+      </p>
+      <textarea readonly :value="prompts.forge" rows="22" class="snippet"></textarea>
+      <button class="secondary" @click="copy(prompts.forge)">Copy</button>
+    </div>
+  </template>
+</section>
+
+<style>
+  .snippet {
+    width: 100%;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-2, #fafafa);
+    color: var(--fg);
+    resize: vertical;
+    white-space: pre;
+    overflow: auto;
+  }
+</style>
+
+<script>
+  function integratePage() {
+    return {
+      me: null, error: null,
+      baseUrl: location.origin,
+      apiKey: "",          // populated only when user creates one this session
+      pastedKey: "",
+      active: "system",
+      tabs: [
+        { id: "system", label: "Generic system prompt" },
+        { id: "claude", label: "CLAUDE.md" },
+        { id: "forge",  label: "Forge instructions" },
+      ],
+      async load() {
+        window.ms.requireAuth();
+        this.error = null;
+        try {
+          this.me = window.ms.me || await window.ms.json("/v1/auth/me");
+          window.ms.me = this.me;
+        } catch (e) { this.error = e.message; }
+      },
+      async createKey() {
+        const name = prompt("Name this agent (e.g. 'claude-code-laptop')",
+                            "agent-" + new Date().toISOString().slice(0, 10));
+        if (!name) return;
+        try {
+          const r = await window.ms.json("/v1/users/me/api-keys", {
+            method: "POST",
+            body: JSON.stringify({ agent_name: name }),
+          });
+          this.apiKey = r.key;
+        } catch (e) { this.error = e.message; }
+      },
+      copy(text) {
+        navigator.clipboard?.writeText(text);
+      },
+      get namespace() {
+        return this.me ? `user:${this.me.id}` : "user:<your-id>";
+      },
+      get key() {
+        return this.apiKey || "YOUR_API_KEY";
+      },
+      get prompts() {
+        const base = this.baseUrl.replace(/\/+$/, "");
+        const ns = this.namespace;
+        const key = this.key;
+        return {
+          system: this.systemPrompt(base, key, ns),
+          claude: this.claudeMd(base, key, ns),
+          forge:  this.forgeInstructions(base, key, ns),
+        };
+      },
+      systemPrompt(base, key, ns) {
+        return [
+          "# Persistent memory service",
+          "",
+          "You have access to a long-lived memory service. Use it to remember",
+          "facts about the user across sessions and to recall earlier context.",
+          "",
+          "## Connection",
+          "",
+          `- Base URL: ${base}`,
+          `- Auth: send header  X-API-Key: ${key}`,
+          `- Default namespace: ${ns}  (your owner; omit \`namespace\` in requests to use this)`,
+          "",
+          "## Write a memory  — when the user shares a preference, fact",
+          "## about themselves, a decision, or anything they may want recalled",
+          "",
+          `POST ${base}/v1/episodes`,
+          "Content-Type: application/json",
+          `X-API-Key: ${key}`,
+          "",
+          "{",
+          '  "content": "<one or two sentences capturing what to remember>",',
+          '  "source_type": "message",',
+          '  "source_description": "user said this in chat"',
+          "}",
+          "",
+          "## Recall  — at session start, and whenever the user references",
+          '## past context ("as I mentioned", "remember when…") or asks',
+          "## something that might already have been discussed",
+          "",
+          `GET ${base}/v1/search?query=<keywords>&limit=5`,
+          `X-API-Key: ${key}`,
+          "",
+          "Each hit has { fact, valid_at, score } — surface only the highest",
+          "scoring 1–3 to the user, paraphrased naturally.",
+          "",
+          "## Heuristics",
+          "",
+          "- Write sparingly. One episode per discrete fact, not whole transcripts.",
+          "- Never write secrets (passwords, tokens, full credit cards).",
+          "- Search before answering personal questions about the user.",
+          "- If the user explicitly says \"forget X\", write an episode saying so —",
+          "  the service handles temporal invalidation.",
+        ].join("\n");
+      },
+      claudeMd(base, key, ns) {
+        return [
+          "## Memory service",
+          "",
+          "This project has a long-lived memory service. Before answering",
+          "questions that touch user preferences, past decisions, or anything",
+          "that might have been said in an earlier session, search it first.",
+          "After learning something durable about the user (a preference, a",
+          "fact about their project, a decision), record it.",
+          "",
+          "### How to call it",
+          "",
+          `- Base URL: \`${base}\``,
+          `- Header on every request: \`X-API-Key: ${key}\``,
+          `- Default namespace: \`${ns}\` (omit \`namespace\` from the body to use it)`,
+          "",
+          "### Write",
+          "",
+          "```bash",
+          `curl -X POST ${base}/v1/episodes \\`,
+          `  -H 'X-API-Key: ${key}' \\`,
+          "  -H 'Content-Type: application/json' \\",
+          "  -d '{\"content\":\"<fact>\",\"source_type\":\"message\",\"source_description\":\"user told me in chat\"}'",
+          "```",
+          "",
+          "### Search",
+          "",
+          "```bash",
+          `curl '${base}/v1/search?query=<keywords>&limit=5' \\`,
+          `  -H 'X-API-Key: ${key}'`,
+          "```",
+          "",
+          "Use the highest-scoring 1–3 hits; paraphrase, don't quote raw JSON.",
+          "Write sparingly — one episode per fact, never whole transcripts,",
+          "never secrets.",
+        ].join("\n");
+      },
+      forgeInstructions(base, key, ns) {
+        return [
+          "You have a persistent memory service. Use it to keep continuity",
+          "across runs of this agent.",
+          "",
+          `Endpoint: ${base}`,
+          `Auth header: X-API-Key: ${key}`,
+          `Default namespace: ${ns}`,
+          "",
+          "Tools to invoke via your HTTP layer:",
+          "",
+          "  memory.write  →  POST /v1/episodes",
+          '    body: { "content": str, "source_type": "message",',
+          '            "source_description": str }',
+          "    Call when the user gives a durable fact about themselves, a",
+          "    preference, a decision, or a context worth remembering.",
+          "",
+          "  memory.search →  GET /v1/search?query=<text>&limit=5",
+          "    Call at task start and whenever a user reference suggests prior",
+          "    context. Surface only the top 1–3 hits, paraphrased.",
+          "",
+          "Rules:",
+          "  - Never store secrets.",
+          "  - One fact per write — do not dump whole transcripts.",
+          "  - If the user contradicts a remembered fact, write a new episode",
+          "    stating the update; the service handles temporal invalidation.",
+        ].join("\n");
+      },
+    };
+  }
+</script>
+{% endblock %}
