@@ -45,9 +45,26 @@ export interface SearchHit {
   score?: number;
   valid_at?: string | null;
   invalid_at?: string | null;
+  source_episode_ids?: string[];
   // pass-through of anything else the server returns; the consumer
   // (an LLM tool) sees the raw structure.
   [k: string]: unknown;
+}
+
+export interface EpisodeSummary {
+  episode_id: string;
+  namespace: string;
+  created_by_agent?: string;
+  source_type: string;
+  tags?: string[];
+  reference_time?: string | null;
+  created_at: string;
+}
+
+export interface EpisodeDetail extends EpisodeSummary {
+  content: string;
+  entities?: Array<{ uuid: string; name: string; summary?: string }>;
+  facts?: Array<{ uuid: string; fact: string }>;
 }
 
 export class Temper {
@@ -122,6 +139,28 @@ export class Temper {
     // see in tool output — the wire field is just where it lives.
     const body = await this.req<{ facts?: SearchHit[] }>("GET", "/v1/search", { params });
     return body.facts ?? [];
+  }
+
+  async listEpisodes(args: {
+    namespace?: string;
+    limit?: number;
+    before?: string;
+  } = {}): Promise<EpisodeSummary[]> {
+    const params: Record<string, string | number | undefined> = {
+      limit: args.limit ?? 20,
+    };
+    if (args.namespace) params.namespace = args.namespace;
+    if (args.before) params.before = args.before;
+    const body = await this.req<{ episodes?: EpisodeSummary[] }>(
+      "GET",
+      "/v1/episodes",
+      { params },
+    );
+    return body.episodes ?? [];
+  }
+
+  async getEpisode(episodeId: string): Promise<EpisodeDetail> {
+    return this.req<EpisodeDetail>("GET", `/v1/episodes/${episodeId}`);
   }
 
   async health(): Promise<unknown> {

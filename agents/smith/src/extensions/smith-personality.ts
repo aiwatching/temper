@@ -22,7 +22,7 @@
  */
 import { getConfig } from "../config.js";
 import { Temper } from "../temper.js";
-import type { SearchHit } from "../temper.js";
+import type { EpisodeSummary, SearchHit } from "../temper.js";
 
 // biome-ignore lint: pi.ExtensionAPI types are still moving — see other extensions.
 type PiExtensionAPI = any;
@@ -140,16 +140,52 @@ fact too (cross-agent).
 `;
 
 const MAX_RECALL_HITS = 5;
+const MAX_RECENT_EPISODES = 5;
 
 function formatHits(hits: SearchHit[]): string {
-  if (hits.length === 0) return "(no hits)";
+  if (hits.length === 0) return "  (no fact hits)";
   return hits
-    .slice(0, MAX_RECALL_HITS)
+    .slice(0, MAX_RECALL_HITS * 2)
     .map((h, i) => {
       const fact = h.fact ?? h.name ?? "(no fact)";
       const score = typeof h.score === "number" ? ` (score=${h.score.toFixed(2)})` : "";
       const valid = h.valid_at ? `  valid_at=${h.valid_at}` : "";
       return `  ${i + 1}. ${fact}${score}${valid}`;
+    })
+    .join("\n");
+}
+
+async function fetchRecentEpisodesWithContent(
+  t: Temper,
+  namespace: string,
+  limit: number,
+): Promise<Array<{ ep: EpisodeSummary; content: string }>> {
+  // Need content (which isn't in the list response), so fetch detail
+  // for each — N+1 but small N. The list endpoint is paged by `before`,
+  // so we walk the most recent ones.
+  const summaries = await t.listEpisodes({ namespace, limit });
+  const detailed = await Promise.all(
+    summaries.map(async (ep) => {
+      try {
+        const detail = await t.getEpisode(ep.episode_id);
+        return { ep, content: detail.content };
+      } catch {
+        return { ep, content: "(content fetch failed)" };
+      }
+    }),
+  );
+  return detailed;
+}
+
+function formatEpisodes(items: Array<{ ep: EpisodeSummary; content: string }>): string {
+  if (items.length === 0) return "  (no recent episodes)";
+  return items
+    .map(({ ep, content }, i) => {
+      const when = ep.reference_time ?? ep.created_at;
+      const tags = ep.tags?.length ? ` [${ep.tags.join(", ")}]` : "";
+      // Trim noisy whitespace, cap length so the prompt doesn't explode.
+      const trimmed = content.replace(/\s+/g, " ").trim().slice(0, 240);
+      return `  ${i + 1}. (${when}${tags}) ${trimmed}`;
     })
     .join("\n");
 }
@@ -171,16 +207,24 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
       // base prompt and let the model answer without memory context.
       let recallBlock = "";
       try {
-        // Search the two relevant scopes SEPARATELY and merge.
-        // Temper ranks across all requested namespaces into a single
-        // top-N list, which means a noisy / high-volume namespace
-        // (typically user:me with months of cross-agent context)
-        // crowds out a sparse one (this agent's own writes). The
-        // structural fix is two queries, N hits each, dedup by fact
-        // text — Smith's own scope always gets airtime.
         const cfg = getConfig();
         const t = getTemper();
-        const [userHits, agentHits] = await Promise.all([
+        const ownScope = `agent:me/${cfg.smithAgentSlug}`;
+
+        // Search the two relevant scopes SEPARATELY and merge.
+        // Temper ranks across all requested namespaces into a single
+        // top-N list, so a noisy / high-volume namespace (typically
+        // user:me with months of cross-agent context) crowds out a
+        // sparse one (this agent's own writes). Two queries → merge
+        // → dedup gives Smith's own scope guaranteed airtime.
+        //
+        // Also pull recent RAW episode content from this agent's
+        // scope: Graphiti's fact extraction occasionally flips
+        // agency (e.g. "user wants to call me X" → entity summary
+        // "user wants to be called X"). Showing both the extracted
+        // facts AND the original episode wording lets the LLM
+        // ground-truth check before answering.
+        const [userHits, agentHits, recentOwn] = await Promise.all([
           t.search({
             query: event.prompt,
             limit: MAX_RECALL_HITS,
@@ -189,12 +233,14 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
           t.search({
             query: event.prompt,
             limit: MAX_RECALL_HITS,
-            namespaces: [`agent:me/${cfg.smithAgentSlug}`],
+            namespaces: [ownScope],
           }).catch(() => [] as SearchHit[]),
+          fetchRecentEpisodesWithContent(t, ownScope, MAX_RECENT_EPISODES)
+            .catch(() => [] as Array<{ ep: EpisodeSummary; content: string }>),
         ]);
-        // Dedup by fact text — Graphiti often returns both a "fact"
-        // hit and an "entity" hit with the same text; we don't need
-        // to show the model both.
+
+        // Dedup hits by fact text — Graphiti often returns both a
+        // "fact" hit and an "entity" hit with the same text.
         const seen = new Set<string>();
         const hits: SearchHit[] = [];
         for (const h of [...agentHits, ...userHits]) {
@@ -202,19 +248,27 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
           if (!key || seen.has(key)) continue;
           seen.add(key);
           hits.push(h);
-          if (hits.length >= MAX_RECALL_HITS * 2) break;
         }
-        if (hits.length > 0) {
-          recallBlock =
-            "\n═══ Memory recall (auto-retrieved for this turn) ═══\n\n" +
-            formatHits(hits) +
-            "\n";
-          console.log(`[smith] auto-recall: ${hits.length} hits for "${event.prompt.slice(0, 50)}"`);
-          for (const [i, h] of hits.entries()) {
-            console.log(`  ${i + 1}. ${h.fact ?? h.name ?? "(no fact)"}`);
-          }
-        } else {
-          console.log(`[smith] auto-recall: 0 hits for "${event.prompt.slice(0, 50)}"`);
+
+        const factsSection = formatHits(hits);
+        const recentSection = formatEpisodes(recentOwn);
+
+        recallBlock =
+          "\n═══ Memory recall (auto-retrieved for this turn) ═══\n\n" +
+          "EXTRACTED FACTS (semantic search; Graphiti's extraction may\n" +
+          "occasionally flip agency or lose nuance — cross-check against\n" +
+          "the raw episodes below before answering):\n" +
+          factsSection +
+          "\n\n" +
+          `RECENT EPISODES in your own scope (${ownScope}, raw content):\n` +
+          recentSection +
+          "\n";
+
+        console.log(
+          `[smith] auto-recall: ${hits.length} fact hits + ${recentOwn.length} recent episodes for "${event.prompt.slice(0, 50)}"`,
+        );
+        for (const [i, h] of hits.entries()) {
+          console.log(`  fact ${i + 1}. ${h.fact ?? h.name ?? "(no fact)"}`);
         }
       } catch (e) {
         console.warn(`[smith] auto-recall failed: ${(e as Error).message} — proceeding without it`);
