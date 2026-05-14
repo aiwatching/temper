@@ -28,7 +28,10 @@ class GroupOut(BaseModel):
     id: str
     slug: str
     name: str
-    org_slug: str
+    # `None` when the parent org has been deleted (an "orphan" group).
+    # Such groups are read-only + deletable; writes/member changes 409.
+    org_slug: str | None
+    status: Literal["ok", "orphan"] = "ok"
     created_at: datetime
     member_count: int
 

@@ -17,13 +17,23 @@
         <tr><td colspan="5"><em>No groups visible.</em></td></tr>
       </template>
       <template x-for="g in groups" :key="g.id">
-        <tr>
-          <td><code x-text="g.slug"></code></td>
+        <tr :style="g.status === 'orphan' ? 'background:#fff1f0' : ''">
+          <td>
+            <code x-text="g.slug"></code>
+            <template x-if="g.status === 'orphan'">
+              <span class="badge failed" style="margin-left:6px" title="Parent org was deleted before cascade was wired. This group can't be used — delete it.">orphan</span>
+            </template>
+          </td>
           <td x-text="g.name"></td>
-          <td><code x-text="g.org_slug"></code></td>
+          <td>
+            <template x-if="g.org_slug"><code x-text="g.org_slug"></code></template>
+            <template x-if="!g.org_slug"><em style="color:var(--bad)">(deleted)</em></template>
+          </td>
           <td x-text="g.member_count"></td>
           <td>
-            <button @click="selectedSlug = g.slug; loadMembers()">Members</button>
+            <template x-if="g.status === 'ok'">
+              <button @click="selectedSlug = g.slug; loadMembers()">Members</button>
+            </template>
             <button class="danger" @click="remove(g.slug)">Delete</button>
           </td>
         </tr>

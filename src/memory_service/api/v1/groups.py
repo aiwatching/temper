@@ -35,17 +35,39 @@ router = APIRouter(prefix="/groups", tags=["groups"])
 # ---------- helpers ----------
 
 
-async def _group_by_slug(db: AsyncSession, slug: str) -> tuple[Group, Organization]:
+async def _group_by_slug(
+    db: AsyncSession, slug: str
+) -> tuple[Group, Organization | None]:
+    """Find a group by slug. Returns (group, org) where org may be None
+    if the group has been orphaned — its parent org was deleted before
+    cascade-delete was wired up. Orphan groups stay readable + deletable
+    so operators can clean them up; everything else (write, member add,
+    rename) requires a live org.
+    """
     row = (
         await db.execute(
             select(Group, Organization)
-            .join(Organization, Organization.id == Group.org_id)
+            .outerjoin(Organization, Organization.id == Group.org_id)
             .where(Group.slug == slug)
         )
     ).first()
     if row is None:
         raise HTTPException(status_code=404, detail=f"Group '{slug}' not found")
     return row[0], row[1]
+
+
+def _require_live_org(group: Group, org: Organization | None, action: str) -> Organization:
+    """Reject mutating ops on orphan groups with a clear hint."""
+    if org is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Group '{group.slug}' is orphaned — its parent org was deleted. "
+                f"Cannot {action}. Delete the group via DELETE /v1/groups/{group.slug} "
+                "to clean it up."
+            ),
+        )
+    return org
 
 
 async def _membership(
@@ -107,12 +129,15 @@ async def _require_group_member(
     )
 
 
-def _serialize_group(group: Group, org_slug: str, member_count: int) -> GroupOut:
+def _serialize_group(
+    group: Group, org_slug: str | None, member_count: int
+) -> GroupOut:
     return GroupOut(
         id=group.id,
         slug=group.slug,
         name=group.name,
         org_slug=org_slug,
+        status="orphan" if org_slug is None else "ok",
         created_at=group.created_at,
         member_count=member_count,
     )
@@ -177,16 +202,22 @@ async def create_group(payload: GroupCreate, user: CurrentUser, db: DBDep) -> Gr
 async def list_groups(user: CurrentUser, db: DBDep) -> list[GroupOut]:
     """List groups the caller can see.
 
-    super_admin sees everything; an org member sees groups in their own org;
-    a user without an org sees nothing.
+    super_admin sees everything (including orphan groups whose parent
+    org was deleted — those have status="orphan" so the operator can
+    spot + clean them up). Org members see live groups in their own
+    org. Users without an org see nothing.
     """
     if user.is_super_admin:
+        # LEFT OUTER JOIN so orphan groups still show up.
         stmt = (
             select(Group, Organization)
-            .join(Organization, Organization.id == Group.org_id)
+            .outerjoin(Organization, Organization.id == Group.org_id)
             .order_by(Group.created_at.desc())
         )
     elif user.org_id:
+        # Regular org members only see live groups in their org. Orphans
+        # by definition have no live org, so they can never belong to
+        # the user's org — filtering by org_id alone is correct.
         stmt = (
             select(Group, Organization)
             .join(Organization, Organization.id == Group.org_id)
@@ -197,15 +228,23 @@ async def list_groups(user: CurrentUser, db: DBDep) -> list[GroupOut]:
         return []
     rows = list((await db.execute(stmt)).all())
     return [
-        _serialize_group(g, o.slug, await _member_count(db, g.id)) for (g, o) in rows
+        _serialize_group(g, o.slug if o else None, await _member_count(db, g.id))
+        for (g, o) in rows
     ]
 
 
 @router.get("/{slug}", response_model=GroupOut)
 async def get_group(slug: str, user: CurrentUser, db: DBDep) -> GroupOut:
     group, org = await _group_by_slug(db, slug)
-    await _require_group_member(db, user, group, org)
-    return _serialize_group(group, org.slug, await _member_count(db, group.id))
+    if org is None:
+        # Orphan group: only super_admin sees it (so they can clean up).
+        if not user.is_super_admin:
+            raise HTTPException(status_code=404, detail=f"Group '{slug}' not found")
+    else:
+        await _require_group_member(db, user, group, org)
+    return _serialize_group(
+        group, org.slug if org else None, await _member_count(db, group.id)
+    )
 
 
 @router.patch("/{slug}", response_model=GroupOut)
@@ -213,6 +252,7 @@ async def update_group(
     slug: str, payload: GroupUpdate, user: CurrentUser, db: DBDep
 ) -> GroupOut:
     group, org = await _group_by_slug(db, slug)
+    org = _require_live_org(group, org, "rename")
     await _require_group_admin(db, user, group, org)
     group.name = payload.name
     await db.commit()
@@ -223,7 +263,16 @@ async def update_group(
 @router.delete("/{slug}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(slug: str, user: CurrentUser, db: DBDep) -> None:
     group, org = await _group_by_slug(db, slug)
-    await _require_group_admin(db, user, group, org)
+    if org is None:
+        # Orphan cleanup is super_admin's job (the natural admin chain
+        # is gone with the org).
+        if not user.is_super_admin:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Orphan group '{slug}' can only be removed by super_admin",
+            )
+    else:
+        await _require_group_admin(db, user, group, org)
     await db.delete(group)  # FK cascade drops memberships
     await db.commit()
     # FalkorDB doesn't know about our FKs — explicit graph drop.
@@ -245,6 +294,7 @@ async def add_member(
     slug: str, payload: GroupMemberAdd, user: CurrentUser, db: DBDep
 ) -> GroupMemberOut:
     group, org = await _group_by_slug(db, slug)
+    org = _require_live_org(group, org, "add members")
     await _require_group_admin(db, user, group, org)
     target = await db.get(User, payload.user_id)
     if target is None:
@@ -273,7 +323,11 @@ async def list_members(
     slug: str, user: CurrentUser, db: DBDep
 ) -> list[GroupMemberOut]:
     group, org = await _group_by_slug(db, slug)
-    await _require_group_member(db, user, group, org)
+    if org is None:
+        if not user.is_super_admin:
+            raise HTTPException(status_code=404, detail=f"Group '{slug}' not found")
+    else:
+        await _require_group_member(db, user, group, org)
     rows = list(
         (
             await db.execute(
@@ -304,6 +358,7 @@ async def update_member_role(
     db: DBDep,
 ) -> GroupMemberOut:
     group, org = await _group_by_slug(db, slug)
+    org = _require_live_org(group, org, "change member roles")
     await _require_group_admin(db, user, group, org)
     m = await _membership(db, user_id, group.id)
     if m is None:
@@ -327,8 +382,15 @@ async def remove_member(
     slug: str, user_id: str, user: CurrentUser, db: DBDep
 ) -> None:
     group, org = await _group_by_slug(db, slug)
-    # Allow self-leave without admin rights; otherwise require admin.
-    if user_id != user.id:
+    # Orphan groups: allow self-leave (cleanup), require super_admin to
+    # remove anyone else (the regular group_admin chain is broken).
+    if org is None:
+        if user_id != user.id and not user.is_super_admin:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Orphan group '{slug}': only super_admin can remove other members",
+            )
+    elif user_id != user.id:
         await _require_group_admin(db, user, group, org)
     m = await _membership(db, user_id, group.id)
     if m is None:
