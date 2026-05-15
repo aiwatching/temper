@@ -24,6 +24,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { getConfig, type SmithConfig } from "./config.js";
+import { approvalGateExtension } from "./extensions/approval-gate.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
 import { mcpBridgeExtension } from "./extensions/mcp-bridge.js";
 import { smithPersonalityExtension } from "./extensions/smith-personality.js";
@@ -162,9 +163,13 @@ class SmithSessionPool {
         // Order matters: temper-memory must be available even if MCP
         // setup fails partway through. Personality goes first so the
         // system prompt is in place before any tool sees a turn.
+        // approvalGate registers AFTER the tool-registering extensions
+        // so its tool_call handler runs alongside; pi calls handlers
+        // in registration order but block:true short-circuits.
         (pi) => smithPersonalityExtension(pi),
         (pi) => temperMemoryExtension(pi),
         (pi) => { void mcpBridgeExtension(pi); }, // fire-and-forget; awaits inside
+        (pi) => approvalGateExtension(pi, conversationId),
       ],
     });
     await resourceLoader.reload();

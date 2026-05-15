@@ -17,6 +17,7 @@ import { streamSSE } from "hono/streaming";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
+import { approvalStore, type PendingApproval } from "./approval-store.js";
 import { getConfig } from "./config.js";
 import { Temper, TemperError } from "./temper.js";
 import { getSessionPool } from "./session-manager.js";
@@ -175,6 +176,72 @@ function renderMarkdownInto(el, source) {
   log.scrollTop = log.scrollHeight;
 }
 
+/* When the gate blocks a tool call, render a confirm card inline:
+ * shows toolName + JSON args + Approve / Deny buttons. Approve fires
+ * /approve then starts a follow-up /chat turn so the LLM retries
+ * automatically. */
+function renderPendingApproval(parent, t) {
+  const box = document.createElement("div");
+  box.style.cssText =
+    "margin:8px 0;padding:10px 12px;border:2px solid #d4a72c;background:#fff8c5;border-radius:6px;font-size:13px";
+  const head = document.createElement("div");
+  head.style.cssText = "font-weight:600;color:#7a5a00;margin-bottom:6px";
+  head.textContent = "🛑 Action requires approval: " + t.toolName;
+  box.appendChild(head);
+  const pre = document.createElement("pre");
+  pre.style.cssText =
+    "margin:0 0 8px;padding:6px 8px;background:#fff;border:1px solid #e5e7eb;border-radius:4px;font-size:11px;overflow-x:auto;white-space:pre-wrap";
+  pre.textContent = JSON.stringify(t.input, null, 2);
+  box.appendChild(pre);
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:8px";
+  const approveBtn = document.createElement("button");
+  approveBtn.textContent = "Approve & retry";
+  approveBtn.style.cssText =
+    "padding:6px 12px;border:0;border-radius:4px;background:#1a7f37;color:white;cursor:pointer;font:inherit";
+  const denyBtn = document.createElement("button");
+  denyBtn.textContent = "Deny";
+  denyBtn.style.cssText =
+    "padding:6px 12px;border:1px solid #d0d7de;border-radius:4px;background:transparent;cursor:pointer;font:inherit";
+  btnRow.appendChild(approveBtn);
+  btnRow.appendChild(denyBtn);
+  box.appendChild(btnRow);
+  parent.appendChild(box);
+
+  approveBtn.addEventListener("click", async () => {
+    approveBtn.disabled = true; denyBtn.disabled = true;
+    approveBtn.textContent = "Approving…";
+    try {
+      const r = await fetch("/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId, toolName: t.toolName, argsHash: t.argsHash }),
+      });
+      if (!r.ok) throw new Error("approve " + r.status);
+      // Replace the card with a "✓ approved" pill, then trigger a
+      // retry turn — the LLM picks up its prior reasoning + the new
+      // user message and re-attempts the tool.
+      box.innerHTML = "<span style='color:#1a7f37;font-weight:600'>✓ Approved " + t.toolName + " — retrying…</span>";
+      msg.value = "(approved — please retry the " + t.toolName + " call)";
+      sendMessage();
+    } catch (e) {
+      box.innerHTML = "<span style='color:#b35900'>Approve failed: " + e.message + "</span>";
+    }
+  });
+
+  denyBtn.addEventListener("click", async () => {
+    approveBtn.disabled = true; denyBtn.disabled = true;
+    try {
+      await fetch("/deny", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversationId, toolName: t.toolName, argsHash: t.argsHash }),
+      });
+    } catch (_) {}
+    box.innerHTML = "<span style='color:#7a5a00'>✗ Denied " + t.toolName + "</span>";
+  });
+}
+
 async function sendMessage() {
   const text = msg.value.trim();
   if (!text) return;
@@ -264,6 +331,11 @@ async function sendMessage() {
               span.style.borderColor = t.isError ? "#ff8182" : "#1a7f37";
             }
           } catch (_) {}
+        } else if (evt === "tool_pending") {
+          try {
+            const t = JSON.parse(data);
+            renderPendingApproval(bubble, t);
+          } catch (_) {}
         } else if (evt === "error") {
           try {
             const e = JSON.parse(data);
@@ -316,6 +388,56 @@ export function buildApp(): Hono {
 
   // ---- chat UI ----
   app.get("/", (c) => c.html(CHAT_HTML));
+
+  // ---- approval gate ----
+  //
+  // /approve and /deny are paired with the `tool_pending` SSE event.
+  // The UI POSTs {conversationId, toolName, argsHash} and the store
+  // either lets the next retry through (/approve) or just clears the
+  // pending state (/deny). On approve, the UI follows up with a /chat
+  // turn that nudges the LLM to retry.
+  app.post("/approve", async (c) => {
+    type Body = { conversationId?: string; toolName?: string; argsHash?: string };
+    let body: Body;
+    try {
+      body = (await c.req.json()) as Body;
+    } catch {
+      return c.json({ error: "Body must be JSON" }, 400);
+    }
+    const conversationId = body.conversationId?.trim();
+    const toolName = body.toolName?.trim();
+    const hash = body.argsHash?.trim();
+    if (!conversationId || !toolName || !hash) {
+      return c.json({ error: "conversationId, toolName, argsHash all required" }, 400);
+    }
+    approvalStore.approve(conversationId, toolName, hash);
+    return c.json({ ok: true });
+  });
+
+  app.post("/deny", async (c) => {
+    type Body = { conversationId?: string; toolName?: string; argsHash?: string };
+    let body: Body;
+    try {
+      body = (await c.req.json()) as Body;
+    } catch {
+      return c.json({ error: "Body must be JSON" }, 400);
+    }
+    const conversationId = body.conversationId?.trim();
+    const toolName = body.toolName?.trim();
+    const hash = body.argsHash?.trim();
+    if (!conversationId || !toolName || !hash) {
+      return c.json({ error: "conversationId, toolName, argsHash all required" }, 400);
+    }
+    approvalStore.deny(conversationId, toolName, hash);
+    return c.json({ ok: true });
+  });
+
+  // Optional: lets the UI re-fetch the current pending state on
+  // page reload so a missed SSE event doesn't strand the user.
+  app.get("/pending/:conversationId", (c) => {
+    const p = approvalStore.getPending(c.req.param("conversationId"));
+    return c.json({ pending: p ?? null });
+  });
 
   // ---- health ----
   app.get("/healthz", async (c) => {
@@ -427,14 +549,38 @@ export function buildApp(): Hono {
             }
           }
         });
+        // Forward `tool_pending` from the approvalStore — fires when
+        // the gate blocks a dangerous tool. The UI shows Approve/Deny
+        // buttons keyed off the (toolCallId, argsHash) we ship here.
+        const onPending = (p: PendingApproval) => {
+          if (aborted) return;
+          if (p.conversationId !== conversationId) return;
+          stream
+            .writeSSE({
+              event: "tool_pending",
+              data: JSON.stringify({
+                toolCallId: p.toolCallId,
+                toolName: p.toolName,
+                input: p.input,
+                argsHash: p.argsHash,
+              }),
+            })
+            .catch(() => {});
+        };
+        approvalStore.events.on("pending", onPending);
+
         // If the client disconnects, stop pushing events. pi's
         // prompt() will keep running in the background; the next
         // /chat call against this session will queue / wait.
-        stream.onAbort(() => { aborted = true; });
+        stream.onAbort(() => {
+          aborted = true;
+          approvalStore.events.off("pending", onPending);
+        });
         try {
           await session.prompt(message);
         } finally {
           unsubscribe();
+          approvalStore.events.off("pending", onPending);
         }
         if (stopReason === "error") {
           await stream.writeSSE({
