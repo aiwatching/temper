@@ -208,7 +208,7 @@ If the search returns 0 hits, the section is omitted entirely
 | "the user prefers Postgres over MySQL for new projects" | TEMPER — durable preference |
 | "the user is named Z" | TEMPER — identity |
 | "this thread is about bug FNAC-12345" | JSONL — task context |
-| Compaction summaries | TEMPER (planned — A3) so context survives summarisation |
+| Compaction summaries | TEMPER (A3 ✅): when pi auto-compacts, the summary is written as an episode tagged `compaction-summary` in this agent's scope. Future cross-thread recall picks it up. |
 
 ---
 
