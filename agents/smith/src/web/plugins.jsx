@@ -45,7 +45,12 @@ const PluginsApp = () => {
   const onSaved = async () => {
     onClose();
     await load();
-    flash('Saved. Restart Smith to register new tools in the LLM tool surface.');
+    // Hot-reload semantics (P4):
+    //   - edit existing plugin (config / secret) → in ≤30s the
+    //     PluginManager poll picks it up + reconnects, no restart
+    //   - enable/disable existing plugin → same
+    //   - NEW plugin → pi can't add tool names live; needs restart
+    flash('Saved. Edits to existing plugins take effect within 30s; new plugins need a Smith restart to register their tools.');
   };
 
   const onTest = async (p) => {
@@ -85,7 +90,7 @@ const PluginsApp = () => {
     if (!confirm(`Delete plugin '${p.slug}'? Its secret will be wiped.`)) return;
     try {
       await api(`/plugins/${encodeURIComponent(p.slug)}`, { method: 'DELETE' });
-      flash(`Deleted ${p.slug}. Restart Smith to release its connection.`);
+      flash(`Deleted ${p.slug}. Connection drops within 30s; LLM tool registrations stay until next restart (calls return errors).`);
       await load();
     } catch (e) { setError(e.message); }
   };
@@ -148,7 +153,7 @@ const PluginsApp = () => {
         <RotateSecretDialog
           slug={secretFor}
           onClose={() => setSecretFor(null)}
-          onRotated={() => { setSecretFor(null); flash('Secret rotated. Restart Smith to use the new value.'); load(); }}
+          onRotated={() => { setSecretFor(null); flash('Secret rotated. Takes effect on next plugin poll (≤30s) — no restart needed.'); load(); }}
         />
       )}
     </div>

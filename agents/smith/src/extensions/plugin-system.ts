@@ -44,6 +44,10 @@ export async function pluginSystemExtension(pi: PiExtensionAPI): Promise<void> {
         (spec.inputSchema as Record<string, unknown>) ?? { type: "object" },
       ),
       async execute(_toolCallId: string, args: unknown) {
+        // `plugin` here is the PluginProxy from the manager. If the
+        // manager hot-swapped the underlying client (secret rotated,
+        // endpoint changed), the proxy follows — we always reach the
+        // current instance without re-registering the tool.
         const result = await plugin.invoke(toolName, args);
         return {
           content: result.content,
@@ -53,4 +57,12 @@ export async function pluginSystemExtension(pi: PiExtensionAPI): Promise<void> {
       },
     });
   }
+
+  // Once tools are registered, hand pi to the manager so the poll
+  // loop can toggle setActiveTools when plugins enable/disable. We
+  // also give it a getter so it can compute the active-tools union
+  // (active = plugin tools that should be on + every non-plugin
+  // tool that's already on) without clobbering memory_search etc.
+  mgr.setGetActiveTools(() => pi.getActiveTools());
+  mgr.startPolling({ setActiveTools: (names: string[]) => pi.setActiveTools(names) });
 }

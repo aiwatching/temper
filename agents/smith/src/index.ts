@@ -14,6 +14,7 @@ import { getConfig, mapEnvForPi } from "./config.js";
 import { closeDb } from "./db/sqlite.js";
 import { runMigrations } from "./db/migrations.js";
 import { getPluginManager } from "./plugins/manager.js";
+import { migrateEnvMcpServers } from "./plugins/migrate_env.js";
 import { startSchedulerIfConfigured, stopScheduler } from "./scheduler.js";
 import { buildApp } from "./server.js";
 import { getSessionPool } from "./session-manager.js";
@@ -37,6 +38,11 @@ async function main(): Promise<void> {
   // plugins / secrets tables. Idempotent (already-applied versions
   // are skipped).
   runMigrations();
+
+  // One-time MCP_SERVERS env → plugins-table migration. No-op when
+  // the table is non-empty, so re-running is safe. After the first
+  // import the operator can remove MCP_SERVERS from .env.
+  migrateEnvMcpServers();
 
   const app = buildApp();
   banner();
