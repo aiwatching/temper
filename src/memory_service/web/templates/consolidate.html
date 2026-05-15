@@ -1,0 +1,214 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .consolidate-grid { display: grid; grid-template-columns: 1fr; gap: 18px; margin-top: 8px; }
+  .filter-row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 12px; }
+  .filter-row label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .filter-row select, .filter-row input { padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; min-width: 220px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11px; border: 1px solid var(--border); }
+  .pill.idle    { background: #dafbe1; border-color: #1a7f37; color: #1a7f37; }
+  .pill.sleeping{ background: #fff8c5; border-color: #d4a72c; color: #7a5a00; }
+  .pill.error   { background: #ffebe9; border-color: #ff8182; color: #b35900; }
+  .action-row td { font-size: 12px; padding: 6px 10px; }
+  .action-row td.kind { font-weight: 600; }
+  .action-row td.kind.invalidate_fact { color: #7a5a00; }
+  .action-row td.kind.delete_fact { color: #b35900; }
+  .action-row td.kind.delete_episode { color: #d1242f; }
+  .action-row code { font-size: 11px; }
+</style>
+
+<section class="card" x-data="consolidatePage()" x-init="load()">
+  <h2>Consolidate memory</h2>
+  <p style="color:var(--muted)">
+    Per-namespace cleanup. <strong>Plan</strong> first (read-only),
+    review the actions, then <strong>Apply</strong>. While Apply runs
+    the namespace is <em>sleeping</em> — all reads and writes return
+    423 Locked until it finishes.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="lastApply">
+    <div class="msg ok" x-text="`Applied ${lastApply.applied} action(s), ${lastApply.failed} failed. Took ${lastApply.tookMs} ms.`"></div>
+  </template>
+
+  <div class="filter-row">
+    <label>Namespace
+      <select x-model="namespace" @change="onNamespaceChange()">
+        <template x-for="ns in namespaces" :key="ns.raw">
+          <option :value="ns.raw" x-text="nsLabel(ns)"></option>
+        </template>
+      </select>
+    </label>
+    <label>Mode
+      <select x-model="mode">
+        <option value="all">all (dedup + cleanup)</option>
+        <option value="dedup-exact">dedup-exact only</option>
+        <option value="cleanup-tags">cleanup-tags only</option>
+      </select>
+    </label>
+    <button class="secondary" @click="generatePlan()" :disabled="!namespace || generating">
+      <span x-text="generating ? 'Generating…' : 'Generate plan'"></span>
+    </button>
+    <span style="margin-left:auto; font-size:12px; color:var(--muted)">
+      Status:
+      <template x-if="!status || status.state === null">
+        <span class="pill idle">idle</span>
+      </template>
+      <template x-if="status && status.state">
+        <span class="pill sleeping">
+          sleeping
+          <span x-text="`(mode=${status.state.mode}, ${status.state.ttl_seconds_remaining}s ttl)`" style="margin-left:4px"></span>
+        </span>
+      </template>
+    </span>
+  </div>
+
+  <div class="consolidate-grid">
+    <!-- Plan render -->
+    <template x-if="plan">
+      <div class="card" style="border:2px solid var(--accent); padding:14px 16px">
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px">
+          <h3 style="margin:0">Plan <code style="font-size:11px" x-text="plan.plan_id.slice(0,8)"></code></h3>
+          <span style="font-size:12px; color:var(--muted)">
+            mode=<code x-text="plan.mode"></code>
+            · expires <span x-text="window.ms.fmtDate(plan.expires_at)"></span>
+          </span>
+          <button class="danger" style="margin-left:auto" @click="applyPlan()"
+                  :disabled="applying || plan.counts.total === 0">
+            <span x-text="applying ? 'Applying…' : (plan.counts.total === 0 ? 'Nothing to apply' : `Apply ${plan.counts.total} action(s)`)"></span>
+          </button>
+        </div>
+
+        <div style="display:flex; gap:18px; flex-wrap:wrap; font-size:12px; margin-bottom:12px">
+          <span><strong x-text="plan.counts.invalidate_fact"></strong> invalidate fact</span>
+          <span><strong x-text="plan.counts.delete_fact"></strong> delete fact</span>
+          <span><strong x-text="plan.counts.delete_episode"></strong> delete episode</span>
+          <span style="color:var(--muted); margin-left:auto">
+            <strong x-text="plan.counts.total"></strong> total
+          </span>
+        </div>
+
+        <template x-if="plan.actions.length === 0">
+          <p style="color:var(--muted); font-style:italic">
+            Nothing to do for this namespace + mode. Try a different mode,
+            or add some <code>forget</code>-tagged episodes / duplicate
+            facts before re-planning.
+          </p>
+        </template>
+        <template x-if="plan.actions.length > 0">
+          <table>
+            <thead><tr><th>kind</th><th>target</th><th>reason</th><th>kept</th><th>label</th></tr></thead>
+            <tbody>
+              <template x-for="(a, i) in plan.actions" :key="a.target_id">
+                <tr class="action-row">
+                  <td :class="'kind ' + a.type" x-text="a.type"></td>
+                  <td><code x-text="a.target_id.slice(0,8) + '…'" :title="a.target_id"></code></td>
+                  <td x-text="a.reason"></td>
+                  <td>
+                    <template x-if="a.kept_id">
+                      <code x-text="a.kept_id.slice(0,8) + '…'" :title="a.kept_id"></code>
+                    </template>
+                    <template x-if="!a.kept_id"><span>—</span></template>
+                  </td>
+                  <td x-text="a.label"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </template>
+      </div>
+    </template>
+  </div>
+</section>
+
+<script>
+  function consolidatePage() {
+    return {
+      error: null,
+      namespaces: [],
+      namespace: "",
+      mode: "all",
+      plan: null,
+      status: null,
+      generating: false,
+      applying: false,
+      lastApply: null,
+      statusPollHandle: null,
+
+      async load() {
+        window.ms.requireAuth();
+        try {
+          const r = await window.ms.json("/v1/namespaces");
+          this.namespaces = r.namespaces || [];
+          if (this.namespaces.length && !this.namespace) {
+            this.namespace = this.namespaces[0].raw;
+            await this.refreshStatus();
+          }
+        } catch (e) { this.error = e.message; }
+      },
+      nsLabel(ns) {
+        if (ns.kind === "agent") {
+          const parts = ns.value.split("/");
+          return `agent:${parts.slice(1).join("/")}`;
+        }
+        return ns.raw;
+      },
+      async refreshStatus() {
+        if (!this.namespace) return;
+        try {
+          const qs = new URLSearchParams({ namespace: this.namespace });
+          this.status = await window.ms.json(`/v1/consolidate/status?${qs}`);
+        } catch (e) {
+          // status is best-effort
+          this.status = null;
+        }
+      },
+      onNamespaceChange() {
+        this.plan = null;
+        this.lastApply = null;
+        this.refreshStatus();
+      },
+      async generatePlan() {
+        this.error = null;
+        this.lastApply = null;
+        this.plan = null;
+        this.generating = true;
+        try {
+          this.plan = await window.ms.json("/v1/consolidate/plan", {
+            method: "POST",
+            body: JSON.stringify({ namespace: this.namespace, mode: this.mode }),
+          });
+        } catch (e) { this.error = e.message; }
+        finally { this.generating = false; }
+      },
+      async applyPlan() {
+        if (!this.plan || this.plan.counts.total === 0) return;
+        if (!confirm(
+          `Apply ${this.plan.counts.total} action(s) on ${this.namespace}?\n` +
+          `The namespace will be SLEEPING during this — all reads + writes ` +
+          `return 423 until it finishes.`
+        )) return;
+        this.error = null;
+        this.applying = true;
+        const startMs = Date.now();
+        // Start polling status during apply so the pill flips to sleeping.
+        this.statusPollHandle = setInterval(() => this.refreshStatus(), 1000);
+        try {
+          const r = await window.ms.json("/v1/consolidate/apply", {
+            method: "POST",
+            body: JSON.stringify({ plan_id: this.plan.plan_id }),
+          });
+          this.lastApply = { ...r, tookMs: Date.now() - startMs };
+          this.plan = null; // plan is one-shot
+        } catch (e) { this.error = e.message; }
+        finally {
+          this.applying = false;
+          clearInterval(this.statusPollHandle);
+          this.statusPollHandle = null;
+          this.refreshStatus();
+        }
+      },
+    };
+  }
+</script>
+{% endblock %}

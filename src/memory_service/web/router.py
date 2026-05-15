@@ -88,6 +88,13 @@ async def admin_stats(request: Request) -> HTMLResponse:
     )
 
 
+@router.get("/admin/consolidate", response_class=HTMLResponse, include_in_schema=False)
+async def admin_consolidate(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "consolidate.html", {"title": "Consolidate memory", "wide": True}
+    )
+
+
 @router.get("/admin/episodes", response_class=HTMLResponse, include_in_schema=False)
 async def admin_episodes(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "episodes.html", {"title": "Episodes"})
