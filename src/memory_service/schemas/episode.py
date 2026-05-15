@@ -122,6 +122,12 @@ class SearchHitOut(BaseModel):
     invalid_at: datetime | None
     score: float | None = None
     kind: Literal["fact", "entity", "community"] = "fact"
+    # `id` is the edge UUID for fact hits and the entity UUID for entity
+    # hits. Surfaced so agents can pass it back to PATCH /v1/facts/<id>
+    # or POST /v1/admin/entities/<id>/resummarize without an extra lookup.
+    id: str | None = None
+    source_node_uuid: str | None = None
+    target_node_uuid: str | None = None
 
 
 class SearchResponse(BaseModel):

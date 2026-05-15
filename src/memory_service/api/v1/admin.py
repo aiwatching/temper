@@ -89,6 +89,45 @@ async def bulk_import(
     return await run_import(payload, db)
 
 
+class ResummarizeEntityResponse(BaseModel):
+    id: str
+    namespace: str
+    name: str | None
+    summary_before: str
+    summary_after: str
+    source_episode_count: int
+    note: str | None = None
+
+
+@router.post(
+    "/entities/{entity_uuid}/resummarize",
+    response_model=ResummarizeEntityResponse,
+)
+async def resummarize_entity(
+    entity_uuid: str, user: CurrentUser, db: DBDep,
+) -> ResummarizeEntityResponse:
+    """Rebuild an entity's `.summary` from its source episodes via LLM.
+
+    Use this when an entity's summary has accumulated stale or wrong
+    text — typically because Graphiti's normal summary-update path
+    short-circuits the LLM and only appends new edge facts to whatever
+    was there before. This endpoint pulls every episode that mentions
+    the entity, hands them to Graphiti's
+    `extract_entity_summaries_from_episodes` prompt, and overwrites
+    `.summary` with the LLM's fresh take.
+
+    Cost: one LLM call. Requires WRITE on the entity's namespace.
+    Respects sleeping namespaces.
+    """
+    try:
+        result = await memory.resummarize_entity(user, entity_uuid, db)
+    except memory.MemoryError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Entity {entity_uuid} not found")
+    return ResummarizeEntityResponse(**result)
+
+
 @router.post("/communities/build", response_model=BuildCommunitiesResponse)
 async def build_communities(
     user: CurrentUser,

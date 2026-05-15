@@ -103,6 +103,9 @@ async def search(
                 invalid_at=h.invalid_at,
                 score=h.score,
                 kind=h.kind,
+                id=h.id,
+                source_node_uuid=h.source_node_uuid,
+                target_node_uuid=h.target_node_uuid,
             )
             for h in hits
         ],

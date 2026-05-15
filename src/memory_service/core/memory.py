@@ -112,6 +112,13 @@ class SearchHit:
     # relation from it (especially on terse one-liners), so edge-only search
     # would miss the answer that's clearly in the graph.
     kind: str = "fact"
+    # UUIDs surface so agents can act on hits (invalidate a fact, fetch the
+    # source entity for resummarize, etc.) without a second lookup. `id` is
+    # the edge UUID for kind="fact" and the entity UUID for kind="entity";
+    # source_node_uuid / target_node_uuid are populated only for fact hits.
+    id: str | None = None
+    source_node_uuid: str | None = None
+    target_node_uuid: str | None = None
 
 
 # ---------- adapters ----------
@@ -625,6 +632,26 @@ async def search(
     over_fetch = limit * 4 if as_of is not None else limit
     config.limit = over_fetch
 
+    # FalkorDB-specific workaround:
+    #
+    # graphiti_core/decorators.py only fans search out across per-group
+    # FalkorDB graphs when `len(group_ids) > 1`. With a single group_id
+    # the decorator short-circuits to "normal execution" using
+    # `self.clients.driver` — which routes to the connection's default
+    # database (`default_db`). That graph is empty in our deployment
+    # (every write lands in its own `<kind>__<id>` graph), so single-
+    # namespace searches always return 0 hits.
+    #
+    # We side-step by cloning the driver to point at the target graph
+    # ourselves and passing it via `client.search_(driver=...)`. The
+    # SearchOps inside use the passed driver, not `clients.driver`, so
+    # the query lands in the right graph.
+    #
+    # Multi-group calls go through the decorator path unchanged; it
+    # already clones per group internally.
+    search_driver = None
+    if len(group_ids) == 1:
+        search_driver = client.driver.clone(database=group_ids[0])
     try:
         results = await client.search_(
             query=query,
@@ -633,6 +660,7 @@ async def search(
             search_filter=search_filter,
             center_node_uuid=center_node_uuid,
             bfs_origin_node_uuids=bfs_origin_node_uuids,
+            driver=search_driver,
         )
     except Exception as exc:
         _logger.exception("Graphiti search failed")
@@ -641,8 +669,25 @@ async def search(
     def _to_raw(group_id: str) -> str:
         return group_id_to_raw.get(group_id, group_id)
 
+    # Graphiti returns reranker scores as PARALLEL lists alongside the
+    # result lists (results.edge_reranker_scores[i] is the score for
+    # results.edges[i]). We zip them here so SearchHit carries the score
+    # downstream — without this, callers can't filter or sort by
+    # relevance and end up doing post-hoc band-aids like char-count
+    # truncation.
+    #
+    # The score's meaning depends on which reranker the search used:
+    #   - rrf            → rank-based, NOT comparable across queries
+    #   - cross_encoder  → true relevance in [0,1], comparable
+    #   - mmr            → diversity-adjusted similarity in [0,1]
+    # Callers wanting absolute thresholds should request
+    # reranker=cross_encoder explicitly.
+    edge_scores: list[float] = list(getattr(results, "edge_reranker_scores", []) or [])
+    node_scores: list[float] = list(getattr(results, "node_reranker_scores", []) or [])
+    comm_scores: list[float] = list(getattr(results, "community_reranker_scores", []) or [])
+
     edge_hits: list[SearchHit] = []
-    for edge in results.edges:
+    for i, edge in enumerate(results.edges):
         if as_of is not None and not _active_at(edge, as_of):
             continue
         edge_hits.append(
@@ -653,7 +698,10 @@ async def search(
                 source_episode_ids=list(edge.episodes or []),
                 valid_at=edge.valid_at,
                 invalid_at=edge.invalid_at,
-                score=None,
+                score=edge_scores[i] if i < len(edge_scores) else None,
+                id=getattr(edge, "uuid", None),
+                source_node_uuid=getattr(edge, "source_node_uuid", None),
+                target_node_uuid=getattr(edge, "target_node_uuid", None),
             )
         )
 
@@ -663,7 +711,7 @@ async def search(
     node_hits: list[SearchHit] = []
     community_hits: list[SearchHit] = []
     if as_of is None:
-        for node in results.nodes:
+        for i, node in enumerate(results.nodes):
             text = (getattr(node, "summary", None) or node.name or "").strip()
             if not text:
                 continue
@@ -675,10 +723,11 @@ async def search(
                     source_episode_ids=[],
                     valid_at=None,
                     invalid_at=None,
-                    score=None,
+                    score=node_scores[i] if i < len(node_scores) else None,
+                    id=getattr(node, "uuid", None),
                 )
             )
-        for comm in getattr(results, "communities", None) or []:
+        for i, comm in enumerate(getattr(results, "communities", None) or []):
             text = (getattr(comm, "summary", None) or comm.name or "").strip()
             if not text:
                 continue
@@ -690,26 +739,27 @@ async def search(
                     source_episode_ids=[],
                     valid_at=None,
                     invalid_at=None,
-                    score=None,
+                    score=comm_scores[i] if i < len(comm_scores) else None,
+                    id=getattr(comm, "uuid", None),
                 )
             )
 
-    # Round-robin merge across the three result streams: each kind's
-    # internal rank is preserved, but no kind monopolizes the slice
-    # when the caller's `limit` is smaller than the total candidate
-    # count. Edges first so a single-kind query (no entities, no
-    # communities yet) still degrades to "all facts."
-    merged: list[SearchHit] = []
-    iters = [iter(edge_hits), iter(node_hits), iter(community_hits)]
-    while iters and len(merged) < limit:
-        for it in iters[:]:
-            try:
-                merged.append(next(it))
-                if len(merged) >= limit:
-                    break
-            except StopIteration:
-                iters.remove(it)
-    return merged
+    # Score-driven merge: sort all three streams together by reranker
+    # score (desc), then take the top `limit`. This replaces the prior
+    # round-robin which was kind-alphabetical and could rank an
+    # unrelated edge hit above a perfect-match node hit just because
+    # "edge" came before "node" in the iteration order.
+    #
+    # Hits with score=None (e.g. when the reranker doesn't populate
+    # scores for one of the kinds) sort to the end via a sentinel — we
+    # don't drop them outright because they might still be useful in
+    # the long tail; the caller's `limit` will trim them naturally.
+    all_hits: list[SearchHit] = edge_hits + node_hits + community_hits
+    # Stable sort with score=None pushed to the back. Python's sort is
+    # stable so within equal-score hits we preserve their original
+    # per-kind ordering.
+    all_hits.sort(key=lambda h: (h.score if h.score is not None else float("-inf")), reverse=True)
+    return all_hits[:limit]
 
 
 def _active_at(edge: Any, as_of: datetime) -> bool:
@@ -1411,6 +1461,227 @@ async def list_episodes(
         next_cursor = rows[-1].created_at
         rows = rows[:limit]
     return rows, next_cursor
+
+
+async def resummarize_entity(
+    user: User, entity_uuid: str, db: AsyncSession
+) -> dict[str, Any] | None:
+    """Rebuild an entity's `.summary` from its source episodes via LLM.
+
+    Why this exists: Graphiti's normal summary update path (in
+    `graphiti_core/utils/maintenance/node_operations.py:854-862`)
+    short-circuits the LLM call whenever `existing_summary + new_edges`
+    fits under `MAX_SUMMARY_CHARS * 2`, simply appending edge facts to
+    the old summary. That means once an incorrect fact (e.g. an
+    agency-flipped "user wants to be called X") lands in `.summary`,
+    it persists forever — new episodes can only append, never rewrite.
+    This endpoint is the manual escape hatch: re-run the
+    `extract_entity_summaries_from_episodes` prompt across ALL of the
+    entity's source episodes (the ones linked by `MENTIONS`) and
+    overwrite `.summary` with what the LLM returns.
+
+    Permissioned as a WRITE on the entity's namespace. Respects the
+    sleeping-namespace lock from `consolidation`.
+
+    Returns the new summary + before/after diff, or None when no such
+    entity is reachable for this user.
+    """
+    client = _require_client()
+    readable = await readable_namespaces_for(user, db)
+    from graphiti_core.nodes import EntityNode, EpisodicNode
+    from graphiti_core.prompts import prompt_library
+    from graphiti_core.prompts.extract_nodes import SummarizedEntities
+    from graphiti_core.utils.text_utils import (
+        MAX_SUMMARY_CHARS,
+        truncate_at_sentence,
+    )
+
+    found_ns: Namespace | None = None
+    found_driver: Any = None
+    node: Any = None
+    for ns in readable:
+        driver = _driver_for_namespace(client, ns)
+        if driver is None:
+            continue
+        try:
+            node = await EntityNode.get_by_uuid(driver, entity_uuid)
+        except Exception:
+            continue
+        found_ns = ns
+        found_driver = driver
+        break
+    if node is None or found_ns is None:
+        return None
+
+    if not await can_write(user, found_ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' cannot rewrite summaries in namespace '{found_ns.raw}'"
+        )
+    from memory_service.core.consolidation import assert_namespace_unlocked
+    assert_namespace_unlocked(found_ns)
+
+    try:
+        episodes = await EpisodicNode.get_by_entity_node_uuid(found_driver, entity_uuid)
+    except Exception as exc:
+        _logger.exception("get_by_entity_node_uuid failed for %s", entity_uuid)
+        raise BackendUnavailableError(f"episode lookup failed: {exc}") from exc
+
+    if not episodes:
+        # Nothing to summarize from. Leave the summary untouched rather
+        # than blanking it — an entity with no MENTIONS rows is usually
+        # a graph-integrity issue worth investigating, not a "summary
+        # bad" issue.
+        return {
+            "id": node.uuid,
+            "namespace": found_ns.raw,
+            "name": getattr(node, "name", None),
+            "summary_before": getattr(node, "summary", None) or "",
+            "summary_after": getattr(node, "summary", None) or "",
+            "source_episode_count": 0,
+            "note": "no source episodes — summary left unchanged",
+        }
+
+    # Most-recent episode = "current"; the rest become "previous_episodes"
+    # so the prompt has chronological context. Graphiti uses `valid_at`
+    # for episode time; fall back to created_at.
+    def _episode_time(ep: Any):
+        return getattr(ep, "valid_at", None) or getattr(ep, "created_at", None) or datetime.min.replace(tzinfo=UTC)
+
+    episodes_sorted = sorted(episodes, key=_episode_time)
+    latest = episodes_sorted[-1]
+    previous = episodes_sorted[:-1]
+
+    # Deliberately pass an EMPTY existing summary into the prompt
+    # context, even though the entity has one. The whole reason callers
+    # hit this endpoint is that the existing summary is wrong / stale,
+    # and `extract_entity_summaries_from_episodes` is explicitly
+    # allowed to "skip if no new info beyond existing summary" — which
+    # means feeding the stale text in lets the LLM no-op and leaves
+    # the bad summary untouched (real failure mode hit during
+    # development: a "heizai" entity got "LLM returned no summary"
+    # because the model treated the wrong existing text as authoritative).
+    # By passing "" we force the LLM to rebuild from source episodes.
+    entity_ctx = [{
+        "name": getattr(node, "name", "") or "",
+        "summary": "",
+        "entity_types": list(getattr(node, "labels", []) or []),
+        "attributes": dict(getattr(node, "attributes", {}) or {}),
+    }]
+    batch_context = {
+        "entities": entity_ctx,
+        "episode_content": latest.content,
+        "previous_episodes": [
+            {
+                "content": ep.content,
+                "timestamp": (_episode_time(ep).isoformat() if _episode_time(ep) else None),
+            }
+            for ep in previous
+        ],
+        "entity_type_descriptions": {},
+    }
+
+    llm_client = getattr(client, "llm_client", None)
+    if llm_client is None:
+        raise BackendUnavailableError("Graphiti client has no llm_client — cannot resummarize")
+
+    try:
+        response = await llm_client.generate_response(
+            prompt_library.extract_nodes.extract_entity_summaries_from_episodes(batch_context),
+            response_model=SummarizedEntities,
+            prompt_name="extract_nodes.extract_entity_summaries_from_episodes",
+        )
+    except Exception as exc:
+        _logger.exception("resummarize LLM call failed for entity %s", entity_uuid)
+        raise BackendUnavailableError(f"LLM summarization failed: {exc}") from exc
+
+    parsed = SummarizedEntities(**response)
+    target_name = (getattr(node, "name", "") or "").lower()
+    new_summary: str | None = None
+    for s in parsed.summaries:
+        if s.name.lower() == target_name:
+            new_summary = truncate_at_sentence(s.summary, MAX_SUMMARY_CHARS)
+            break
+    if new_summary is None and parsed.summaries:
+        # LLM returned a summary but didn't echo the name back exactly —
+        # accept the first one rather than fail the whole call.
+        new_summary = truncate_at_sentence(parsed.summaries[0].summary, MAX_SUMMARY_CHARS)
+    note: str | None = None
+    if new_summary is None:
+        # The prompt explicitly says "skip entities with no info" — that
+        # path lands here. Common for bare-value entities (a nickname, a
+        # date, a category) where the LLM can't write a multi-sentence
+        # narrative.
+        #
+        # Falling back to "leave summary unchanged" defeats the whole
+        # endpoint: the caller asked us to rebuild precisely because the
+        # existing text is wrong. Instead, rebuild from currently-valid
+        # facts (edges with invalid_at IS NULL) on this node — that
+        # gives a deterministic, non-stale summary anchored in the
+        # current graph state, without depending on the LLM at all.
+        # EntityEdge has no get_by_node_uuid helper, so query the driver
+        # directly for RELATES_TO edges incident on this node where
+        # invalid_at is NULL. Edges where this entity is either the
+        # source or target are both relevant — both anchor a fact "about"
+        # the entity from the recall perspective.
+        try:
+            live_facts: list[str] = []
+            records, _, _ = await found_driver.execute_query(
+                """
+                MATCH (n:Entity {uuid: $uuid})-[e:RELATES_TO]-(:Entity)
+                WHERE e.invalid_at IS NULL
+                RETURN DISTINCT e.fact AS fact
+                """,
+                uuid=entity_uuid,
+                routing_="r",
+            )
+            for r in records:
+                fact = (r["fact"] if isinstance(r, dict) else r.get("fact")) if hasattr(r, "get") else None
+                # FalkorDB driver returns rows as dict-likes; the property
+                # access above covers both common shapes.
+                if fact is None:
+                    try:
+                        fact = r[0]
+                    except Exception:
+                        fact = None
+                if fact:
+                    live_facts.append(str(fact).strip())
+        except Exception:
+            _logger.exception("live-edge fallback failed for %s", entity_uuid)
+            live_facts = []
+        # Dedup and clip to MAX_SUMMARY_CHARS. The order is "as Graphiti
+        # returned the edges" — fine because all of them are currently
+        # valid.
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for f in live_facts:
+            if f and f not in seen:
+                seen.add(f)
+                deduped.append(f)
+        new_summary = "\n".join(deduped)[:MAX_SUMMARY_CHARS]
+        note = (
+            f"LLM declined to summarize — fell back to {len(deduped)} live edge fact(s); "
+            "stale entries from invalidated edges have been dropped."
+            if deduped else
+            "LLM declined to summarize and no live edge facts exist — summary blanked."
+        )
+
+    summary_before = getattr(node, "summary", None) or ""
+    node.summary = new_summary
+    try:
+        await node.save(found_driver)
+    except Exception as exc:
+        _logger.exception("EntityNode.save failed for %s", entity_uuid)
+        raise BackendUnavailableError(f"save failed: {exc}") from exc
+
+    return {
+        "id": node.uuid,
+        "namespace": found_ns.raw,
+        "name": getattr(node, "name", None),
+        "summary_before": summary_before,
+        "summary_after": new_summary,
+        "source_episode_count": len(episodes),
+        "note": note,
+    }
 
 
 async def delete_episode(user: User, episode_id: str, db: AsyncSession) -> None:
