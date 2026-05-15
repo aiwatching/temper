@@ -252,6 +252,111 @@ def _dedup_exact_plan(facts: list[dict[str, Any]]) -> list[PlannedAction]:
     return actions
 
 
+# Hard cap so an unbounded namespace doesn't fire a 200k-token LLM call.
+# When the namespace is bigger than this, semantic dedup returns an empty
+# action list with a warning; the operator should chunk by hand for now.
+_SEMANTIC_FACT_CAP = 200
+
+
+async def _dedup_semantic_plan(
+    facts: list[dict[str, Any]],
+) -> list[PlannedAction]:
+    """Ask the Graphiti-bound LLM to cluster semantically-equivalent facts.
+
+    Single batched call. For each cluster ≥2 the LLM picks the "best"
+    fact to keep (most specific / earliest stated) and we invalidate
+    the rest. If anything goes wrong (LLM down, bad JSON, payload too
+    big), we return an empty plan — never half-process; the operator
+    can fall back to dedup-exact.
+    """
+    if not facts:
+        return []
+    if len(facts) > _SEMANTIC_FACT_CAP:
+        _logger.warning(
+            "semantic dedup: %d facts exceeds cap %d — skipping. "
+            "Run dedup-exact first or wait for chunked-semantic support.",
+            len(facts), _SEMANTIC_FACT_CAP,
+        )
+        return []
+
+    from pydantic import BaseModel, Field as PField
+
+    from memory_service.core.memory import _require_client
+
+    class _Cluster(BaseModel):
+        keep_uuid: str = PField(description="UUID of the fact to KEEP from this cluster")
+        duplicate_uuids: list[str] = PField(
+            description="UUIDs of facts in this cluster that should be invalidated as duplicates of keep_uuid",
+        )
+        rationale: str = PField(description="One-line reason these are duplicates")
+
+    class _DedupResponse(BaseModel):
+        clusters: list[_Cluster] = PField(
+            description=(
+                "List of duplicate clusters. Each cluster must have at least 2 facts "
+                "(one keep + one or more duplicates). Skip facts that have no "
+                "semantic duplicate."
+            ),
+        )
+
+    # Compact input for the LLM — only id + fact text.
+    fact_lines = "\n".join(
+        f"  {f['uuid']}  {(f.get('fact') or '').strip()}"
+        for f in facts
+    )
+    prompt_text = (
+        "Identify clusters of SEMANTICALLY EQUIVALENT facts below. Two facts "
+        "are equivalent if they assert the same thing about the same subject, "
+        "even with different wording, tense, or detail level.\n\n"
+        "Rules:\n"
+        "  - Be conservative. Only cluster facts you're confident are saying "
+        "the same thing. When in doubt, do NOT cluster.\n"
+        "  - For each cluster of N facts, pick exactly ONE keep_uuid and put "
+        "the other N-1 in duplicate_uuids.\n"
+        "  - Prefer keeping the most specific / earliest / clearest variant.\n"
+        "  - It is fine to return an empty cluster list if no equivalents exist.\n\n"
+        f"Facts (uuid  fact):\n{fact_lines}"
+    )
+
+    try:
+        client = _require_client()
+        from graphiti_core.prompts.models import Message
+
+        llm = client.llm_client
+        response = await llm.generate_response(
+            [Message(role="user", content=prompt_text)],
+            response_model=_DedupResponse,
+        )
+        # graphiti_core returns a dict; coerce
+        parsed = _DedupResponse.model_validate(response)
+    except Exception as exc:  # noqa: BLE001
+        _logger.exception("semantic dedup LLM call failed: %s", exc)
+        return []
+
+    by_uuid = {f["uuid"]: f for f in facts}
+    actions: list[PlannedAction] = []
+    for cluster in parsed.clusters:
+        keep = by_uuid.get(cluster.keep_uuid)
+        if keep is None:
+            continue
+        for dup_uuid in cluster.duplicate_uuids:
+            if dup_uuid == cluster.keep_uuid:
+                continue
+            dup = by_uuid.get(dup_uuid)
+            if dup is None:
+                continue
+            actions.append(
+                PlannedAction(
+                    type=ActionType.INVALIDATE_FACT,
+                    target_id=dup_uuid,
+                    reason=f"semantic duplicate of {cluster.keep_uuid} — {cluster.rationale}",
+                    kept_id=cluster.keep_uuid,
+                    label=(dup.get("fact") or "")[:120],
+                )
+            )
+    return actions
+
+
 async def _cleanup_tags_plan(
     ns: Namespace, db: AsyncSession,
 ) -> list[PlannedAction]:
@@ -283,14 +388,26 @@ async def _cleanup_tags_plan(
 
 async def build_plan(
     ns: Namespace,
-    mode: Literal["dedup-exact", "cleanup-tags", "all"],
+    mode: Literal["dedup-exact", "dedup-semantic", "cleanup-tags", "all"],
     db: AsyncSession,
 ) -> ConsolidationPlan:
-    """Pure read; safe to call without the namespace lock."""
+    """Pure read; safe to call without the namespace lock.
+
+    Mode `all` runs dedup-exact (cheap) AND cleanup-tags but NOT
+    semantic (expensive — opt-in only). To run everything, call twice:
+    first mode='all', apply, then mode='dedup-semantic' to catch the
+    semantic dupes the exact pass missed.
+    """
     actions: list[PlannedAction] = []
+    facts: list[dict[str, Any]] | None = None
     if mode in ("dedup-exact", "all"):
         facts = await _all_facts_in_namespace(ns, db)
         actions.extend(_dedup_exact_plan(facts))
+    if mode == "dedup-semantic":
+        # Don't re-fetch if dedup-exact already pulled the facts.
+        if facts is None:
+            facts = await _all_facts_in_namespace(ns, db)
+        actions.extend(await _dedup_semantic_plan(facts))
     if mode in ("cleanup-tags", "all"):
         actions.extend(await _cleanup_tags_plan(ns, db))
 

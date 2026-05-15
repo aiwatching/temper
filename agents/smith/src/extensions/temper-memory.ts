@@ -179,14 +179,16 @@ export function temperMemoryExtension(pi: PiExtensionAPI): void {
       "the plan's action list to the user verbatim and get explicit " +
       "go-ahead before applying. Modes: " +
       "'all' (dedup-exact + cleanup-tags), 'dedup-exact' (merge facts " +
-      "with identical text), 'cleanup-tags' (delete episodes tagged " +
-      "forget / deprecated / forget-me).",
+      "with identical text), 'dedup-semantic' (one LLM call to cluster " +
+      "facts that say the same thing in different words; cap 200), " +
+      "'cleanup-tags' (delete episodes tagged forget / deprecated / forget-me).",
     parameters: Type.Object({
       mode: Type.Optional(
         Type.Union(
           [
             Type.Literal("all"),
             Type.Literal("dedup-exact"),
+            Type.Literal("dedup-semantic"),
             Type.Literal("cleanup-tags"),
           ],
           { default: "all" },

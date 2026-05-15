@@ -41,8 +41,9 @@
     </label>
     <label>Mode
       <select x-model="mode">
-        <option value="all">all (dedup + cleanup)</option>
-        <option value="dedup-exact">dedup-exact only</option>
+        <option value="all">all (dedup-exact + cleanup-tags)</option>
+        <option value="dedup-exact">dedup-exact (no LLM)</option>
+        <option value="dedup-semantic">dedup-semantic (1 LLM call, ≤200 facts)</option>
         <option value="cleanup-tags">cleanup-tags only</option>
       </select>
     </label>

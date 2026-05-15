@@ -208,7 +208,7 @@ export class Temper {
 
   async consolidatePlan(args: {
     namespace: string;
-    mode?: "dedup-exact" | "cleanup-tags" | "all";
+    mode?: "dedup-exact" | "dedup-semantic" | "cleanup-tags" | "all";
   }): Promise<ConsolidatePlan> {
     return this.req("POST", "/v1/consolidate/plan", {
       body: { namespace: args.namespace, mode: args.mode ?? "all" },

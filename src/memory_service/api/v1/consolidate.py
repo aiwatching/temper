@@ -31,7 +31,7 @@ from memory_service.core.namespaces import NamespaceError, can_write, resolve
 
 router = APIRouter(prefix="/consolidate", tags=["consolidate"])
 
-ConsolidateMode = Literal["dedup-exact", "cleanup-tags", "all"]
+ConsolidateMode = Literal["dedup-exact", "dedup-semantic", "cleanup-tags", "all"]
 
 
 # ---------- request / response shapes ----------
@@ -48,9 +48,12 @@ class PlanRequest(BaseModel):
     mode: ConsolidateMode = Field(
         default="all",
         description=(
-            "dedup-exact: merge facts with identical text (cheap). "
+            "dedup-exact: merge facts with identical text (cheap, no LLM). "
+            "dedup-semantic: LLM-clusters facts that mean the same thing "
+            "even with different wording (one LLM call per plan; capped "
+            "at 200 facts per call). "
             "cleanup-tags: delete episodes tagged 'forget' / 'deprecated'. "
-            "all: both."
+            "all: dedup-exact + cleanup-tags (NOT semantic — opt in explicitly)."
         ),
     )
 
