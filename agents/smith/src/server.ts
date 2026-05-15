@@ -14,9 +14,18 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+
 import { getConfig } from "./config.js";
 import { Temper, TemperError } from "./temper.js";
 import { getSessionPool } from "./session-manager.js";
+
+// Inline marked (≈40KB) into the chat HTML so the UI works offline /
+// in air-gapped corp networks without a CDN. Read once at module load;
+// require.resolve handles pnpm's flat layout cleanly.
+const _req = createRequire(import.meta.url);
+const MARKED_JS = readFileSync(_req.resolve("marked/marked.min.js"), "utf8");
 
 /**
  * Minimal vanilla-JS chat UI. Inline HTML keeps the agent self-contained
@@ -47,10 +56,33 @@ const CHAT_HTML = `<!doctype html>
     .role { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
             color: #57606a; margin-bottom: 3px; }
     .bubble { padding: 10px 12px; border-radius: 6px; border: 1px solid #d0d7de;
-              white-space: pre-wrap; word-break: break-word; }
-    .user .bubble { background: #ddf4ff; border-color: #b6e3ff; }
+              word-break: break-word; }
+    /* User bubble stays plaintext-friendly */
+    .user .bubble { background: #ddf4ff; border-color: #b6e3ff; white-space: pre-wrap; }
+    /* Smith bubble renders Markdown — block elements need normal margins */
     .smith .bubble { background: #f6f8fa; }
-    .err .bubble { background: #ffebe9; border-color: #ff8182; }
+    .smith .bubble > *:first-child { margin-top: 0; }
+    .smith .bubble > *:last-child  { margin-bottom: 0; }
+    .smith .bubble p, .smith .bubble ul, .smith .bubble ol, .smith .bubble blockquote
+      { margin: 0.4em 0; }
+    .smith .bubble h1, .smith .bubble h2, .smith .bubble h3
+      { margin: 0.6em 0 0.3em; line-height: 1.25; }
+    .smith .bubble pre { background: #1f2328; color: #f6f8fa; padding: 10px 12px;
+                         border-radius: 4px; overflow-x: auto; font-size: 12px;
+                         line-height: 1.45; }
+    .smith .bubble pre code { background: transparent; padding: 0; color: inherit; }
+    .smith .bubble blockquote { padding-left: 10px; border-left: 3px solid #d0d7de;
+                                color: #57606a; }
+    .smith .bubble table { border-collapse: collapse; margin: 0.5em 0; }
+    .smith .bubble th, .smith .bubble td { border: 1px solid #d0d7de; padding: 4px 8px; }
+    .err .bubble { background: #ffebe9; border-color: #ff8182; white-space: pre-wrap; }
+    /* Thinking block — collapsed by default, native <details> */
+    .thinking { margin-bottom: 6px; padding: 4px 8px; background: #fffbea;
+                border: 1px solid #f0c674; border-radius: 4px; font-size: 12px; }
+    .thinking summary { cursor: pointer; color: #7a5a00; user-select: none; }
+    .thinking[open] summary { margin-bottom: 4px; }
+    .thinking .body { white-space: pre-wrap; color: #5d4400; font-family: ui-monospace,
+                      Menlo, Consolas, monospace; font-size: 11px; line-height: 1.4; }
     footer { border-top: 1px solid #d0d7de; padding: 10px 16px; display: flex; gap: 8px;
              max-width: 760px; margin: 0 auto; width: 100%; }
     textarea { flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 4px;
@@ -72,7 +104,12 @@ const CHAT_HTML = `<!doctype html>
     <textarea id="msg" rows="1" placeholder="Message Smith — Cmd/Ctrl+Enter to send"></textarea>
     <button class="send" id="send">Send</button>
   </footer>
+<script>${MARKED_JS}</script>
 <script>
+// Configure marked: GitHub-flavored, break-on-newline, no raw HTML
+// passthrough (the model output is untrusted enough that we'd rather
+// lose an occasional <em> than ship an XSS surface).
+marked.use({ gfm: true, breaks: true });
 const log = document.getElementById("log");
 const msg = document.getElementById("msg");
 const send = document.getElementById("send");
@@ -125,6 +162,19 @@ function addStreamingBubble() {
   return { row, bubble };
 }
 
+/* Render markdown safely. marked v15 returns HTML; raw HTML from the
+ * model is left as text by marked's defaults. Good enough for trusted
+ * internal LLM output; upgrade to DOMPurify if smith ever talks to
+ * untrusted prompts. */
+function renderMarkdownInto(el, source) {
+  try {
+    el.innerHTML = marked.parse(source || "");
+  } catch (e) {
+    el.textContent = source;
+  }
+  log.scrollTop = log.scrollHeight;
+}
+
 async function sendMessage() {
   const text = msg.value.trim();
   if (!text) return;
@@ -133,7 +183,29 @@ async function sendMessage() {
   send.disabled = true;
 
   const { row, bubble } = addStreamingBubble();
-  const toolHints = new Map();   // toolCallId → DOM node we can swap on tool_end
+  // Two scratch buffers — thinking text and main text are interleaved
+  // in the SSE stream but render to different DOM nodes.
+  let mainBuf = "";
+  let thinkBuf = "";
+  let thinkEl = null;   // <details class="thinking"> when needed
+  let thinkBody = null; // .body div inside <details>
+  const toolHints = new Map();
+
+  function ensureThinkBlock() {
+    if (thinkEl) return;
+    thinkEl = document.createElement("details");
+    thinkEl.className = "thinking";
+    thinkEl.open = false;
+    const sum = document.createElement("summary");
+    sum.textContent = "💭 thinking…";
+    thinkEl.appendChild(sum);
+    thinkBody = document.createElement("div");
+    thinkBody.className = "body";
+    thinkEl.appendChild(thinkBody);
+    // Insert ABOVE the bubble so the reasoning sits where you'd
+    // glance first if curious, and the final answer is below it.
+    row.insertBefore(thinkEl, bubble);
+  }
 
   try {
     const r = await fetch("/chat", {
@@ -148,7 +220,7 @@ async function sendMessage() {
       return;
     }
 
-    // Parse SSE: events are "event: name\\ndata: payload\\n\\n".
+    // Parse SSE: events separated by blank lines.
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -156,7 +228,6 @@ async function sendMessage() {
       const { done, value } = await reader.read();
       if (done) break;
       buf += decoder.decode(value, { stream: true });
-      // Split into completed events (separated by blank line)
       let idx;
       while ((idx = buf.indexOf("\\n\\n")) >= 0) {
         const raw = buf.slice(0, idx);
@@ -167,7 +238,12 @@ async function sendMessage() {
           else if (line.startsWith("data:")) data += line.slice(5).trim();
         }
         if (evt === "delta") {
-          bubble.textContent += data;
+          mainBuf += data;
+          renderMarkdownInto(bubble, mainBuf);
+        } else if (evt === "thinking") {
+          ensureThinkBlock();
+          thinkBuf += data;
+          thinkBody.textContent = thinkBuf;
           log.scrollTop = log.scrollHeight;
         } else if (evt === "tool_start") {
           try {
@@ -197,11 +273,16 @@ async function sendMessage() {
             errMsg.textContent = "LLM error: " + e.error;
             bubble.appendChild(errMsg);
           } catch (_) {}
+        } else if (evt === "done") {
+          // Finalise summary text on the think block
+          if (thinkEl) {
+            const sum = thinkEl.querySelector("summary");
+            if (sum) sum.textContent = "💭 reasoning (click to expand)";
+          }
         }
-        // "done" event closes — no UI action needed; loop exits via reader done.
       }
     }
-    if (!bubble.textContent && !row.classList.contains("err")) {
+    if (!mainBuf && !row.classList.contains("err")) {
       bubble.textContent = "(empty reply)";
     }
   } catch (e) {
@@ -295,6 +376,17 @@ export function buildApp(): Hono {
           ) {
             const delta = String(e.assistantMessageEvent.delta ?? "");
             if (delta) stream.writeSSE({ event: "delta", data: delta }).catch(() => {});
+            return;
+          }
+          // Reasoning models emit thinking_delta during their thought
+          // pass before producing visible text. Smith forwards as a
+          // separate event so the UI can show it in a collapsed block.
+          if (
+            e?.type === "message_update" &&
+            e.assistantMessageEvent?.type === "thinking_delta"
+          ) {
+            const delta = String(e.assistantMessageEvent.delta ?? "");
+            if (delta) stream.writeSSE({ event: "thinking", data: delta }).catch(() => {});
             return;
           }
           // Surface tool calls so the UI can show a "calling memory_search…" hint
