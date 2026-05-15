@@ -28,8 +28,15 @@ import { fileURLToPath } from "node:url";
 import { existsSync, unlinkSync } from "node:fs";
 
 import { approvalStore, type PendingApproval } from "./approval-store.js";
-import { getConfig } from "./config.js";
+import { getConfig, SETTING_KEYS } from "./config.js";
 import { conversationIndex } from "./conversation-index.js";
+import {
+  isInstalled,
+  listSettings,
+  markInstalled,
+  setSecretSetting,
+  setSetting,
+} from "./db/settings.js";
 import { Temper, TemperError } from "./temper.js";
 import { getSessionPool } from "./session-manager.js";
 import type { MCPConfig, PluginKind, PluginRow } from "./plugins/types.js";
@@ -90,6 +97,8 @@ const SHARED_JSX = readWeb("shared.jsx");
 const CHAT_JSX = readWeb("chat.jsx");
 const BRIEFS_JSX = readWeb("briefs.jsx");
 const PLUGINS_JSX = readWeb("plugins.jsx");
+const SETUP_JSX = readWeb("setup.jsx");
+const SETTINGS_JSX = readWeb("settings.jsx");
 const REACT_JS = readWeb("vendor/react.production.min.js");
 const REACT_DOM_JS = readWeb("vendor/react-dom.production.min.js");
 const BABEL_JS = readWeb("vendor/babel.min.js");
@@ -130,10 +139,39 @@ function renderPage(title: string, bodyApp: string, appJsx: string): string {
 const CHAT_PAGE = renderPage("Smith · Chat", "ChatApp", CHAT_JSX);
 const BRIEFS_PAGE = renderPage("Smith · Briefs", "BriefApp", BRIEFS_JSX);
 const PLUGINS_PAGE = renderPage("Smith · Plugins", "PluginsApp", PLUGINS_JSX);
+const SETUP_PAGE = renderPage("Smith · Setup", "SetupApp", SETUP_JSX);
+const SETTINGS_PAGE = renderPage("Smith · Settings", "SettingsApp", SETTINGS_JSX);
 
 export function buildApp(): Hono {
   const app = new Hono();
   const cfg = getConfig();
+
+  // ---- first-run gate ----
+  //
+  // Until the wizard marks settings.installed = true, we redirect
+  // every HTML navigation to /setup. JSON callers (curl, memctl) get
+  // 503 with a descriptive body. /setup itself + its API endpoints
+  // + /healthz stay open so the wizard works.
+  //
+  // This runs BEFORE the bearer-secret gate — otherwise a fresh
+  // install with no bearer set would also be blocked from /setup.
+  app.use(async (c, next) => {
+    if (isInstalled()) return next();
+    const path = c.req.path;
+    if (
+      path === "/setup" ||
+      path.startsWith("/setup/") ||
+      path === "/healthz" ||
+      path === "/favicon.ico"
+    ) {
+      return next();
+    }
+    const accept = c.req.header("accept") ?? "";
+    if (accept.includes("text/html")) {
+      return c.redirect("/setup");
+    }
+    return c.json({ error: "smith is not yet configured — open /setup in a browser" }, 503);
+  });
 
   // ---- bearer auth (A7) ----
   // SMITH_SECRET in .env enables. Empty/unset = open (dev mode, but
@@ -147,10 +185,12 @@ export function buildApp(): Hono {
     // Gate the JSON / SSE API surface. POST /chat is gated; GET /chat
     // (the HTML page) is NOT — it's the bootstrap that picks up the
     // secret from the URL hash before any /approve, /deny, etc. fires.
-    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?|plugins(?:\/.*)?)$/;
+    // /setup is NEVER bearer-gated (the wizard happens before any
+    // bearer exists). /settings IS gated (post-install editor).
+    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?|plugins(?:\/.*)?|settings(?:\/.*)?)$/;
     app.use(async (c, next) => {
       if (!GATED_PATH.test(c.req.path)) return next();
-      if (c.req.method === "GET" && (c.req.path === "/chat" || c.req.path === "/plugins")) {
+      if (c.req.method === "GET" && (c.req.path === "/chat" || c.req.path === "/plugins" || c.req.path === "/settings")) {
         return next();  // GET HTML pages = bootstrap, not API
       }
       const got = c.req.header("authorization") ?? "";
@@ -175,6 +215,16 @@ export function buildApp(): Hono {
   // registerPluginRoutes() does the Accept-header check (browser
   // navigates with text/html → page; fetch() defaults / explicit
   // application/json → list).
+  app.get("/setup", (c) => c.html(SETUP_PAGE));
+  app.get("/setup/status", (c) => c.json({ installed: isInstalled() }));
+  // /settings dual-routes like /plugins — Accept-negotiated. Browser
+  // hits HTML; fetch from the page hits JSON list (the GET /settings
+  // JSON handler is in registerSetupRoutes()).
+  app.get("/settings", (c) => {
+    const accept = c.req.header("accept") ?? "";
+    if (accept.includes("text/html")) return c.html(SETTINGS_PAGE);
+    return c.json({ settings: listSettings() });
+  });
 
   // ---- approval gate ----
   //
@@ -539,8 +589,235 @@ export function buildApp(): Hono {
   // P4 — for now those changes also need a restart to fully take
   // effect (the existing in-memory MCP client keeps the old config).
   registerPluginRoutes(app);
+  registerSetupRoutes(app);
 
   return app;
+}
+
+// --- setup / settings routes ---
+//
+// /setup/test/temper — probe TEMPER URL+key. Does not persist.
+// /setup/test/llm    — probe LLM provider+key with one minimal chat
+//                       completion (OpenAI-compat shape). Real call,
+//                       costs ~1 token.
+// /setup/save        — write all settings + secrets, mark installed,
+//                       return the bearer (if auto-generated).
+// /settings          — JSON list of all current settings (gated by
+//                       bearer once installed). Edit endpoints are
+//                       part of P5d.
+
+import { randomBytes } from "node:crypto";
+
+interface SetupPayload {
+  agent_slug?: string;
+  temper_base_url?: string;
+  temper_api_key?: string;
+  llm_provider?: string;
+  llm_model?: string;
+  llm_base_url?: string;
+  llm_api_key?: string;
+  bearer_secret?: string;
+  consolidate_schedule_hours?: number;
+  recall_log_level?: string;
+}
+
+function registerSetupRoutes(app: Hono): void {
+
+  // Probe TEMPER /v1/auth/me with the user-provided URL + key.
+  app.post("/setup/test/temper", async (c) => {
+    let b: { base_url?: string; api_key?: string };
+    try { b = await c.req.json(); }
+    catch { return c.json({ ok: false, error: "body must be JSON" }, 400); }
+    const baseUrl = (b.base_url ?? "").trim().replace(/\/+$/, "");
+    const apiKey = (b.api_key ?? "").trim();
+    if (!baseUrl || !apiKey) {
+      return c.json({ ok: false, error: "base_url + api_key required" });
+    }
+    const start = Date.now();
+    try {
+      const r = await fetch(`${baseUrl}/v1/auth/me`, {
+        headers: { "X-API-Key": apiKey },
+      });
+      if (!r.ok) {
+        const detail = await r.text().catch(() => "");
+        return c.json({ ok: false, error: `HTTP ${r.status}: ${detail.slice(0, 200)}` });
+      }
+      const me = (await r.json()) as { id?: string; email?: string };
+      return c.json({
+        ok: true, ms: Date.now() - start,
+        email: me.email, user_id: me.id,
+      });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message });
+    }
+  });
+
+  // Probe LLM with a 1-token chat completion. OpenAI-compatible only
+  // for now (covers openai, deepseek, most internal gateways). For
+  // Anthropic native API we'd need to detect + call /v1/messages —
+  // future improvement; users can always skip the test.
+  app.post("/setup/test/llm", async (c) => {
+    let b: {
+      provider?: string; model?: string;
+      base_url?: string | null; api_key?: string;
+    };
+    try { b = await c.req.json(); }
+    catch { return c.json({ ok: false, error: "body must be JSON" }, 400); }
+    const provider = (b.provider ?? "").trim();
+    const model = (b.model ?? "").trim();
+    const apiKey = (b.api_key ?? "").trim();
+    if (!model || !apiKey) {
+      return c.json({ ok: false, error: "model + api_key required" });
+    }
+
+    const baseUrl = (b.base_url || providerDefaultBaseUrl(provider))?.replace(/\/+$/, "");
+    if (!baseUrl) {
+      return c.json({ ok: false, error: `no base_url and no default for provider '${provider}'` });
+    }
+
+    const start = Date.now();
+    try {
+      const r = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 5,
+          temperature: 0,
+        }),
+      });
+      if (!r.ok) {
+        const detail = await r.text().catch(() => "");
+        return c.json({
+          ok: false, ms: Date.now() - start,
+          error: `HTTP ${r.status}: ${detail.slice(0, 300)}`,
+        });
+      }
+      const j = await r.json() as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: { total_tokens?: number };
+      };
+      const reply = j.choices?.[0]?.message?.content ?? "";
+      return c.json({
+        ok: true, ms: Date.now() - start,
+        reply, tokens_used: j.usage?.total_tokens,
+      });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message });
+    }
+  });
+
+  // Persist wizard payload. Generates a bearer if the user left it
+  // blank. Marks installed=true; returns the bearer so the wizard
+  // can hash-fragment-redirect into the chat UI with auth already.
+  app.post("/setup/save", async (c) => {
+    if (isInstalled()) {
+      return c.json({ error: "already installed; edit via /settings instead" }, 409);
+    }
+    let p: SetupPayload;
+    try { p = await c.req.json(); }
+    catch { return c.json({ error: "body must be JSON" }, 400); }
+
+    // Auto-generate bearer when empty (24 url-safe chars).
+    let bearer = (p.bearer_secret ?? "").trim();
+    if (!bearer) {
+      bearer = randomBytes(18).toString("base64url");
+    }
+
+    let n = 0;
+    function writeStr(key: string, value: string | undefined, desc?: string) {
+      if (value !== undefined) {
+        setSetting(key, value, { description: desc, updatedBy: "setup-wizard" });
+        n++;
+      }
+    }
+    function writeNum(key: string, value: number | undefined, desc?: string) {
+      if (value !== undefined) {
+        setSetting(key, value, { description: desc, updatedBy: "setup-wizard" });
+        n++;
+      }
+    }
+    function writeSecret(key: string, value: string | undefined, desc?: string) {
+      if (value !== undefined && value.length > 0) {
+        setSecretSetting(key, value, { description: desc, updatedBy: "setup-wizard" });
+        n++;
+      }
+    }
+
+    writeStr(SETTING_KEYS.smithAgentSlug, p.agent_slug, "Namespace suffix in TEMPER (agent:me/<slug>)");
+    writeStr(SETTING_KEYS.temperBaseUrl, p.temper_base_url, "TEMPER instance base URL");
+    writeSecret(SETTING_KEYS.temperApiKey, p.temper_api_key, "TEMPER API key");
+    writeStr(SETTING_KEYS.llmProvider, p.llm_provider, "pi-ai provider id");
+    writeStr(SETTING_KEYS.llmModel, p.llm_model, "LLM model id");
+    writeStr(SETTING_KEYS.llmBaseUrl, p.llm_base_url ?? "", "Custom LLM base URL (empty = use provider default)");
+    writeSecret(SETTING_KEYS.llmApiKey, p.llm_api_key, "LLM API key");
+    writeSecret(SETTING_KEYS.smithSecret, bearer, "Bearer secret gating /chat /plugins etc.");
+    writeNum(SETTING_KEYS.consolidateScheduleHours, p.consolidate_schedule_hours, "Hours between auto-consolidate runs (0 = off)");
+    writeStr("recall.log_level", p.recall_log_level, "SMITH_RECALL_LOG verbosity");
+
+    markInstalled("setup-wizard");
+    // also set the env var so the rest of THIS process sees the
+    // new recall log level without restart (it's read via process.env)
+    if (p.recall_log_level) process.env.SMITH_RECALL_LOG = p.recall_log_level;
+
+    return c.json({
+      ok: true,
+      settings_written: n,
+      // Return the bearer ONCE — the wizard hashes it into /chat URL,
+      // and we never expose it via GET /settings.
+      bearer_secret: bearer,
+    });
+  });
+
+  // /settings JSON list is on the dual-route GET /settings above
+  // (Accept-negotiated against the HTML page). Edit endpoints below.
+
+  // PUT /settings/:key — set a non-secret value. Accepts any JSON
+  // value in the body's `value` field.
+  app.put("/settings/:key", async (c) => {
+    const key = c.req.param("key");
+    if (!key || key === "installed") {
+      return c.json({ error: `cannot edit '${key}' via this endpoint` }, 400);
+    }
+    let body: { value?: unknown };
+    try { body = await c.req.json(); }
+    catch { return c.json({ error: "body must be JSON" }, 400); }
+    if (!Object.hasOwn(body, "value")) {
+      return c.json({ error: "body.value is required" }, 400);
+    }
+    setSetting(key, body.value, { updatedBy: "settings-ui" });
+    return c.json({ ok: true, key });
+  });
+
+  // PUT /settings/:key/secret — rotate / clear a sensitive value.
+  // body.secret can be string (set) or null (clear).
+  app.put("/settings/:key/secret", async (c) => {
+    const key = c.req.param("key");
+    let body: { secret?: string | null };
+    try { body = await c.req.json(); }
+    catch { return c.json({ error: "body must be JSON" }, 400); }
+    if (body.secret !== null && typeof body.secret !== "string") {
+      return c.json({ error: "secret must be a string or null" }, 400);
+    }
+    setSecretSetting(key, body.secret, { updatedBy: "settings-ui" });
+    return c.json({ ok: true, key, has_secret: body.secret !== null });
+  });
+}
+
+/** Built-in provider defaults — same set pi-ai handles natively. For
+ *  any other `provider` value, the user MUST supply base_url. */
+function providerDefaultBaseUrl(provider: string): string | null {
+  switch (provider) {
+    case "openai": return "https://api.openai.com/v1";
+    case "deepseek": return "https://api.deepseek.com/v1";
+    case "google": return "https://generativelanguage.googleapis.com/v1beta/openai";
+    case "anthropic": return null; // not openai-compat; skip test
+    default: return null;
+  }
 }
 
 // --- plugin routes (extracted to keep buildApp readable) ---

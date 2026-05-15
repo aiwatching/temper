@@ -38,6 +38,7 @@ const ChatApp = () => {
         <span style={{ flex: 1 }} />
         <a href="/briefs" className="btn sm subtle" title="Open the dashboard view"><Icon name="side" size={12} /> Briefs</a>
         <a href="/plugins" className="btn sm subtle" title="Manage MCP plugins"><Icon name="cog" size={12} /> Plugins</a>
+        <a href="/settings" className="btn sm subtle" title="Smith settings"><Icon name="cog" size={12} /> Settings</a>
         <ConvPicker
           activeId={chat.convId}
           conversations={list}

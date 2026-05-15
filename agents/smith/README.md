@@ -15,10 +15,24 @@ the same harness powering openclaw / harness. Smith is a TEMPER
 > **For depth**, see:
 > - `docs/smith-architecture.md` — current 3-layer architecture (Plugin / Resource / Task) on top of pi
 > - `docs/pi-architecture.md` — pi-coding-agent's ExtensionAPI surface, what it gives us, what it doesn't
+> - `docs/security.md` — trust model + hardening for non-localhost deployment
 > - `docs/design.md` — earlier design notes / contracts / glossary
-> - `docs/roadmap.md` — TODO + cross-cutting concerns (security, etc.)
+> - `docs/roadmap.md` — TODO + cross-cutting concerns
 > - `docs/fortinet-mcp-servers.md` — internal MCP servers Smith targets
 > - `docs/framework-comparison.md` — how we picked pi-coding-agent
+
+## First-run
+
+After `pnpm install && pnpm run dev`, open `http://127.0.0.1:18099/setup`
+in a browser. The wizard collects TEMPER + LLM config and writes it
+to `.data/smith.db` (encrypted secrets). No `.env` editing required
+— the master key (`SMITH_SECRET_KEY`) auto-generates on first boot.
+
+If you have a legacy `.env` from earlier versions of Smith, it gets
+imported automatically on first boot; the wizard either pre-fills
+or skips itself if all critical values are present.
+
+Edit any time at `/settings`.
 
 ## Stack
 

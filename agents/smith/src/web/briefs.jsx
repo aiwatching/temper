@@ -100,6 +100,7 @@ const BriefApp = () => {
         <span style={{ flex: 1 }} />
         <a href="/chat" className="btn sm subtle" title="Switch to focused chat"><Icon name="chat" size={12} /> Chat</a>
         <a href="/plugins" className="btn sm subtle" title="Manage MCP plugins"><Icon name="cog" size={12} /> Plugins</a>
+        <a href="/settings" className="btn sm subtle" title="Smith settings"><Icon name="cog" size={12} /> Settings</a>
         <ConvPicker
           activeId={chat.convId}
           conversations={conversations}
