@@ -8,6 +8,7 @@
  */
 import { Type } from "typebox";
 
+import { getConfig } from "../config.js";
 import { Temper } from "../temper.js";
 
 /**
@@ -163,6 +164,107 @@ export function temperMemoryExtension(pi: PiExtensionAPI): void {
           },
         ],
         details: {},
+      };
+    },
+  });
+
+  // ---- memory_consolidate (plan only — safe, read-only) ----
+  pi.registerTool({
+    name: "memory_consolidate",
+    label: "Plan a memory consolidation",
+    description:
+      "Produce a dry-run plan of dedup + cleanup actions on the user's " +
+      "memory. Read-only; nothing changes until you call " +
+      "memory_consolidate_apply with the returned plan_id. ALWAYS show " +
+      "the plan's action list to the user verbatim and get explicit " +
+      "go-ahead before applying. Modes: " +
+      "'all' (dedup-exact + cleanup-tags), 'dedup-exact' (merge facts " +
+      "with identical text), 'cleanup-tags' (delete episodes tagged " +
+      "forget / deprecated / forget-me).",
+    parameters: Type.Object({
+      mode: Type.Optional(
+        Type.Union(
+          [
+            Type.Literal("all"),
+            Type.Literal("dedup-exact"),
+            Type.Literal("cleanup-tags"),
+          ],
+          { default: "all" },
+        ),
+      ),
+      namespace: Type.Optional(
+        Type.String({
+          description:
+            "Override scope. Default: this agent's own namespace " +
+            "(agent:me/<slug>). Use 'user:me' to consolidate the user's " +
+            "flat namespace (shared across agents).",
+        }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { mode?: "all" | "dedup-exact" | "cleanup-tags"; namespace?: string },
+    ) {
+      const cfg = getConfig();
+      const ns = (params.namespace ?? `agent:me/${cfg.smithAgentSlug}`).trim();
+      const plan = await temper.consolidatePlan({ namespace: ns, mode: params.mode ?? "all" });
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Plan ${plan.plan_id} for ${plan.namespace} (mode=${plan.mode}):\n` +
+              `  ${plan.counts.invalidate_fact} invalidate · ${plan.counts.delete_fact} delete-fact · ${plan.counts.delete_episode} delete-episode (${plan.counts.total} total)\n\n` +
+              (plan.counts.total === 0
+                ? "Nothing to do."
+                : "ACTIONS:\n" +
+                  JSON.stringify(plan.actions, null, 2) +
+                  `\n\nWhen the user approves, call memory_consolidate_apply with plan_id="${plan.plan_id}". Plan expires at ${plan.expires_at}.`),
+          },
+        ],
+        details: { plan_id: plan.plan_id, total: plan.counts.total, expires_at: plan.expires_at },
+      };
+    },
+  });
+
+  // ---- memory_consolidate_apply (dangerous — gated by A5) ----
+  //
+  // The "apply" suffix matches isDangerous()'s mutation-verb regex in
+  // approval-store.ts, so a first call blocks → UI Approve button →
+  // user clicks → next turn this runs through.
+  pi.registerTool({
+    name: "memory_consolidate_apply",
+    label: "Apply a memory consolidation plan",
+    description:
+      "Execute a previously-generated consolidation plan. This is " +
+      "DESTRUCTIVE: invalidates / deletes facts and episodes per the " +
+      "plan. The namespace is locked (sleeping, all reads + writes " +
+      "return 423) during execution. The approval gate blocks the " +
+      "first call; tell the user what's about to happen and wait for " +
+      "their Approve click.",
+    parameters: Type.Object({
+      plan_id: Type.String({
+        description: "Returned by memory_consolidate. Plans expire after 5 minutes.",
+      }),
+    }),
+    async execute(_toolCallId: string, params: { plan_id: string }) {
+      const result = await temper.consolidateApply(params.plan_id);
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Applied: ${result.applied} action(s), ${result.failed} failed.\n` +
+              (result.errors.length > 0
+                ? `Errors: ${JSON.stringify(result.errors, null, 2)}`
+                : ""),
+          },
+        ],
+        details: {
+          applied: result.applied,
+          failed: result.failed,
+          plan_id: result.plan_id,
+        },
       };
     },
   });

@@ -67,6 +67,49 @@ export interface EpisodeDetail extends EpisodeSummary {
   facts?: Array<{ uuid: string; fact: string }>;
 }
 
+export interface PlannedAction {
+  type: "invalidate_fact" | "delete_fact" | "delete_episode";
+  target_id: string;
+  reason: string;
+  kept_id: string | null;
+  label: string;
+}
+
+export interface ConsolidatePlan {
+  plan_id: string;
+  namespace: string;
+  mode: string;
+  created_at: string;
+  expires_at: string;
+  counts: {
+    invalidate_fact: number;
+    delete_fact: number;
+    delete_episode: number;
+    total: number;
+  };
+  actions: PlannedAction[];
+}
+
+export interface ConsolidateApplyResult {
+  plan_id: string;
+  namespace: string;
+  applied: number;
+  failed: number;
+  errors: Array<{ action_type: string; target_id: string; error: string }>;
+  started_at: string;
+  completed_at: string;
+}
+
+export interface ConsolidateStatus {
+  namespace: string;
+  state: {
+    status: "sleeping";
+    mode: string;
+    started_at: string;
+    ttl_seconds_remaining: number;
+  } | null;
+}
+
 export class Temper {
   private baseUrl: string;
   private apiKey: string;
@@ -161,6 +204,25 @@ export class Temper {
 
   async getEpisode(episodeId: string): Promise<EpisodeDetail> {
     return this.req<EpisodeDetail>("GET", `/v1/episodes/${episodeId}`);
+  }
+
+  async consolidatePlan(args: {
+    namespace: string;
+    mode?: "dedup-exact" | "cleanup-tags" | "all";
+  }): Promise<ConsolidatePlan> {
+    return this.req("POST", "/v1/consolidate/plan", {
+      body: { namespace: args.namespace, mode: args.mode ?? "all" },
+    });
+  }
+
+  async consolidateApply(planId: string): Promise<ConsolidateApplyResult> {
+    return this.req("POST", "/v1/consolidate/apply", {
+      body: { plan_id: planId },
+    });
+  }
+
+  async consolidateStatus(namespace: string): Promise<ConsolidateStatus> {
+    return this.req("GET", "/v1/consolidate/status", { params: { namespace } });
   }
 
   async health(): Promise<unknown> {

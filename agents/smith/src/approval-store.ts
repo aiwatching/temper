@@ -114,15 +114,24 @@ const SAFE_RE =
   /(?:^|_)(?:get|list|search|read|show|view|find|describe|fetch|status|count|info|history)(?:$|_)/i;
 
 const DANGEROUS_RE =
-  /(?:^|_)(?:close|merge|delete|send|update|create|remove|assign|approve|push|deploy|run|exec|execute|start|stop|restart|publish|archive|edit|patch|put|post|set|reset)(?:$|_)/i;
+  /(?:^|_)(?:close|merge|delete|send|update|create|remove|assign|approve|push|deploy|run|exec|execute|start|stop|restart|publish|archive|edit|patch|put|post|set|reset|apply)(?:$|_)/i;
 
-const forceSafe = new Set<string>(["memory_search", "memory_write"]);
-const forceDangerous = new Set<string>();
+// Explicit safe list for Smith's own scratch-space tools. We used to
+// blanket-allow anything starting with `memory_`, but adding
+// memory_consolidate_apply (which IS destructive) exposed the gap.
+// Whitelist by name instead.
+const forceSafe = new Set<string>([
+  "memory_search",
+  "memory_write",
+  "memory_consolidate",        // plan only — read-only
+]);
+const forceDangerous = new Set<string>([
+  "memory_consolidate_apply",  // belt + suspenders alongside the *_apply regex
+]);
 
 export function isDangerous(toolName: string): boolean {
   if (forceSafe.has(toolName)) return false;
   if (forceDangerous.has(toolName)) return true;
-  if (toolName.startsWith("memory_")) return false;
   if (SAFE_RE.test(toolName)) return false;
   return DANGEROUS_RE.test(toolName);
 }
