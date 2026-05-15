@@ -9,7 +9,7 @@
 import { Type } from "typebox";
 
 import { getConfig } from "../config.js";
-import { Temper } from "../temper.js";
+import { Temper, TemperError } from "../temper.js";
 
 /**
  * `pi` here is the ExtensionAPI handle pi-coding-agent passes to factories.
@@ -267,6 +267,183 @@ export function temperMemoryExtension(pi: PiExtensionAPI): void {
           failed: result.failed,
           plan_id: result.plan_id,
         },
+      };
+    },
+  });
+
+  // ---- memory_correct_apply (destructive — gated by A5) ----
+  //
+  // The end-to-end "this memory is wrong, fix it" path. Workflow the
+  // model should run:
+  //
+  //   1. Call memory_search to find the wrong fact. Hits now carry
+  //      `id` (fact UUID) + `source_node_uuid` (entity UUID for the
+  //      "User" entity whose summary needs refreshing).
+  //   2. Show the candidate fact text + UUIDs to the user. Get explicit
+  //      confirmation that this is the fact to retire.
+  //   3. Call memory_correct_apply with the UUIDs + the corrected
+  //      content. The approval gate blocks the first attempt; user
+  //      clicks Approve in the UI, the LLM retries.
+  //
+  // What this tool does in one shot:
+  //   a. PATCH /v1/facts/<wrong_fact_uuid> with invalid_at=now
+  //      → retires the wrong edge without nuking the source episode.
+  //   b. POST /v1/episodes with the corrected content → new episode
+  //      goes through Graphiti extraction the usual way.
+  //   c. (optional but default) POST /v1/admin/entities/<uuid>/resummarize
+  //      → re-runs the LLM summary so the stale text disappears from
+  //      node.summary (the path that Graphiti's append-only update
+  //      flow would otherwise never rewrite).
+  //
+  // We don't try to be clever: if (a) succeeds but (b) or (c) fails we
+  // surface the partial outcome. The user can re-run safely — (a) is
+  // idempotent (PATCHing invalid_at again with the same timestamp is a
+  // no-op), (b) creates a new episode either way, (c) is just an LLM
+  // summary rewrite.
+  pi.registerTool({
+    name: "memory_correct_apply",
+    label: "Correct a wrong memory fact",
+    description:
+      "Retire a wrong fact + write the corrected version + (optional) " +
+      "regenerate the entity summary. DESTRUCTIVE: invalidates a fact " +
+      "edge in place. Use after the user confirms which hit from " +
+      "memory_search is the one to fix. Workflow: search → show user → " +
+      "they confirm → call this. The approval gate blocks the first call; " +
+      "tell the user what's about to happen and wait for their Approve click.",
+    parameters: Type.Object({
+      wrong_fact_uuid: Type.String({
+        description:
+          "The `id` from a memory_search hit with kind='fact'. This is " +
+          "the edge that gets `invalid_at = now` so it stops showing up " +
+          "in recall.",
+      }),
+      corrected_content: Type.String({
+        minLength: 1,
+        description:
+          "The correct version of the fact, written as a new episode. " +
+          "Be explicit about subject + object so Graphiti's extraction " +
+          "doesn't flip agency again (e.g. include the assistant's name " +
+          "instead of '我'). One discrete fact, paraphrased.",
+      }),
+      entity_uuid: Type.Optional(
+        Type.String({
+          description:
+            "Optional. The entity whose `.summary` should be regenerated " +
+            "after the correction. Usually the `source_node_uuid` from " +
+            "the same search hit. If omitted, the stale summary text " +
+            "stays in place even though the underlying fact was retired.",
+        }),
+      ),
+      namespace: Type.Optional(
+        Type.String({
+          description:
+            "Namespace for the corrected episode. Default = wrong fact's " +
+            "own namespace (rediscovered via getFact).",
+        }),
+      ),
+      source_description: Type.Optional(
+        Type.String({
+          default: "user-confirmed correction via smith",
+          description: "Source description for the corrected episode.",
+        }),
+      ),
+      tags: Type.Optional(
+        Type.Array(Type.String(), {
+          default: ["correction"],
+          description: "Tags on the corrected episode. Defaults to ['correction'].",
+        }),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: {
+        wrong_fact_uuid: string;
+        corrected_content: string;
+        entity_uuid?: string;
+        namespace?: string;
+        source_description?: string;
+        tags?: string[];
+      },
+    ) {
+      const steps: string[] = [];
+      const details: Record<string, unknown> = { wrong_fact_uuid: params.wrong_fact_uuid };
+
+      // (a) PATCH the wrong fact. Look it up first so we can echo the
+      // exact text back to the user (sanity check) AND learn its
+      // namespace for step (b) when the caller didn't supply one.
+      let ns = params.namespace;
+      try {
+        const fact = await temper.getFact(params.wrong_fact_uuid);
+        if (!ns) ns = fact.namespace;
+        details.wrong_fact_text = fact.fact;
+        details.wrong_fact_namespace = fact.namespace;
+      } catch (e) {
+        const msg = e instanceof TemperError ? e.detail : (e as Error).message;
+        return {
+          content: [{ type: "text", text: `getFact failed: ${msg}` }],
+          details: { ...details, error: "getFact failed", message: msg },
+        };
+      }
+
+      try {
+        const r = await temper.invalidateFact(params.wrong_fact_uuid);
+        steps.push(`✓ invalidated fact ${r.id}: "${r.fact}" (invalid_at=${r.invalid_at})`);
+        details.invalidated_at = r.invalid_at;
+      } catch (e) {
+        const msg = e instanceof TemperError ? e.detail : (e as Error).message;
+        return {
+          content: [{ type: "text", text: `invalidateFact failed: ${msg}` }],
+          details: { ...details, error: "invalidate failed", message: msg },
+        };
+      }
+
+      // (b) Write the corrected episode.
+      try {
+        const w = (await temper.write({
+          content: params.corrected_content,
+          sourceType: "message",
+          sourceDescription: params.source_description ?? "user-confirmed correction via smith",
+          tags: params.tags ?? ["correction"],
+          namespace: ns,
+        })) as { episode_id?: string };
+        steps.push(`✓ wrote corrected episode ${w.episode_id ?? "(no id)"} in ${ns}`);
+        details.corrected_episode_id = w.episode_id;
+        details.corrected_namespace = ns;
+      } catch (e) {
+        const msg = e instanceof TemperError ? e.detail : (e as Error).message;
+        steps.push(`✗ corrected write failed: ${msg}`);
+        details.write_error = msg;
+      }
+
+      // (c) Resummarize the entity. Skip cleanly when no UUID given.
+      if (params.entity_uuid) {
+        try {
+          const r = await temper.resummarizeEntity(params.entity_uuid);
+          steps.push(
+            `✓ resummarized entity ${r.name ?? r.id} ` +
+            `(${r.source_episode_count} source episodes${r.note ? `; note: ${r.note}` : ""})`,
+          );
+          details.resummarized = {
+            id: r.id,
+            before: r.summary_before,
+            after: r.summary_after,
+            source_episode_count: r.source_episode_count,
+          };
+        } catch (e) {
+          const msg = e instanceof TemperError ? e.detail : (e as Error).message;
+          steps.push(`✗ resummarize failed: ${msg}`);
+          details.resummarize_error = msg;
+        }
+      } else {
+        steps.push(
+          "◌ entity_uuid not supplied — stale text may persist in entity.summary; " +
+          "pass `source_node_uuid` from the search hit next time.",
+        );
+      }
+
+      return {
+        content: [{ type: "text", text: steps.join("\n") }],
+        details,
       };
     },
   });

@@ -127,6 +127,7 @@ const forceSafe = new Set<string>([
 ]);
 const forceDangerous = new Set<string>([
   "memory_consolidate_apply",  // belt + suspenders alongside the *_apply regex
+  "memory_correct_apply",      // invalidates a fact + writes new episode + resummarizes
 ]);
 
 export function isDangerous(toolName: string): boolean {

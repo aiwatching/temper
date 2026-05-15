@@ -37,6 +37,10 @@ export interface SearchArgs {
   edgeTypes?: string[];
   asOf?: string;                 // ISO-8601
   center?: string;
+  // "rrf" (default, no LLM, rank-based scores), "mmr" (diversity),
+  // "cross_encoder" (LLM-rescored, true relevance in [0,1] — comparable
+  // across queries, suitable for threshold filtering).
+  reranker?: "rrf" | "mmr" | "cross_encoder";
 }
 
 export interface SearchHit {
@@ -46,6 +50,14 @@ export interface SearchHit {
   valid_at?: string | null;
   invalid_at?: string | null;
   source_episode_ids?: string[];
+  // UUIDs — populated server-side. `id` is the edge UUID when kind="fact"
+  // and the entity UUID when kind="entity". memory_correct uses these
+  // to invalidate / resummarize without a follow-up lookup.
+  id?: string;
+  source_node_uuid?: string;
+  target_node_uuid?: string;
+  kind?: "fact" | "entity" | "community";
+  namespace?: string;
   // pass-through of anything else the server returns; the consumer
   // (an LLM tool) sees the raw structure.
   [k: string]: unknown;
@@ -108,6 +120,39 @@ export interface ConsolidateStatus {
     started_at: string;
     ttl_seconds_remaining: number;
   } | null;
+}
+
+export interface FactDetail {
+  id: string;
+  namespace: string;
+  fact: string;
+  name: string | null;
+  source_uuid: string;
+  target_uuid: string;
+  source_name: string | null;
+  target_name: string | null;
+  valid_at: string | null;
+  invalid_at: string | null;
+  created_at: string | null;
+  episodes: string[];
+}
+
+export interface FactInvalidateResult {
+  id: string;
+  namespace: string;
+  fact: string;
+  valid_at: string | null;
+  invalid_at: string | null;
+}
+
+export interface ResummarizeResult {
+  id: string;
+  namespace: string;
+  name: string | null;
+  summary_before: string;
+  summary_after: string;
+  source_episode_count: number;
+  note?: string;
 }
 
 export class Temper {
@@ -177,6 +222,7 @@ export class Temper {
     if (args.edgeTypes?.length) params.edge_types = args.edgeTypes.join(",");
     if (args.asOf) params.as_of = args.asOf;
     if (args.center) params.center = args.center;
+    if (args.reranker) params.reranker = args.reranker;
     // NOTE: TEMPER returns `facts`, not `hits`. The variable name in the
     // client API stays SearchHit because that's what callers expect to
     // see in tool output — the wire field is just where it lives.
@@ -223,6 +269,36 @@ export class Temper {
 
   async consolidateStatus(namespace: string): Promise<ConsolidateStatus> {
     return this.req("GET", "/v1/consolidate/status", { params: { namespace } });
+  }
+
+  // ---- correction primitives ----
+
+  /** Look up a fact (RELATES_TO edge) by UUID. Used by memory_correct
+   *  to confirm the right fact was found before mutating it. */
+  async getFact(factUuid: string): Promise<FactDetail> {
+    return this.req<FactDetail>("GET", `/v1/facts/${factUuid}`);
+  }
+
+  /** PATCH a fact's `invalid_at`. Pass `null` to reactivate.
+   *  Omitting `invalidAt` defaults to "now on the server".
+   *  Used by memory_correct to retire a wrong fact in place. */
+  async invalidateFact(
+    factUuid: string,
+    invalidAt: string | null = new Date().toISOString(),
+  ): Promise<FactInvalidateResult> {
+    return this.req<FactInvalidateResult>("PATCH", `/v1/facts/${factUuid}`, {
+      body: { invalid_at: invalidAt },
+    });
+  }
+
+  /** Rebuild an entity's summary from its source episodes (LLM call).
+   *  Pair with invalidateFact so the next recall doesn't carry the
+   *  stale wording forward in `node.summary`. */
+  async resummarizeEntity(entityUuid: string): Promise<ResummarizeResult> {
+    return this.req<ResummarizeResult>(
+      "POST",
+      `/v1/admin/entities/${entityUuid}/resummarize`,
+    );
   }
 
   async health(): Promise<unknown> {

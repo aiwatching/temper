@@ -166,20 +166,63 @@ fact too (cross-agent).
     If both look current, flag the conflict to the user.
 `;
 
+// Tuning constants for auto-recall. The real precision lever is
+// RECALL_MIN_SCORE — cross_encoder produces relevance scores in [0,1]
+// that are comparable across queries, so a single threshold cleanly
+// separates "actually relevant" from "long-tail rerank noise". The
+// char caps below are backstops for the case where someone flips the
+// reranker back to rrf (rank-based scores → no useful filtering) or
+// the search returns dozens of unexpectedly-high-scored hits.
+
 const MAX_RECALL_HITS = 5;
 const MAX_SOURCE_EPISODES = 3;  // raw content cross-check, only for cited hits
+
+// Drop hits below this cross_encoder score. 0.30 chosen empirically:
+// in spot-checks, 0.50+ = clearly relevant, 0.10-0.30 = tangential,
+// 0.00-0.10 = unrelated rerank noise. 0.30 lets through "loosely
+// related" without admitting the long tail.
+const RECALL_MIN_SCORE = 0.3;
+
+// Backstop only — applied AFTER score filtering. Entity-summary hits
+// can still be lengthy when a single highly-relevant entity has a
+// dense summary; capping keeps one outlier from dominating the block.
+// Higher than before (was 200) because we trust the score filter now.
+const MAX_HIT_TEXT = 400;
+
+// Last-resort ceiling on the whole recall block. Should rarely fire
+// once score filtering is in play; kept as defense in depth.
+const MAX_RECALL_BLOCK_CHARS = 2500;
+
+function _trim(text: string, n: number): string {
+  if (text.length <= n) return text;
+  return text.slice(0, n - 1).trimEnd() + "…";
+}
 
 function formatHits(hits: SearchHit[]): string {
   if (hits.length === 0) return "  (no fact hits)";
   return hits
     .slice(0, MAX_RECALL_HITS * 2)
     .map((h, i) => {
-      const fact = h.fact ?? h.name ?? "(no fact)";
+      const raw = h.fact ?? h.name ?? "(no fact)";
+      // Collapse multi-line entity summaries to single line first —
+      // entity-summary hits arrive with embedded \n's that read like
+      // separate facts in the prompt and inflate the count visually.
+      const fact = _trim(raw.replace(/\s+/g, " ").trim(), MAX_HIT_TEXT);
       const score = typeof h.score === "number" ? ` (score=${h.score.toFixed(2)})` : "";
       const valid = h.valid_at ? `  valid_at=${h.valid_at}` : "";
       return `  ${i + 1}. ${fact}${score}${valid}`;
     })
     .join("\n");
+}
+
+/** Truncate a built recall block to MAX_RECALL_BLOCK_CHARS, dropping
+ *  from the END (lowest-priority content lives there: source episodes
+ *  come after fact hits, so this preserves the cited facts). Adds a
+ *  visible marker so the model sees the truncation. */
+function _capBlock(block: string): string {
+  if (block.length <= MAX_RECALL_BLOCK_CHARS) return block;
+  return block.slice(0, MAX_RECALL_BLOCK_CHARS - 80).trimEnd() +
+    "\n\n[... recall block truncated to stay under " + MAX_RECALL_BLOCK_CHARS + " chars; call memory_search for more]\n";
 }
 
 /**
@@ -252,33 +295,122 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
         const t = getTemper();
         const ownScope = `agent:me/${cfg.smithAgentSlug}`;
 
-        // Search ONLY this agent's own scope. user:me is a shared
-        // cross-agent namespace by design, but in practice it
-        // accumulates writes from every agent the user has ever run
-        // (funny-english's "Bruno is Anna's student" et al). Pulling
-        // from it pollutes Smith with another agent's worldview.
+        // We search BOTH the agent's own scope AND the user's flat
+        // cross-agent namespace (`user:me`). Two reasons:
         //
-        // If the user wants Smith to see something cross-agent, they
-        // can tell Smith to write/read user:me explicitly via the
-        // memory_search tool (which exposes a `namespaces` arg).
-        const agentHits = await t.search({
-          query: event.prompt,
-          limit: MAX_RECALL_HITS,
-          namespaces: [ownScope],
-        }).catch(() => [] as SearchHit[]);
+        //   1. Users frequently write to user:me directly via TEMPER's
+        //      API (or via the admin UI) — reminders, preferences,
+        //      structured facts they want every agent to see. If Smith
+        //      ignored user:me, those memories would be invisible.
+        //
+        //   2. user:me also accumulates writes from OTHER agents the
+        //      user has ever run. Some of those are noise from this
+        //      agent's perspective. We mitigate by:
+        //        - searching each scope separately so we can label
+        //          where each hit came from in the prompt;
+        //        - the model gets explicit guidance below that user:me
+        //          hits may include cross-agent context to weigh
+        //          carefully (e.g. another agent's worldview).
+        //
+        // If the noise becomes a problem we can flip user:me back off
+        // via a config flag — but the default is now "show it".
+        // Two precision moves on every search:
+        //
+        //   reranker=cross_encoder — the RRF default uses rank-based
+        //   scoring, which gives every top hit ~the same score even
+        //   when relevance varies wildly. cross_encoder runs an extra
+        //   LLM scoring pass that produces true relevance in [0,1],
+        //   so the threshold filter downstream becomes meaningful.
+        //   Cost: one extra LLM call per search (negligible vs the
+        //   conversation turn itself).
+        //
+        //   asOf = now — excludes facts whose invalid_at <= now,
+        //   meaning retired/corrected facts (like the agency-flipped
+        //   "user wants to be called heizai" we invalidated earlier)
+        //   never resurface. Bi-temporal store, finally used right.
+        //
+        // We over-fetch (limit = MAX_RECALL_HITS * 2) so the post-hoc
+        // score filter still leaves enough rows to be useful when the
+        // long tail is noise.
+        const nowIso = new Date().toISOString();
+        const [agentHitsRaw, userHitsRaw] = await Promise.all([
+          t.search({
+            query: event.prompt,
+            limit: MAX_RECALL_HITS * 2,
+            namespaces: [ownScope],
+            asOf: nowIso,
+            reranker: "cross_encoder",
+          }).catch(() => [] as SearchHit[]),
+          t.search({
+            query: event.prompt,
+            limit: MAX_RECALL_HITS * 2,
+            namespaces: ["user:me"],
+            asOf: nowIso,
+            reranker: "cross_encoder",
+          }).catch(() => [] as SearchHit[]),
+        ]);
 
-        // Dedup by fact text — Graphiti often returns both a "fact"
-        // hit and an "entity" hit with the same text.
+        // Dedup by fact text. Three reductions:
+        //   1. exact text dedup (a hit returned by both fact + entity
+        //      kinds, or by both namespaces),
+        //   2. entity-hit dedup vs fact-hits: entity summaries are
+        //      built from concatenated edge facts, so an entity hit
+        //      whose summary contains an already-shown fact line is
+        //      pure duplication — drop the line from the entity hit
+        //      (or drop the whole entity hit if every line dups),
+        //   3. drop entity hits that are pure noise after step 2.
+        //
+        // We process agent-scope first so its hits win in cross-scope
+        // dedup (more local = preferred).
+        // Score floor first — cuts the long tail before anything else
+        // runs. Hits without a score (older reranker fallback path)
+        // pass through, since we can't make a call on them.
+        const scoreFilter = (hits: SearchHit[]) =>
+          hits.filter((h) => h.score === undefined || h.score === null || h.score >= RECALL_MIN_SCORE);
+        const agentHitsScored = scoreFilter(agentHitsRaw).slice(0, MAX_RECALL_HITS);
+        const userHitsScored = scoreFilter(userHitsRaw).slice(0, MAX_RECALL_HITS);
+
         const seen = new Set<string>();
-        const hits: SearchHit[] = [];
-        for (const h of agentHits) {
-          const key = (h.fact ?? h.name ?? "").trim();
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          hits.push(h);
-        }
+        const dedup = (hits: SearchHit[]) => {
+          const out: SearchHit[] = [];
+          for (const h of hits) {
+            const key = (h.fact ?? h.name ?? "").trim();
+            if (!key || seen.has(key)) continue;
+            seen.add(key);
+            out.push(h);
+          }
+          return out;
+        };
+        const agentHits = dedup(agentHitsScored);
+        const userHits = dedup(userHitsScored);
 
-        if (hits.length === 0) {
+        // Now reduce entity-kind hits: split their multi-line summary
+        // into lines, drop any line that's already in `seen` from a
+        // fact-kind hit, and drop the entity hit entirely if nothing
+        // useful is left. This is the big saver — entity summaries
+        // routinely duplicate the fact-kind hits we already listed.
+        const factTexts = new Set<string>();
+        for (const h of [...agentHits, ...userHits]) {
+          if (h.kind === "fact") factTexts.add((h.fact ?? h.name ?? "").trim());
+        }
+        const reduceEntity = (hits: SearchHit[]): SearchHit[] => {
+          const out: SearchHit[] = [];
+          for (const h of hits) {
+            if (h.kind !== "entity") { out.push(h); continue; }
+            const lines = (h.fact ?? h.name ?? "")
+              .split(/\r?\n/)
+              .map((l) => l.trim())
+              .filter((l) => l && !factTexts.has(l));
+            if (lines.length === 0) continue;  // entire entity covered by fact hits
+            out.push({ ...h, fact: lines.join("\n") });
+          }
+          return out;
+        };
+        const agentHitsR = reduceEntity(agentHits);
+        const userHitsR = reduceEntity(userHits);
+
+        const totalHits = agentHitsR.length + userHitsR.length;
+        if (totalHits === 0) {
           // Nothing relevant — DO NOT inject anything. Leakage
           // prevention: unconditional context (e.g. "last N episodes
           // in agent: scope") would make smith randomly volunteer
@@ -287,27 +419,51 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
         } else {
           // Pull source episodes ONLY for the cited hits — gives
           // raw content cross-check without leaking everything else.
-          const sourceEps = await fetchSourceEpisodes(t, hits, MAX_SOURCE_EPISODES)
+          const allHits = [...agentHitsR, ...userHitsR];
+          const sourceEps = await fetchSourceEpisodes(t, allHits, MAX_SOURCE_EPISODES)
             .catch(() => [] as Array<{ ep: EpisodeSummary; content: string }>);
 
           recallBlock =
             "\n═══ Memory recall (auto-retrieved for this turn) ═══\n\n" +
             "Relevant FACTS from memory (Graphiti's extraction may\n" +
             "flip agency or lose nuance — when in doubt, defer to the\n" +
-            "source episodes below):\n" +
-            formatHits(hits);
+            "source episodes below):\n";
+          if (agentHitsR.length > 0) {
+            recallBlock +=
+              `\n[scope: ${ownScope}  — Smith's own writes]\n` +
+              formatHits(agentHitsR);
+          }
+          if (userHitsR.length > 0) {
+            recallBlock +=
+              `\n\n[scope: user:me  — user's flat namespace, may include\n` +
+              ` writes from other agents the user runs; weigh accordingly]\n` +
+              formatHits(userHitsR);
+          }
           if (sourceEps.length > 0) {
             recallBlock +=
               "\n\nSource EPISODES for the cited facts (raw content):\n" +
               formatEpisodes(sourceEps);
           }
-          recallBlock += "\n";
+          recallBlock = _capBlock(recallBlock) + "\n";
 
-          console.log(
-            `[smith] auto-recall: ${hits.length} hits + ${sourceEps.length} source eps for "${event.prompt.slice(0, 50)}"`,
-          );
-          for (const [i, h] of hits.entries()) {
-            console.log(`  ${i + 1}. ${h.fact ?? h.name ?? "(no fact)"}`);
+          // Quieter log: just counts + total block size. The full hit
+          // list used to ship to stdout on every turn — useful while
+          // developing, noisy in real use and easy to dig out of the
+          // prompt itself if you need it. Set SMITH_RECALL_LOG=verbose
+          // in .env to bring it back.
+          if ((process.env.SMITH_RECALL_LOG ?? "").trim() === "verbose") {
+            console.log(
+              `[smith] auto-recall: ${agentHitsR.length} agent + ${userHitsR.length} user:me hits (after dedup) + ${sourceEps.length} source eps · ${recallBlock.length} chars for "${event.prompt.slice(0, 50)}"`,
+            );
+            for (const [i, h] of allHits.entries()) {
+              const s = typeof h.score === "number" ? h.score.toFixed(3) : "—   ";
+              const t = (h.fact ?? h.name ?? "(no fact)").replace(/\s+/g, " ").slice(0, 80);
+              console.log(`  ${i + 1}. [${s}] ${t}`);
+            }
+          } else {
+            console.log(
+              `[smith] auto-recall: ${agentHitsR.length}+${userHitsR.length} hits ≥${RECALL_MIN_SCORE}, ${sourceEps.length} eps, ${recallBlock.length} chars`,
+            );
           }
         }
       } catch (e) {
