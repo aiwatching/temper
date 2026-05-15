@@ -819,6 +819,107 @@ def cmd_graph_cypher(args: argparse.Namespace) -> None:
     emit(args, rows)
 
 
+# --- memory blocks (KV memory, not Graphiti) -------------------------
+#
+# These wrap /v1/memory/blocks for ops/scripting. The agent-facing path
+# is the LLM tools (remember / forget / update_memory / get_memory); CLI
+# is for inspection, bulk edits, and recovery.
+
+
+def _parse_json_arg(raw: str, *, as_string: bool = False) -> Any:
+    """Argparse helper — parses a positional that's meant to be JSON.
+    With --string the raw text is wrapped as a JSON string (handy for
+    nicknames etc. so the caller doesn't have to escape quotes)."""
+    if as_string:
+        return raw
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        die(f"value is not valid JSON ({exc}); use --string to pass raw text")
+    return None
+
+
+def cmd_blocks_ls(args: argparse.Namespace) -> None:
+    params: dict[str, Any] = {"scope": args.scope}
+    if args.pinned:
+        params["pinned"] = args.pinned
+    if args.prefix:
+        params["prefix"] = args.prefix
+    data = _request(args, "GET", "/v1/memory/blocks", params=params)
+    blocks = data.get("blocks", []) if isinstance(data, dict) else []
+    if getattr(args, "json", False):
+        emit(args, blocks)
+        return
+    if not blocks:
+        print("  (no blocks)")
+        return
+    # Custom rendering — value is JSON and needs to be readable.
+    for b in blocks:
+        pin = "📌 " if b.get("pinned") else "   "
+        scope = b.get("scope", "?")
+        key = b.get("block_key", "?")
+        val = b.get("block_value")
+        val_str = json.dumps(val, ensure_ascii=False)
+        if len(val_str) > 80:
+            val_str = val_str[:77] + "..."
+        desc = f"  — {b['description']}" if b.get("description") else ""
+        print(f"  {pin}[{scope:<6s}] {key} = {val_str}{desc}")
+
+
+def cmd_blocks_get(args: argparse.Namespace) -> None:
+    data = _request(
+        args, "GET", f"/v1/memory/blocks/{args.key}",
+        params={"scope": args.scope},
+    )
+    emit(args, data)
+
+
+def cmd_blocks_set(args: argparse.Namespace) -> None:
+    value = _parse_json_arg(args.value, as_string=args.string)
+    body: dict[str, Any] = {"value": value, "scope": args.scope}
+    if args.pin:
+        body["pinned"] = True
+    elif args.unpin:
+        body["pinned"] = False
+    if args.priority is not None:
+        body["priority"] = args.priority
+    if args.description is not None:
+        body["description"] = args.description
+    data = _request(args, "PUT", f"/v1/memory/blocks/{args.key}", json=body)
+    emit(args, data)
+
+
+def cmd_blocks_patch(args: argparse.Namespace) -> None:
+    patch = _parse_json_arg(args.patch)
+    body = {"value": patch, "scope": args.scope}
+    data = _request(args, "PATCH", f"/v1/memory/blocks/{args.key}", json=body)
+    emit(args, data)
+
+
+def cmd_blocks_rm(args: argparse.Namespace) -> None:
+    _request(
+        args, "DELETE", f"/v1/memory/blocks/{args.key}",
+        params={"scope": args.scope},
+    )
+    print(f"  deleted '{args.key}' (scope={args.scope})")
+
+
+def cmd_blocks_pin(args: argparse.Namespace) -> None:
+    data = _request(
+        args, "PATCH", f"/v1/memory/blocks/{args.key}",
+        json={"pinned": True, "scope": args.scope},
+    )
+    emit(args, data)
+
+
+def cmd_blocks_unpin(args: argparse.Namespace) -> None:
+    data = _request(
+        args, "PATCH", f"/v1/memory/blocks/{args.key}",
+        json={"pinned": False, "scope": args.scope},
+    )
+    emit(args, data)
+
+
 # ---------- argparse glue ----------------------------------------------
 
 
@@ -1166,6 +1267,71 @@ def build_parser() -> argparse.ArgumentParser:
     sp = fact_sub.add_parser("rm", help="Hard-delete this fact")
     sp.add_argument("uuid")
     sp.set_defaults(func=cmd_fact_rm)
+
+    # blocks (KV memory — separate from Graphiti)
+    blocks = sub.add_parser(
+        "blocks",
+        help="Structured KV memory (preferences, nicknames, current state)",
+    )
+    blocks_sub = blocks.add_subparsers(dest="blocks_cmd", required=True)
+
+    sp = blocks_sub.add_parser("ls", help="List blocks")
+    sp.add_argument(
+        "--scope", choices=["own", "global", "both"], default="both",
+        help="own = caller's agent_slug; global = '*'; both = merge (default)",
+    )
+    sp.add_argument(
+        "--pinned", choices=["true", "false"], help="Only pinned / unpinned",
+    )
+    sp.add_argument("--prefix", help="Only keys starting with this prefix")
+    sp.set_defaults(func=cmd_blocks_ls)
+
+    sp = blocks_sub.add_parser("get", help="Fetch one block by key")
+    sp.add_argument("key")
+    sp.add_argument(
+        "--scope", choices=["own", "global"], default="own",
+        help="own (default) falls back to global if not found",
+    )
+    sp.set_defaults(func=cmd_blocks_get)
+
+    sp = blocks_sub.add_parser("set", help="Upsert a block (replaces value)")
+    sp.add_argument("key")
+    sp.add_argument(
+        "value", help="JSON value. Use --string to wrap raw text as JSON string.",
+    )
+    sp.add_argument(
+        "--string", action="store_true",
+        help="Treat `value` as a literal string instead of parsing as JSON",
+    )
+    sp.add_argument("--pin", action="store_true", help="pinned=true")
+    sp.add_argument("--unpin", action="store_true", help="pinned=false (explicit)")
+    sp.add_argument("--priority", type=int, help="Display priority (higher first)")
+    sp.add_argument("--description", "-d", help="One-liner doc")
+    sp.add_argument("--scope", choices=["own", "global"], default="own")
+    sp.set_defaults(func=cmd_blocks_set)
+
+    sp = blocks_sub.add_parser(
+        "patch", help="Deep-merge a JSON patch into an existing block's value",
+    )
+    sp.add_argument("key")
+    sp.add_argument("patch", help="JSON to deep-merge into existing value")
+    sp.add_argument("--scope", choices=["own", "global"], default="own")
+    sp.set_defaults(func=cmd_blocks_patch)
+
+    sp = blocks_sub.add_parser("rm", help="Delete a block")
+    sp.add_argument("key")
+    sp.add_argument("--scope", choices=["own", "global"], default="own")
+    sp.set_defaults(func=cmd_blocks_rm)
+
+    sp = blocks_sub.add_parser("pin", help="Pin a block (shortcut)")
+    sp.add_argument("key")
+    sp.add_argument("--scope", choices=["own", "global"], default="own")
+    sp.set_defaults(func=cmd_blocks_pin)
+
+    sp = blocks_sub.add_parser("unpin", help="Unpin a block (shortcut)")
+    sp.add_argument("key")
+    sp.add_argument("--scope", choices=["own", "global"], default="own")
+    sp.set_defaults(func=cmd_blocks_unpin)
 
     return p
 

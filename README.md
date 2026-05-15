@@ -16,7 +16,8 @@ backed by [Graphiti](https://github.com/getzep/graphiti) on FalkorDB.
          ▼
 ┌──────────────────┐       ┌──────────────┐
 │ FastAPI app      │──────▶│ PostgreSQL   │ users / api keys / episode meta
-│ (this repo)      │       └──────────────┘
+│ (this repo)      │       │              │ + memory_blocks (KV memory)
+│                  │       └──────────────┘
 │                  │       ┌──────────────┐
 │                  │──────▶│ FalkorDB     │ Graphiti knowledge graph
 └────────┬─────────┘       └──────────────┘
@@ -24,6 +25,16 @@ backed by [Graphiti](https://github.com/getzep/graphiti) on FalkorDB.
          ▼
    OpenAI API (entity extraction + embeddings)
 ```
+
+Two memory primitives:
+
+- **Graph (episodes + entities + facts)** — emergent recall over many
+  episodes, bi-temporal, good for third-party facts. See `docs/api-guide.md`.
+- **Memory blocks (KV)** — structured key/value, for first-person
+  assertions Graphiti is bad at (nicknames, preferences, current state).
+  See `docs/memory-blocks.md`.
+
+A third primitive (Documents / markdown) is deferred — see `docs/vision.md`.
 
 ## Quick start
 

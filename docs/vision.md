@@ -89,3 +89,94 @@ a Document primitive risks building the wrong shape.
 When we come back to this: re-read the four options above and the
 "emergent vs deliberate" framing — that's the lens that will pick the
 right shape.
+
+---
+
+## Update 2026-05-15: a third primitive — memory blocks
+
+After running Smith against real conversations we found a third class
+of memory the brain/bookshelf split doesn't cover: **first-person
+assertions about the user themselves**.
+
+Examples that kept failing in Graphiti:
+- "Call me 黑仔" → agency-flipped to "user wants to be called 黑仔"
+- "I prefer Postgres over MySQL" → pronoun filter drops the subject
+- "I'm working on the wad-ssl-crash bug right now" → episode written
+  but no graph edge survives because there's no second entity
+
+Root cause is **structural**, not a Graphiti bug: `extract_message`
+filters pronouns (`I`, `me`, `you`) per its own prompt rule, and
+`extract_edges` requires two distinct entities to make a fact. Self-
+referential statements have no anchor on one side, so they either
+get dropped or rewritten with the user as both ends.
+
+So neither the brain (graph) nor the bookshelf (documents) fits.
+What fits is the third primitive:
+
+### Memory blocks (structured KV) ≈ a wallet card
+
+- **Input is literal.** The agent (or the user via admin UI) writes
+  a key/value pair. Nothing is extracted. The shape is whatever
+  caller decided.
+- **Lookup is by key.** `preferences.nickname_for_user` returns
+  exactly that value, no scoring, no rerank.
+- **Stable.** `PUT` overwrites the old value entirely; `PATCH`
+  deep-merges. No bi-temporal validity, no append-only summary,
+  no LLM re-summarization.
+- **Pinned blocks are always shown.** A small set of `pinned=true`
+  blocks gets injected into the agent's system prompt every turn,
+  so identity-level facts (nickname, name, preferred greeting)
+  never get lost in a recall miss.
+
+This is the layer for things the user **deliberately tells the
+agent about themselves**. It coexists with the graph: the graph is
+still where third-party facts go (Sarah teaches Portuguese, Bruno is
+Anna's student, we shipped feature X). The decision rule is one
+line:
+
+> Is the subject "I" / "me" / "the user", and is the predicate a
+> preference, identity, current state, or routine?  
+> → memory_blocks.  Otherwise → episodes (Graphiti).
+
+### Three primitives now
+
+| | Graph (episodes + entities) | Blocks | Documents (deferred) |
+|---|---|---|---|
+| Input | Passive — agent writes episodes from conversation | Literal — caller writes JSONB by key | Deliberate — human authors notes |
+| Lookup | Associative semantic + graph search | Direct by key, optional prefix list | Direct by path, or backlink graph |
+| Mutation | Bi-temporal: write a contradicting episode → old fact retires | PUT replaces, PATCH merges | Edit in place, version via git |
+| Best for | Third-party facts, events, time-aware recall | First-person assertions, preferences, working state | Reference material, long-form notes |
+| Lifetime | Decades of "what was true when" | "What's currently true about the user" | Stable bodies of knowledge |
+| Shape | Graphiti entities + edges + sagas + communities | Flat JSONB key/value | Markdown / structured docs |
+
+### Why blocks isn't "just a table to satisfy Smith"
+
+The architectural concern was real: **N tables for N kinds of memory
+is a dead end**. The blocks design pre-empts that by being one table
+where the schema is the value (JSONB). Future needs absorb as new
+keys without DDL changes:
+
+| Future need | Block key | Block value |
+|---|---|---|
+| Coffee preferences | `preferences.drinks` | `{"prefers": "americano", "avoids": ["latte"]}` |
+| Personal calendar pattern | `routine.workday` | `{"start": "09:00", "end": "18:00", "lunch": "12:30"}` |
+| Internal service catalog | `bookmark.jenkins` | `{"url": "https://jenkins...", "sso": "okta"}` |
+| Current saga focus | `state.current_saga` | `{"saga": "wad-ssl-crash", "since": "..."}` |
+
+Same table. Same endpoints. The convention is the prefix, not the
+schema.
+
+### Where this leaves the bookshelf decision
+
+The bookshelf (Documents) is still deferred, and the lens from above
+still applies. Now the picture is:
+- **Brain** = graph (emergent recall over many episodes over time)
+- **Wallet card** = blocks (one-shot literal assertions, always available)
+- **Bookshelf** = future documents (deliberate reference reading)
+
+Brain answers "what's been true about X". Wallet card answers "what
+did the user explicitly tell me". Bookshelf would answer "what does
+the canonical write-up say".
+
+When we revisit Documents, the three-primitive framing should help
+keep them from getting confused with either of the others.

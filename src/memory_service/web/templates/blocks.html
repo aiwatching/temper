@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .blocks-grid { display: grid; grid-template-columns: 1fr; gap: 18px; margin-top: 8px; }
+  .filter-row { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 12px; }
+  .filter-row label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .filter-row select, .filter-row input { padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; min-width: 180px; }
+  .scope-pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 10px; border: 1px solid var(--border); }
+  .scope-pill.own { background: #ddf4ff; border-color: #54aeff; color: #0969da; }
+  .scope-pill.global { background: #f6e7ff; border-color: #b56ce4; color: #6b3fa0; }
+  .pin-badge { color: #d4a72c; font-weight: bold; }
+  .blocks-table { width: 100%; border-collapse: collapse; }
+  .blocks-table th, .blocks-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; font-size: 12.5px; }
+  .blocks-table th { text-align: left; color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .blocks-table tr:hover td { background: #f8fafc; }
+  .blocks-table code { font-size: 11.5px; background: #f6f8fa; padding: 1px 5px; border-radius: 3px; }
+  .blocks-table td.actions { white-space: nowrap; }
+  .blocks-table td.actions button { font-size: 11px; padding: 3px 8px; margin-right: 4px; }
+  .block-value-cell { max-width: 380px; }
+  .block-value-cell pre { margin: 0; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 100px; overflow-y: auto; }
+  .editor { background: #f6f8fa; border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin-top: 12px; }
+  .editor-row { display: grid; grid-template-columns: 140px 1fr; gap: 12px; margin-bottom: 10px; align-items: center; }
+  .editor-row label { font-size: 12px; color: var(--muted); }
+  .editor-row input, .editor-row select, .editor-row textarea { padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; font-family: inherit; font-size: 12.5px; width: 100%; box-sizing: border-box; }
+  .editor-row textarea { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; min-height: 110px; resize: vertical; }
+  .editor-row .checkbox-pair { display: flex; gap: 16px; align-items: center; }
+  .editor-row .checkbox-pair label { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--ink); }
+  .editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+  .empty-state { text-align: center; padding: 30px; color: var(--muted); font-size: 13px; }
+</style>
+
+<section class="card" x-data="blocksPage()" x-init="load()">
+  <h2>Memory blocks</h2>
+  <p style="color:var(--muted)">
+    Structured key/value memory — for things Graphiti is bad at:
+    user nicknames, preferences, current focus, daily routine, bookmarks.
+    <strong>Pinned</strong> blocks are auto-injected into the agent's
+    system prompt every turn.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="message"><div class="msg ok" x-text="message"></div></template>
+
+  <div class="filter-row">
+    <label>Scope
+      <select x-model="filterScope" @change="load()">
+        <option value="both">both (own + global)</option>
+        <option value="own">own (this agent only)</option>
+        <option value="global">global (all agents)</option>
+      </select>
+    </label>
+    <label>Pinned
+      <select x-model="filterPinned" @change="load()">
+        <option value="">any</option>
+        <option value="true">pinned only</option>
+        <option value="false">unpinned only</option>
+      </select>
+    </label>
+    <label>Key prefix
+      <input type="text" x-model="filterPrefix" @change="load()" placeholder="preferences." />
+    </label>
+    <button class="secondary" @click="load()">Refresh</button>
+    <button @click="openEditor(null)" style="margin-left:auto">+ New block</button>
+  </div>
+
+  <template x-if="blocks.length === 0 && !loading">
+    <div class="empty-state">
+      No blocks yet. Click <em>+ New block</em> above, or have an agent
+      call <code>remember(key, value)</code>.
+    </div>
+  </template>
+
+  <template x-if="blocks.length > 0">
+    <table class="blocks-table">
+      <thead>
+        <tr>
+          <th style="width:30px"></th>
+          <th>Key</th>
+          <th>Value</th>
+          <th>Scope</th>
+          <th>Pri</th>
+          <th>Updated</th>
+          <th class="actions"></th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="b in blocks" :key="b.id">
+          <tr>
+            <td><span class="pin-badge" x-text="b.pinned ? '📌' : ''"></span></td>
+            <td>
+              <code x-text="b.block_key"></code>
+              <template x-if="b.description">
+                <div style="font-size:11px; color:var(--muted); margin-top:3px" x-text="b.description"></div>
+              </template>
+            </td>
+            <td class="block-value-cell">
+              <pre x-text="JSON.stringify(b.block_value, null, 2)"></pre>
+            </td>
+            <td><span class="scope-pill" :class="b.scope" x-text="b.scope"></span></td>
+            <td x-text="b.priority"></td>
+            <td style="font-size:11px; color:var(--muted)">
+              <span x-text="b.updated_at.replace('T', ' ').slice(0, 16)"></span>
+              <template x-if="b.updated_by">
+                <div x-text="b.updated_by"></div>
+              </template>
+            </td>
+            <td class="actions">
+              <button @click="openEditor(b)">Edit</button>
+              <button @click="togglePin(b)" x-text="b.pinned ? 'Unpin' : 'Pin'"></button>
+              <button class="danger" @click="confirmDelete(b)">Delete</button>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </template>
+
+  <template x-if="editor.open">
+    <div class="editor">
+      <h3 style="margin-top:0" x-text="editor.isNew ? 'New block' : `Edit ${editor.key}`"></h3>
+      <div class="editor-row">
+        <label>Key</label>
+        <input type="text" x-model="editor.key" :disabled="!editor.isNew"
+               placeholder="preferences.nickname_for_user" />
+      </div>
+      <div class="editor-row">
+        <label>Value (JSON)</label>
+        <textarea x-model="editor.valueText" placeholder='"亲爱的陛下"  or  {"morning": "08:00"}'></textarea>
+      </div>
+      <div class="editor-row">
+        <label>Description</label>
+        <input type="text" x-model="editor.description"
+               placeholder="how the assistant should address the user" />
+      </div>
+      <div class="editor-row">
+        <label>Scope</label>
+        <select x-model="editor.scope">
+          <option value="own">own (this agent only)</option>
+          <option value="global">global (all agents under this user)</option>
+        </select>
+      </div>
+      <div class="editor-row">
+        <label>Flags</label>
+        <div class="checkbox-pair">
+          <label>
+            <input type="checkbox" x-model="editor.pinned" />
+            <span>Pinned (inject into every system prompt)</span>
+          </label>
+          <label>
+            Priority
+            <input type="number" x-model.number="editor.priority" style="width:70px" />
+          </label>
+        </div>
+      </div>
+      <div class="editor-actions">
+        <button class="secondary" @click="closeEditor()">Cancel</button>
+        <button @click="save()" :disabled="!editor.key || !editor.valueText">
+          <span x-text="editor.isNew ? 'Create' : 'Save'"></span>
+        </button>
+      </div>
+    </div>
+  </template>
+</section>
+
+<script>
+function blocksPage() {
+  return {
+    blocks: [],
+    loading: false,
+    error: null,
+    message: null,
+    filterScope: 'both',
+    filterPinned: '',
+    filterPrefix: '',
+    editor: { open: false, isNew: false, key: '', valueText: '', description: '', scope: 'own', pinned: false, priority: 0 },
+
+    async load() {
+      this.loading = true;
+      this.error = null;
+      try {
+        const params = new URLSearchParams({ scope: this.filterScope });
+        if (this.filterPinned) params.set('pinned', this.filterPinned);
+        if (this.filterPrefix) params.set('prefix', this.filterPrefix);
+        const r = await fetch(`/v1/memory/blocks?${params}`, { credentials: 'include' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        const j = await r.json();
+        this.blocks = j.blocks || [];
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loading = false;
+      }
+    },
+
+    openEditor(block) {
+      if (block) {
+        this.editor = {
+          open: true, isNew: false,
+          key: block.block_key,
+          valueText: JSON.stringify(block.block_value, null, 2),
+          description: block.description || '',
+          scope: block.scope,
+          pinned: block.pinned,
+          priority: block.priority,
+        };
+      } else {
+        this.editor = {
+          open: true, isNew: true,
+          key: '', valueText: '""', description: '', scope: 'own', pinned: false, priority: 0,
+        };
+      }
+    },
+
+    closeEditor() {
+      this.editor = { ...this.editor, open: false };
+    },
+
+    async save() {
+      this.error = null;
+      let value;
+      try { value = JSON.parse(this.editor.valueText); }
+      catch (e) { this.error = `Value isn't valid JSON: ${e.message}`; return; }
+      const body = {
+        value,
+        pinned: this.editor.pinned,
+        priority: this.editor.priority,
+        description: this.editor.description || null,
+        scope: this.editor.scope,
+      };
+      try {
+        const r = await fetch(`/v1/memory/blocks/${encodeURIComponent(this.editor.key)}`, {
+          method: 'PUT', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        this.message = `Saved ${this.editor.key}`;
+        setTimeout(() => { this.message = null; }, 2500);
+        this.closeEditor();
+        await this.load();
+      } catch (e) {
+        this.error = e.message;
+      }
+    },
+
+    async togglePin(block) {
+      try {
+        const r = await fetch(`/v1/memory/blocks/${encodeURIComponent(block.block_key)}`, {
+          method: 'PATCH', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinned: !block.pinned, scope: block.scope }),
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        await this.load();
+      } catch (e) { this.error = e.message; }
+    },
+
+    async confirmDelete(block) {
+      if (!confirm(`Delete block '${block.block_key}' (${block.scope})?`)) return;
+      try {
+        const r = await fetch(
+          `/v1/memory/blocks/${encodeURIComponent(block.block_key)}?scope=${block.scope}`,
+          { method: 'DELETE', credentials: 'include' },
+        );
+        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
+        this.message = `Deleted ${block.block_key}`;
+        setTimeout(() => { this.message = null; }, 2500);
+        await this.load();
+      } catch (e) { this.error = e.message; }
+    },
+  };
+}
+</script>
+{% endblock %}

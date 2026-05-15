@@ -221,6 +221,65 @@ from this episode also drop.
 
 ---
 
+## 7.5. Memory blocks (KV memory, not Graphiti)
+
+Structured key/value memory for the class of data Graphiti is bad at:
+**first-person assertions about the user themselves** — nicknames,
+preferences, current focus, daily routine, bookmarks. Graphiti's
+entity extractor filters pronouns (`I`, `me`, `you`) and produces
+agency-flipped facts on these; blocks stores them as opaque JSONB so
+nothing gets reinterpreted.
+
+**Decision rule**: subject is "I" / "me" / "the user" and predicate
+is a preference, identity, current state, or routine → blocks.
+Anything else (Sarah teaches Portuguese, Bruno lives in Lyon, we
+shipped feature X) → episodes.
+
+```bash
+# Save (upsert) — pinned blocks auto-inject into the agent's system
+# prompt every turn, so the model can't miss them.
+curl -X PUT -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  http://localhost:18088/v1/memory/blocks/preferences.nickname_for_user \
+  -d '{"value": "Heizai", "pinned": true,
+       "description": "what the user calls the assistant"}'
+
+# List pinned (this is what Smith's before_agent_start hook fetches)
+curl -H "X-API-Key: $KEY" \
+  "http://localhost:18088/v1/memory/blocks?pinned=true&scope=both"
+
+# Patch — deep-merges JSONB; lists/scalars REPLACE, dicts MERGE
+curl -X PATCH -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  http://localhost:18088/v1/memory/blocks/preferences.drinks \
+  -d '{"value": {"avoids": ["latte"]}}'
+
+# Fetch one
+curl -H "X-API-Key: $KEY" \
+  "http://localhost:18088/v1/memory/blocks/state.current_focus?scope=own"
+
+# Delete
+curl -X DELETE -H "X-API-Key: $KEY" \
+  http://localhost:18088/v1/memory/blocks/state.current_focus
+```
+
+**Scopes**: `own` = caller's API-key `agent_slug`; `global` = sentinel
+`*` (visible to every agent under this user); `both` (list only) =
+merge, own shadows global on key collisions.
+
+**Key conventions** (not enforced):
+- `preferences.X` — likes, dislikes, nickname, language, theme
+- `persona.X` — identity facts (name, role); usually `scope=global`
+- `state.X` — current working context
+- `routine.X` — recurring patterns (schedule, oncall)
+- `bookmark.X` — external URLs / IDs
+
+**Pinned budget**: every pinned block ships into every prompt. Keep
+totals under a few KB. Non-pinned blocks need an explicit `GET` to
+retrieve — agents call `get_memory(key)` on demand.
+
+Admin UI: `/admin/blocks`. CLI: `memctl blocks {ls,get,set,patch,rm,pin,unpin}`.
+
+---
+
 ## 8. Health
 
 ```bash
@@ -235,6 +294,10 @@ service, so per-component status is the truth.
 
 ## 9. Where to look next
 
+- **Memory blocks design**: `docs/memory-blocks.md` — when to use
+  blocks vs episodes, why this primitive exists, prior art.
+- **Vision**: `docs/vision.md` — the three primitives (graph,
+  blocks, deferred documents) and how they complement.
 - **Examples**: `examples/english_agent_minimal.py` — a 60-line Python
   showing the full agent-side pattern (write on every turn, search
   before responding).

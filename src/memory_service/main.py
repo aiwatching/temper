@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from memory_service.api.v1 import admin as v1_admin
 from memory_service.api.v1 import auth as v1_auth
+from memory_service.api.v1 import blocks as v1_blocks
 from memory_service.api.v1 import consolidate as v1_consolidate
 from memory_service.api.v1 import entity_schemas as v1_entity_schemas
 from memory_service.api.v1 import episodes as v1_episodes
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_entity_schemas.router, prefix="/v1")
     app.include_router(v1_stats.router, prefix="/v1")
     app.include_router(v1_consolidate.router, prefix="/v1")
+    app.include_router(v1_blocks.router, prefix="/v1")
 
     # Admin page + static
     app.include_router(admin_router)

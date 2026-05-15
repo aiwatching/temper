@@ -90,6 +90,36 @@ Wipe with `memctl logout`.
 | `memctl group member ls SLUG` | List group members |
 | `memctl group member rm SLUG USER_ID` | Remove (or self-leave) |
 
+### Memory blocks (KV memory, not Graphiti)
+
+For first-person assertions Graphiti is bad at — nicknames, preferences,
+current focus, daily routine. See `docs/memory-blocks.md` for the
+decision rule and design rationale.
+
+| Command | Purpose |
+|---|---|
+| `memctl blocks ls [--scope own\|global\|both] [--pinned true\|false] [--prefix P]` | List blocks; `both` merges with own shadowing global |
+| `memctl blocks get KEY [--scope own\|global]` | Fetch one block |
+| `memctl blocks set KEY VALUE [--string] [--pin] [-d DESC] [--scope]` | Upsert; `VALUE` is parsed as JSON unless `--string` |
+| `memctl blocks patch KEY PATCH [--scope]` | Deep-merge a JSON patch into the existing value |
+| `memctl blocks rm KEY [--scope]` | Delete |
+| `memctl blocks pin KEY [--scope]` | Pin (shortcut for set --pin) |
+| `memctl blocks unpin KEY [--scope]` | Unpin |
+
+Examples:
+
+```bash
+# Save a string nickname, pinned for global agents
+memctl blocks set preferences.nickname_for_user "亲爱的陛下" \
+  --string --pin --scope global -d "how the assistant addresses the user"
+
+# Patch one field of an object-valued block
+memctl blocks patch routine.workday '{"lunch":"12:30"}'
+
+# List only currently-pinned blocks
+memctl blocks ls --pinned true
+```
+
 ### Graph inspection (direct FalkorDB)
 
 These talk to FalkorDB directly (`localhost:6380` by default), bypassing
