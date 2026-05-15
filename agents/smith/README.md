@@ -25,12 +25,17 @@ the same harness powering openclaw / harness. Smith is a TEMPER
 
 After `pnpm install && pnpm run dev`, open `http://127.0.0.1:18099/setup`
 in a browser. The wizard collects TEMPER + LLM config and writes it
-to `.data/smith.db` (encrypted secrets). No `.env` editing required
-— the master key (`SMITH_SECRET_KEY`) auto-generates on first boot.
+to `.data/smith.db` (with sensitive values AES-256-GCM-encrypted).
+The master key is auto-generated on first boot at
+`.data/master.key` (mode 0600) — **back this file up alongside
+`.data/smith.db`**, lose it and every stored secret is unrecoverable.
 
-If you have a legacy `.env` from earlier versions of Smith, it gets
-imported automatically on first boot; the wizard either pre-fills
-or skips itself if all critical values are present.
+No `.env` editing required. If you have a legacy `.env` from
+earlier Smith versions (including a `SMITH_SECRET_KEY` line),
+everything migrates automatically on first boot — the master key
+moves to `.data/master.key`, and TEMPER / LLM / etc. settings move
+to the DB. The wizard pre-fills or skips itself if all critical
+values are present.
 
 Edit any time at `/settings`.
 

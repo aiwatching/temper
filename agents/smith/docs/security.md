@@ -13,7 +13,7 @@ team install, etc.).
 | Asset | Protection |
 |---|---|
 | **Smith HTTP endpoints** (`/chat`, `/conversations`, `/plugins`, `/settings`) | Bound to `127.0.0.1:18099` — unreachable from other machines on the LAN. Bearer token gates the JSON/SSE surface (set during `/setup`; rotatable from `/settings`). |
-| **Plugin secrets** (MCP API keys, etc.) | AES-256-GCM encrypted at rest in `.data/smith.db` `secrets` table. Master key in env `SMITH_SECRET_KEY` (auto-generated, kept in `.env`). |
+| **Plugin secrets** (MCP API keys, etc.) | AES-256-GCM encrypted at rest in `.data/smith.db` `secrets` table. Master key in `.data/master.key` (auto-generated on first boot, mode 0600). |
 | **Settings secrets** (TEMPER API key, LLM API key, bearer token) | Same encryption + master key. Never returned plaintext from any GET endpoint (only `has_secret` boolean). |
 | **TEMPER memory data** | TEMPER's own auth model. Smith just holds a `TEMPER_API_KEY` and forwards it. |
 | **Destructive tool calls** (close_bug, send_email, …) | A5 approval gate — first attempt returns "pending", the UI prompts the user, the next turn after approval lets the call through. |
@@ -24,9 +24,10 @@ team install, etc.).
 
 - **TLS / HTTPS termination** — Smith speaks plain HTTP. Fine for
   `127.0.0.1`. Don't expose plain HTTP beyond localhost.
-- **The master key** — `SMITH_SECRET_KEY` lives in `.env` as
-  plaintext. Anyone with read access to `.env` can decrypt the
-  entire `secrets` table.
+- **The master key** — `.data/master.key` is plaintext base64 on
+  disk (mode 0600). Anyone who can read that file plus
+  `.data/smith.db` can decrypt every stored secret. Standard
+  filesystem permissions are your perimeter.
 - **The DB file** — `.data/smith.db` has no FS-level encryption.
   Anyone with read access to that file + the master key can read
   every secret. Standard filesystem permissions apply.
@@ -88,10 +89,13 @@ minimum:
 4. **Rate limit at the gateway** (nginx `limit_req`). Smith has no
    internal rate limiter; an attacker that gets past auth can spam
    the LLM until your quota dies.
-5. **Restrict `.env` + `.data/`** to mode 600. The master key + DB
-   together unlock every plugin/LLM/TEMPER secret.
-6. **Backup `.data/smith.db` AND `.env`** off-machine. Without both
-   you lose either the data or the ability to decrypt it.
+5. **Restrict `.data/`** to mode 700 (the directory) and 600 on
+   `master.key` (the auto-generated file already does this on
+   POSIX). The master key + DB together unlock every
+   plugin/LLM/TEMPER secret.
+6. **Backup `.data/master.key` AND `.data/smith.db`** off-machine,
+   together. Without both you lose either the data or the ability
+   to decrypt it. They go together; backup as a pair.
 
 ---
 
