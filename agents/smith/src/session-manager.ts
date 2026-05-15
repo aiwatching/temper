@@ -28,6 +28,7 @@ import { approvalGateExtension } from "./extensions/approval-gate.js";
 import { compactionPolicyExtension } from "./extensions/compaction-policy.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
 import { mcpBridgeExtension } from "./extensions/mcp-bridge.js";
+import { pluginSystemExtension } from "./extensions/plugin-system.js";
 import { smithPersonalityExtension } from "./extensions/smith-personality.js";
 
 // biome-ignore lint: pi's AgentSession type isn't re-exported cleanly yet.
@@ -161,14 +162,22 @@ class SmithSessionPool {
       additionalSkillPaths: [skillsPath],
       additionalPromptTemplatePaths: [promptsPath],
       extensionFactories: [
-        // Order matters: temper-memory must be available even if MCP
-        // setup fails partway through. Personality goes first so the
-        // system prompt is in place before any tool sees a turn.
+        // Order matters: temper-memory must be available even if MCP /
+        // plugin setup fails partway through. Personality goes first
+        // so the system prompt is in place before any tool sees a turn.
         // approvalGate + compactionPolicy register last — they're
         // pure event listeners, no tools.
+        //
+        // plugin-system and mcp-bridge coexist during the P1-P4
+        // transition. plugin-system reads the SQLite registry (empty
+        // until the user adds plugins via the upcoming UI);
+        // mcp-bridge still honors MCP_SERVERS env for backward compat.
+        // Once a plugin is added via the registry, drop it from
+        // MCP_SERVERS — pi.registerTool throws on duplicate names.
         (pi) => smithPersonalityExtension(pi),
         (pi) => temperMemoryExtension(pi),
-        (pi) => { void mcpBridgeExtension(pi); }, // fire-and-forget; awaits inside
+        (pi) => { void pluginSystemExtension(pi); }, // fire-and-forget
+        (pi) => { void mcpBridgeExtension(pi); },    // legacy env path
         (pi) => approvalGateExtension(pi, conversationId),
         (pi) => compactionPolicyExtension(pi, conversationId),
       ],

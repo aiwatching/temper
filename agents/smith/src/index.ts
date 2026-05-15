@@ -11,6 +11,9 @@
 import { serve } from "@hono/node-server";
 
 import { getConfig, mapEnvForPi } from "./config.js";
+import { closeDb } from "./db/sqlite.js";
+import { runMigrations } from "./db/migrations.js";
+import { getPluginManager } from "./plugins/manager.js";
 import { startSchedulerIfConfigured, stopScheduler } from "./scheduler.js";
 import { buildApp } from "./server.js";
 import { getSessionPool } from "./session-manager.js";
@@ -30,6 +33,11 @@ async function main(): Promise<void> {
   const cfg = getConfig();
   mapEnvForPi(cfg);
 
+  // DB first — migrations must run before anything touches the
+  // plugins / secrets tables. Idempotent (already-applied versions
+  // are skipped).
+  runMigrations();
+
   const app = buildApp();
   banner();
   serve({ fetch: app.fetch, hostname: cfg.smithHost, port: cfg.smithPort });
@@ -39,7 +47,9 @@ async function main(): Promise<void> {
     process.on(sig, async () => {
       console.log(`\n  ${sig} — disposing sessions...`);
       stopScheduler();
+      await getPluginManager().disposeAll();
       await getSessionPool().disposeAll();
+      closeDb();
       process.exit(0);
     });
   }
