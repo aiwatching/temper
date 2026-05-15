@@ -181,9 +181,7 @@ function blocksPage() {
         const params = new URLSearchParams({ scope: this.filterScope });
         if (this.filterPinned) params.set('pinned', this.filterPinned);
         if (this.filterPrefix) params.set('prefix', this.filterPrefix);
-        const r = await fetch(`/v1/memory/blocks?${params}`, { credentials: 'include' });
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
-        const j = await r.json();
+        const j = await window.ms.json(`/v1/memory/blocks?${params}`);
         this.blocks = j.blocks || [];
       } catch (e) {
         this.error = e.message;
@@ -228,12 +226,9 @@ function blocksPage() {
         scope: this.editor.scope,
       };
       try {
-        const r = await fetch(`/v1/memory/blocks/${encodeURIComponent(this.editor.key)}`, {
-          method: 'PUT', credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
+        await window.ms.json(`/v1/memory/blocks/${encodeURIComponent(this.editor.key)}`, {
+          method: 'PUT', body: JSON.stringify(body),
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         this.message = `Saved ${this.editor.key}`;
         setTimeout(() => { this.message = null; }, 2500);
         this.closeEditor();
@@ -245,12 +240,10 @@ function blocksPage() {
 
     async togglePin(block) {
       try {
-        const r = await fetch(`/v1/memory/blocks/${encodeURIComponent(block.block_key)}`, {
-          method: 'PATCH', credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
+        await window.ms.json(`/v1/memory/blocks/${encodeURIComponent(block.block_key)}`, {
+          method: 'PATCH',
           body: JSON.stringify({ pinned: !block.pinned, scope: block.scope }),
         });
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         await this.load();
       } catch (e) { this.error = e.message; }
     },
@@ -258,11 +251,10 @@ function blocksPage() {
     async confirmDelete(block) {
       if (!confirm(`Delete block '${block.block_key}' (${block.scope})?`)) return;
       try {
-        const r = await fetch(
+        await window.ms.json(
           `/v1/memory/blocks/${encodeURIComponent(block.block_key)}?scope=${block.scope}`,
-          { method: 'DELETE', credentials: 'include' },
+          { method: 'DELETE' },
         );
-        if (!r.ok && r.status !== 204) throw new Error(`HTTP ${r.status}: ${await r.text()}`);
         this.message = `Deleted ${block.block_key}`;
         setTimeout(() => { this.message = null; }, 2500);
         await this.load();
