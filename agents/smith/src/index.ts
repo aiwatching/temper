@@ -11,6 +11,7 @@
 import { serve } from "@hono/node-server";
 
 import { getConfig, mapEnvForPi } from "./config.js";
+import { startSchedulerIfConfigured, stopScheduler } from "./scheduler.js";
 import { buildApp } from "./server.js";
 import { getSessionPool } from "./session-manager.js";
 
@@ -32,10 +33,12 @@ async function main(): Promise<void> {
   const app = buildApp();
   banner();
   serve({ fetch: app.fetch, hostname: cfg.smithHost, port: cfg.smithPort });
+  startSchedulerIfConfigured();
 
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, async () => {
       console.log(`\n  ${sig} — disposing sessions...`);
+      stopScheduler();
       await getSessionPool().disposeAll();
       process.exit(0);
     });

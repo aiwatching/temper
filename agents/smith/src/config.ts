@@ -47,6 +47,12 @@ export interface SmithConfig {
   // Empty (default) = no auth (dev convenience; bind 127.0.0.1 only).
   // Any 0.0.0.0 / public bind MUST set this.
   smithSecret: string;
+  // Periodic consolidate. 0 / unset = disabled (default). When >0,
+  // smith fires `memory_consolidate plan` every N hours against its
+  // own scope. If `consolidateAutoApply` is true, plans with actions
+  // are auto-applied; otherwise just planned + logged.
+  consolidateScheduleHours: number;
+  consolidateAutoApply: boolean;
 }
 
 function require_(name: string, value: string | undefined, fallback?: string): string {
@@ -70,6 +76,13 @@ function loadConfig(): SmithConfig {
     smithHost: require_("SMITH_HOST", process.env.SMITH_HOST, "127.0.0.1"),
     smithPort: Number(require_("SMITH_PORT", process.env.SMITH_PORT, "18099")),
     smithSecret: (process.env.SMITH_SECRET ?? "").trim(),
+    consolidateScheduleHours: Math.max(
+      0,
+      Number(process.env.CONSOLIDATE_SCHEDULE_HOURS ?? "0") || 0,
+    ),
+    consolidateAutoApply: /^(1|true|yes)$/i.test(
+      (process.env.CONSOLIDATE_AUTO_APPLY ?? "").trim(),
+    ),
   });
 }
 
