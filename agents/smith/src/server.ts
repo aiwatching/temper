@@ -121,6 +121,28 @@ let conversationId = sessionStorage.getItem("smith.convId")
   || "ui-" + Math.random().toString(36).slice(2, 10);
 sessionStorage.setItem("smith.convId", conversationId);
 
+// Bearer auth bootstrap. SMITH_SECRET may or may not be set on the
+// server. If it is, the user lands on /#secret=<value>; we extract,
+// persist to sessionStorage, and scrub the hash so it doesn't sit in
+// the address bar. From then on every fetch attaches the bearer.
+(function () {
+  const m = (location.hash || "").match(/(?:^#|&)secret=([^&]+)/);
+  if (m) {
+    sessionStorage.setItem("smith.secret", decodeURIComponent(m[1]));
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+})();
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  const s = sessionStorage.getItem("smith.secret");
+  if (s) h["Authorization"] = "Bearer " + s;
+  return h;
+}
+function promptForSecret() {
+  const s = prompt("Smith requires a bearer secret. Paste SMITH_SECRET:");
+  if (s) sessionStorage.setItem("smith.secret", s.trim());
+}
+
 function addRow(role, text, isError) {
   const row = document.createElement("div");
   row.className = "row " + role + (isError ? " err" : "");
@@ -214,7 +236,7 @@ function renderPendingApproval(parent, t) {
     try {
       const r = await fetch("/approve", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ conversationId, toolName: t.toolName, argsHash: t.argsHash }),
       });
       if (!r.ok) throw new Error("approve " + r.status);
@@ -234,7 +256,7 @@ function renderPendingApproval(parent, t) {
     try {
       await fetch("/deny", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ conversationId, toolName: t.toolName, argsHash: t.argsHash }),
       });
     } catch (_) {}
@@ -277,9 +299,15 @@ async function sendMessage() {
   try {
     const r = await fetch("/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+      headers: authHeaders({ "Content-Type": "application/json", "Accept": "text/event-stream" }),
       body: JSON.stringify({ conversationId, message: text }),
     });
+    if (r.status === 401) {
+      row.classList.add("err");
+      bubble.textContent = "Unauthorized — bearer secret missing or wrong.";
+      promptForSecret();
+      return;
+    }
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       row.classList.add("err");
@@ -385,6 +413,28 @@ msg.focus();
 
 export function buildApp(): Hono {
   const app = new Hono();
+  const cfg = getConfig();
+
+  // ---- bearer auth (A7) ----
+  // SMITH_SECRET in .env enables. Empty/unset = open (dev mode, but
+  // pair with SMITH_HOST=127.0.0.1 only). When enabled, gated routes
+  // need Authorization: Bearer <SMITH_SECRET>. /healthz + GET / and
+  // the inlined static assets stay open so monitoring + UI bootstrap
+  // both work.
+  if (cfg.smithSecret) {
+    const expected = "Bearer " + cfg.smithSecret;
+    const GATED = /^\/(?:chat|approve|deny|pending(?:\/.*)?)$/;
+    app.use(async (c, next) => {
+      if (!GATED.test(c.req.path)) return next();
+      const got = c.req.header("authorization") ?? "";
+      // Constant-time compare to deter timing-side-channel attacks
+      // even though the chance of one mattering on localhost is small.
+      if (got.length !== expected.length || got !== expected) {
+        return c.json({ error: "Unauthorized" }, 401);
+      }
+      return next();
+    });
+  }
 
   // ---- chat UI ----
   app.get("/", (c) => c.html(CHAT_HTML));

@@ -41,6 +41,12 @@ export interface SmithConfig {
   // HTTP control plane
   smithHost: string;
   smithPort: number;
+  // When set, gated routes (/chat, /approve, /deny, /pending) require
+  // `Authorization: Bearer <smithSecret>`. /healthz and the UI HTML
+  // stay open so monitoring works and the browser can bootstrap.
+  // Empty (default) = no auth (dev convenience; bind 127.0.0.1 only).
+  // Any 0.0.0.0 / public bind MUST set this.
+  smithSecret: string;
 }
 
 function require_(name: string, value: string | undefined, fallback?: string): string {
@@ -63,6 +69,7 @@ function loadConfig(): SmithConfig {
     mcpServers: (process.env.MCP_SERVERS ?? "").trim(),
     smithHost: require_("SMITH_HOST", process.env.SMITH_HOST, "127.0.0.1"),
     smithPort: Number(require_("SMITH_PORT", process.env.SMITH_PORT, "18099")),
+    smithSecret: (process.env.SMITH_SECRET ?? "").trim(),
   });
 }
 

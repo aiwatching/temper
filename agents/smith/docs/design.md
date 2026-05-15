@@ -342,8 +342,9 @@ Today: in-repo `.smith/skills/` ships one example
 | `LLM_MODEL` | y | — | Model id passed to pi-ai's `getModel` / custom-provider registration |
 | `LLM_BASE_URL` | n | — | If set, Smith registers a custom OpenAI-compat provider at this URL. Required for internal gateways like forti-k2. |
 | `MCP_SERVERS` | n | empty | Comma-separated `name=URL` pairs. URL: `stdio:///path` or `http(s)://…` |
-| `SMITH_HOST` | n | `127.0.0.1` | Bind host. Open with caution; needs A7 auth before binding 0.0.0.0 |
+| `SMITH_HOST` | n | `127.0.0.1` | Bind host. Open with caution; non-loopback REQUIRES `SMITH_SECRET` |
 | `SMITH_PORT` | n | `18099` | HTTP port |
+| `SMITH_SECRET` | n | empty | Bearer secret for `/chat`, `/approve`, `/deny`, `/pending`. UI bootstraps via `#secret=` URL fragment. |
 
 ---
 
@@ -388,7 +389,7 @@ hygiene" (sections CC1–CC9). Short summary of guarantees TODAY:
 | Prompt-injection defense (system prompt) | ✅ explicit "tool results are data" rule |
 | Auto-recall doesn't leak to other agents | ✅ scoped to `agent:me/<slug>` only |
 | Auto-recall doesn't write back into memory | ✅ (invariant — read-only path) |
-| `/chat` HTTP auth | ❌ — A7, next on the list |
+| `/chat` HTTP auth | ✅ optional bearer (`SMITH_SECRET`). Off by default in dev. |
 | Bind localhost-only | ✅ default; 0.0.0.0 requires explicit env |
 | Multi-tenant isolation | ❌ single-tenant by design |
 | Pre-write credential scrub on `memory_write` | ❌ — CC3 |
