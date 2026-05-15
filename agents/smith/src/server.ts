@@ -17,8 +17,12 @@ import { streamSSE } from "hono/streaming";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 
+import { existsSync, unlinkSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
+
 import { approvalStore, type PendingApproval } from "./approval-store.js";
 import { getConfig } from "./config.js";
+import { conversationIndex } from "./conversation-index.js";
 import { Temper, TemperError } from "./temper.js";
 import { getSessionPool } from "./session-manager.js";
 
@@ -98,7 +102,11 @@ const CHAT_HTML = `<!doctype html>
   <header>
     <h1>Smith</h1>
     <span class="meta" id="meta">…</span>
-    <button id="reset">Reset conversation</button>
+    <select id="conv-picker" title="Switch conversation"
+            style="font-size:12px;padding:3px 6px;border:1px solid #d0d7de;border-radius:4px;background:transparent;max-width:240px"></select>
+    <button id="delete-conv" title="Delete current conversation"
+            style="font-size:12px;padding:3px 8px;border:1px solid #d0d7de;border-radius:4px;background:transparent;cursor:pointer">🗑</button>
+    <button id="reset">New conversation</button>
   </header>
   <main id="log"></main>
   <footer>
@@ -402,10 +410,84 @@ reset.addEventListener("click", () => {
   conversationId = "ui-" + Math.random().toString(36).slice(2, 10);
   sessionStorage.setItem("smith.convId", conversationId);
   log.innerHTML = "";
+  refreshConversations();
+});
+
+// ---- conversation picker ----
+const picker = document.getElementById("conv-picker");
+const deleteConvBtn = document.getElementById("delete-conv");
+
+async function refreshConversations() {
+  try {
+    const r = await fetch("/conversations", { headers: authHeaders() });
+    if (!r.ok) return;
+    const j = await r.json();
+    const list = j.conversations || [];
+    // First option: current conv (which may or may not be in the index yet
+    // if the user hasn't sent a message). Then the list, deduped.
+    picker.innerHTML = "";
+    const seen = new Set();
+    const optCurrent = document.createElement("option");
+    const meEntry = list.find((c) => c.id === conversationId);
+    optCurrent.value = conversationId;
+    optCurrent.textContent = meEntry ? meEntry.title : "(current — unsaved)";
+    optCurrent.selected = true;
+    picker.appendChild(optCurrent);
+    seen.add(conversationId);
+    for (const c of list) {
+      if (seen.has(c.id)) continue;
+      const o = document.createElement("option");
+      o.value = c.id;
+      const when = c.lastUsedAt.replace("T", " ").slice(0, 16);
+      o.textContent = c.title + "  ·  " + when + "  ·  " + c.messageCount + "t";
+      picker.appendChild(o);
+      seen.add(c.id);
+    }
+  } catch (_) { /* picker is best-effort */ }
+}
+
+picker.addEventListener("change", () => {
+  const next = picker.value;
+  if (!next || next === conversationId) return;
+  conversationId = next;
+  sessionStorage.setItem("smith.convId", conversationId);
+  log.innerHTML = "";
+  // pi resumes the prior turns on the server side when the next /chat
+  // lands — the UI starts blank but the LLM has the full context.
+  const note = document.createElement("div");
+  note.style.cssText = "padding:8px 12px;color:#57606a;font-size:12px;font-style:italic;text-align:center";
+  note.textContent = "Switched to '" + next + "'. Prior turns are server-side; ask a question to continue.";
+  log.appendChild(note);
+});
+
+deleteConvBtn.addEventListener("click", async () => {
+  if (!confirm("Delete conversation '" + conversationId + "'?\\n\\n" +
+               "This wipes its JSONL on disk. Long-term TEMPER memory stays.\\n" +
+               "OK to also archive a one-line summary into TEMPER before delete? " +
+               "(Cancel = delete without archive.)")) return;
+  const archive = confirm("Archive a summary episode to TEMPER first?");
+  try {
+    const url = "/conversations/" + encodeURIComponent(conversationId) + (archive ? "?archive=true" : "");
+    const r = await fetch(url, { method: "DELETE", headers: authHeaders() });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      alert("Delete failed: " + (j.error || r.status));
+      return;
+    }
+    // Spin up a fresh conv id and clear UI
+    conversationId = "ui-" + Math.random().toString(36).slice(2, 10);
+    sessionStorage.setItem("smith.convId", conversationId);
+    log.innerHTML = "";
+    refreshConversations();
+  } catch (e) {
+    alert("Delete failed: " + e.message);
+  }
 });
 
 refreshMeta();
 setInterval(refreshMeta, 30000);
+refreshConversations();
+setInterval(refreshConversations, 60000);
 msg.focus();
 </script>
 </body>
@@ -423,7 +505,7 @@ export function buildApp(): Hono {
   // both work.
   if (cfg.smithSecret) {
     const expected = "Bearer " + cfg.smithSecret;
-    const GATED = /^\/(?:chat|approve|deny|pending(?:\/.*)?)$/;
+    const GATED = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?)$/;
     app.use(async (c, next) => {
       if (!GATED.test(c.req.path)) return next();
       const got = c.req.header("authorization") ?? "";
@@ -487,6 +569,70 @@ export function buildApp(): Hono {
   app.get("/pending/:conversationId", (c) => {
     const p = approvalStore.getPending(c.req.param("conversationId"));
     return c.json({ pending: p ?? null });
+  });
+
+  // ---- conversation index (A6) ----
+  //
+  // GET /conversations            — list newest-first (powers the UI picker)
+  // DELETE /conversations/:id     — wipe the JSONL + drop the index entry.
+  //                                  Also dispose the in-memory AgentSession
+  //                                  if it's currently in the pool, so a
+  //                                  follow-up /chat on the same id starts
+  //                                  fresh instead of resuming nothing.
+  //                                  Optional ?archive=true writes a
+  //                                  conversation-summary episode to TEMPER
+  //                                  first, so the recall-side still has
+  //                                  something to find later.
+  app.get("/conversations", (c) => {
+    return c.json({ conversations: conversationIndex.list() });
+  });
+
+  app.delete("/conversations/:id", async (c) => {
+    const id = c.req.param("id");
+    const archive = c.req.query("archive") === "true";
+    const entry = conversationIndex.get(id);
+
+    let archived: { episode_id?: string } | null = null;
+    if (archive && entry) {
+      try {
+        const t = new Temper();
+        const content =
+          `Conversation '${entry.title}' (id=${entry.id}, ` +
+          `${entry.messageCount} turns, last active ${entry.lastUsedAt}).\n\n` +
+          `First user message: ${entry.firstMessage.slice(0, 400)}`;
+        archived = (await t.write({
+          content,
+          sourceType: "text",
+          sourceDescription: "smith conversation archive",
+          tags: ["conversation-summary"],
+        })) as { episode_id?: string };
+      } catch (e) {
+        // Best-effort: archive failure doesn't block deletion. The
+        // operator may have wanted retention more than archive, so
+        // we surface the error in the response instead of 500-ing.
+        return c.json(
+          { error: `archive failed: ${(e as Error).message}`, deleted: false },
+          502,
+        );
+      }
+    }
+
+    // Drop the in-memory session so a future chat against this id
+    // doesn't try to resume from a file we're about to delete.
+    await getSessionPool().dispose(id);
+
+    // Wipe the JSONL.
+    const jsonl = resolvePath(
+      process.cwd(),
+      ".data",
+      "smith-sessions",
+      `${id}.jsonl`,
+    );
+    if (existsSync(jsonl)) {
+      try { unlinkSync(jsonl); } catch (_) { /* ignore */ }
+    }
+    conversationIndex.delete(id);
+    return c.json({ deleted: true, archived });
   });
 
   // ---- health ----
@@ -628,6 +774,7 @@ export function buildApp(): Hono {
         });
         try {
           await session.prompt(message);
+          conversationIndex.recordTurn(conversationId, message);
         } finally {
           unsubscribe();
           approvalStore.events.off("pending", onPending);
@@ -669,6 +816,7 @@ export function buildApp(): Hono {
     });
     try {
       await session.prompt(message);
+      conversationIndex.recordTurn(conversationId, message);
     } finally {
       unsubscribe();
     }
