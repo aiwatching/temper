@@ -91,7 +91,7 @@ export class MCPPlugin implements Plugin {
     });
     return {
       content: result.content,
-      isError: result.isError ?? false,
+      isError: Boolean(result.isError),
       details: { plugin: this.slug, tool: toolName, kind: "mcp" },
     };
   }

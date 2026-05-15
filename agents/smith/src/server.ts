@@ -32,6 +32,15 @@ import { getConfig } from "./config.js";
 import { conversationIndex } from "./conversation-index.js";
 import { Temper, TemperError } from "./temper.js";
 import { getSessionPool } from "./session-manager.js";
+import type { MCPConfig, PluginKind, PluginRow } from "./plugins/types.js";
+import {
+  deletePlugin,
+  getPlugin,
+  listPlugins,
+  loadSecret,
+  upsertPlugin,
+} from "./plugins/repository.js";
+import { MCPPlugin } from "./plugins/mcp.js";
 
 // ---- inline vendor + UI source ----
 //
@@ -80,6 +89,7 @@ const STYLES_CSS = readWeb("styles.css");
 const SHARED_JSX = readWeb("shared.jsx");
 const CHAT_JSX = readWeb("chat.jsx");
 const BRIEFS_JSX = readWeb("briefs.jsx");
+const PLUGINS_JSX = readWeb("plugins.jsx");
 const REACT_JS = readWeb("vendor/react.production.min.js");
 const REACT_DOM_JS = readWeb("vendor/react-dom.production.min.js");
 const BABEL_JS = readWeb("vendor/babel.min.js");
@@ -119,6 +129,7 @@ function renderPage(title: string, bodyApp: string, appJsx: string): string {
 
 const CHAT_PAGE = renderPage("Smith · Chat", "ChatApp", CHAT_JSX);
 const BRIEFS_PAGE = renderPage("Smith · Briefs", "BriefApp", BRIEFS_JSX);
+const PLUGINS_PAGE = renderPage("Smith · Plugins", "PluginsApp", PLUGINS_JSX);
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -136,11 +147,11 @@ export function buildApp(): Hono {
     // Gate the JSON / SSE API surface. POST /chat is gated; GET /chat
     // (the HTML page) is NOT — it's the bootstrap that picks up the
     // secret from the URL hash before any /approve, /deny, etc. fires.
-    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?)$/;
+    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?|plugins(?:\/.*)?)$/;
     app.use(async (c, next) => {
       if (!GATED_PATH.test(c.req.path)) return next();
-      if (c.req.method === "GET" && c.req.path === "/chat") {
-        return next();  // /chat (GET) = HTML page bootstrap, not API
+      if (c.req.method === "GET" && (c.req.path === "/chat" || c.req.path === "/plugins")) {
+        return next();  // GET HTML pages = bootstrap, not API
       }
       const got = c.req.header("authorization") ?? "";
       // Constant-time compare to deter timing-side-channel attacks
@@ -159,6 +170,7 @@ export function buildApp(): Hono {
   app.get("/", (c) => c.redirect("/chat"));
   app.get("/chat", (c) => c.html(CHAT_PAGE));
   app.get("/briefs", (c) => c.html(BRIEFS_PAGE));
+  app.get("/plugins", (c) => c.html(PLUGINS_PAGE));
 
   // ---- approval gate ----
   //
@@ -509,5 +521,217 @@ export function buildApp(): Hono {
     return c.json({ conversationId, reply, stopReason });
   });
 
+  // ---- plugins ----
+  //
+  // CRUD over the SQLite plugins registry. Secrets are write-only on
+  // the wire: PUT body can carry plaintext, GET responses never return
+  // it (only `has_secret` boolean). The /test endpoint does an
+  // out-of-process probe (instantiate + connect + listTools + dispose)
+  // without persisting — used by the UI's "Test" button before saving.
+  //
+  // Adding/removing whole plugins doesn't hot-reload pi tools (no
+  // unregisterTool); the UI tells the user to restart Smith. Toggling
+  // `enabled` / rotating secrets is hot-reload territory but lives in
+  // P4 — for now those changes also need a restart to fully take
+  // effect (the existing in-memory MCP client keeps the old config).
+  registerPluginRoutes(app);
+
   return app;
+}
+
+// --- plugin routes (extracted to keep buildApp readable) ---
+
+function rowToWire(row: PluginRow): Record<string, unknown> {
+  return {
+    slug: row.slug,
+    kind: row.kind,
+    display_name: row.display_name,
+    config: JSON.parse(row.config_json),
+    has_secret: row.secret_ref !== null,
+    enabled: row.enabled === 1,
+    last_seen_at: row.last_seen_at,
+    last_tool_count: row.last_tool_count,
+    last_error: row.last_error,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function validateUpsertBody(b: unknown): {
+  slug: string; kind: PluginKind; display_name: string;
+  config: unknown; secret?: string | null; enabled?: boolean;
+} {
+  if (typeof b !== "object" || b === null) {
+    throw new Error("body must be an object");
+  }
+  const o = b as Record<string, unknown>;
+  const slug = typeof o.slug === "string" ? o.slug.trim() : "";
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug)) {
+    throw new Error("slug must be lowercase alphanumeric + - _");
+  }
+  const kind = o.kind;
+  if (kind !== "mcp" && kind !== "http" && kind !== "shell" && kind !== "builtin") {
+    throw new Error("kind must be mcp | http | shell | builtin");
+  }
+  if (kind !== "mcp") {
+    // We promise an mcp implementation in P2; http/shell are scaffolded
+    // for future kinds but the manager doesn't instantiate them yet.
+    throw new Error(`kind '${kind}' not implemented yet (P2 ships mcp only)`);
+  }
+  const display_name = typeof o.display_name === "string" && o.display_name.trim()
+    ? o.display_name.trim() : slug;
+  const config = o.config;
+  if (typeof config !== "object" || config === null) {
+    throw new Error("config is required");
+  }
+  // MCP-specific shape sanity check.
+  const cfg = config as Record<string, unknown>;
+  if (cfg.transport !== "stdio" && cfg.transport !== "http" && cfg.transport !== "sse") {
+    throw new Error("config.transport must be stdio | http | sse");
+  }
+  if (typeof cfg.endpoint !== "string" || !cfg.endpoint.trim()) {
+    throw new Error("config.endpoint is required");
+  }
+  let secret: string | null | undefined = undefined;
+  if (o.secret === null) secret = null;
+  else if (typeof o.secret === "string") secret = o.secret;
+  const enabled = typeof o.enabled === "boolean" ? o.enabled : undefined;
+  return { slug, kind, display_name, config, secret, enabled };
+}
+
+function registerPluginRoutes(app: Hono): void {
+  // List all plugins (no secrets in response).
+  app.get("/plugins", (c) => {
+    const rows = listPlugins();
+    return c.json({ plugins: rows.map(rowToWire) });
+  });
+
+  // One plugin (no secret).
+  app.get("/plugins/:slug", (c) => {
+    const row = getPlugin(c.req.param("slug"));
+    if (!row) return c.json({ error: "not found" }, 404);
+    return c.json(rowToWire(row));
+  });
+
+  // Create.
+  app.post("/plugins", async (c) => {
+    let parsed;
+    try {
+      parsed = validateUpsertBody(await c.req.json());
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 400);
+    }
+    if (getPlugin(parsed.slug)) {
+      return c.json({ error: `plugin '${parsed.slug}' already exists; use PUT to update` }, 409);
+    }
+    const row = upsertPlugin(parsed);
+    return c.json(rowToWire(row), 201);
+  });
+
+  // Update (non-secret fields + optional secret rotation).
+  app.put("/plugins/:slug", async (c) => {
+    const slug = c.req.param("slug");
+    const existing = getPlugin(slug);
+    if (!existing) return c.json({ error: "not found" }, 404);
+    let body: Record<string, unknown>;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "body must be JSON" }, 400);
+    }
+    // Force the slug from the URL — body slug (if present) must match.
+    if (body.slug !== undefined && body.slug !== slug) {
+      return c.json({ error: "slug in body does not match URL" }, 400);
+    }
+    body.slug = slug;
+    // Fill kind / display_name from existing if omitted.
+    if (body.kind === undefined) body.kind = existing.kind;
+    if (body.display_name === undefined) body.display_name = existing.display_name;
+    if (body.config === undefined) body.config = JSON.parse(existing.config_json);
+    // secret undefined = keep existing; null = clear; string = rotate.
+    let parsed;
+    try { parsed = validateUpsertBody(body); }
+    catch (e) { return c.json({ error: (e as Error).message }, 400); }
+    const row = upsertPlugin(parsed);
+    return c.json(rowToWire(row));
+  });
+
+  // Rotate just the secret (separate endpoint so UI can have a dedicated
+  // "Rotate secret" flow that doesn't risk overwriting other config).
+  app.put("/plugins/:slug/secret", async (c) => {
+    const slug = c.req.param("slug");
+    const existing = getPlugin(slug);
+    if (!existing) return c.json({ error: "not found" }, 404);
+    let body: { secret?: string | null };
+    try { body = await c.req.json(); }
+    catch { return c.json({ error: "body must be JSON" }, 400); }
+    if (body.secret !== null && typeof body.secret !== "string") {
+      return c.json({ error: "secret must be a string or null (to clear)" }, 400);
+    }
+    upsertPlugin({
+      slug, kind: existing.kind, display_name: existing.display_name,
+      config: JSON.parse(existing.config_json),
+      secret: body.secret,
+      enabled: existing.enabled === 1,
+    });
+    return c.json({ ok: true, has_secret: body.secret !== null });
+  });
+
+  // Delete.
+  app.delete("/plugins/:slug", (c) => {
+    const ok = deletePlugin(c.req.param("slug"));
+    return ok ? c.json({ deleted: true }) : c.json({ error: "not found" }, 404);
+  });
+
+  // Test connection — instantiate a transient plugin, connect, list
+  // tools, dispose. Doesn't persist anything. Used by the UI's "Test"
+  // button BEFORE create (when no row exists yet) and FROM a row
+  // (with `?slug=<existing>` to use that row's secret without
+  // requiring the user to re-enter it).
+  app.post("/plugins/test", async (c) => {
+    let body: Record<string, unknown>;
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "body must be JSON" }, 400);
+    }
+    // If `use_secret_from` is set, look up an existing plugin's secret
+    // (so the UI doesn't need to ask the user to re-enter it for
+    // already-configured plugins).
+    let secret: string | null = null;
+    if (typeof body.use_secret_from === "string") {
+      secret = loadSecret(body.use_secret_from);
+    } else if (typeof body.secret === "string") {
+      secret = body.secret;
+    }
+    const kind = body.kind;
+    if (kind !== "mcp") {
+      return c.json({ error: `test only supports kind='mcp' (got '${kind}')` }, 400);
+    }
+    const cfg = body.config as MCPConfig | undefined;
+    if (!cfg || typeof cfg !== "object") {
+      return c.json({ error: "config is required" }, 400);
+    }
+    const probe = new MCPPlugin(
+      (typeof body.slug === "string" && body.slug) || "test-probe",
+      true,
+      cfg,
+      secret,
+    );
+    const started = Date.now();
+    try {
+      const tools = await probe.connect();
+      const ms = Date.now() - started;
+      await probe.dispose();
+      return c.json({
+        ok: true, ms, tool_count: tools.length,
+        tools: tools.map((t) => ({ name: t.name, description: t.description })),
+      });
+    } catch (e) {
+      try { await probe.dispose(); } catch { /* ignore */ }
+      return c.json({
+        ok: false, ms: Date.now() - started, error: (e as Error).message,
+      });
+    }
+  });
 }
