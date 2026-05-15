@@ -96,7 +96,13 @@
             <td class="block-value-cell">
               <pre x-text="JSON.stringify(b.block_value, null, 2)"></pre>
             </td>
-            <td><span class="scope-pill" :class="b.scope" x-text="b.scope"></span></td>
+            <td>
+              <span class="scope-pill" :class="b.scope" x-text="b.scope"></span>
+              <template x-if="b.agent_slug && b.agent_slug !== '*'">
+                <div style="font-size:10px; color:var(--muted); margin-top:2px"
+                     x-text="`agent:${b.agent_slug}`"></div>
+              </template>
+            </td>
             <td x-text="b.priority"></td>
             <td style="font-size:11px; color:var(--muted)">
               <span x-text="b.updated_at.replace('T', ' ').slice(0, 16)"></span>

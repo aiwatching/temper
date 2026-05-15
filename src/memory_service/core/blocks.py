@@ -153,12 +153,20 @@ async def list_blocks(
     elif scope == "global":
         stmt = stmt.where(MemoryBlock.agent_slug == GLOBAL_AGENT_SLUG)
     elif scope == "both":
-        # Either own or global. We dedup in Python below; can't easily
-        # express "own shadows global on key collision" in pure SQL
-        # without a window function and the result set is small.
-        stmt = stmt.where(
-            MemoryBlock.agent_slug.in_([caller_slug, GLOBAL_AGENT_SLUG])
-        )
+        # When caller is session-auth'd (no API key → no agent_slug),
+        # they're the HUMAN — they should see every block they own
+        # across every agent_slug, not just '*'. Otherwise scope='both'
+        # collapses to IN ('*','*') and agent-written blocks vanish
+        # from the admin UI even though the user is the owner.
+        #
+        # When caller has an agent_slug (API-key auth), scope='both'
+        # returns own + global only, NOT other agents' blocks — agent
+        # isolation is intentional there.
+        if caller_slug != GLOBAL_AGENT_SLUG:
+            stmt = stmt.where(
+                MemoryBlock.agent_slug.in_([caller_slug, GLOBAL_AGENT_SLUG])
+            )
+        # else: human admin — no agent_slug filter, see everything they own.
 
     if pinned is not None:
         stmt = stmt.where(MemoryBlock.pinned.is_(pinned))
