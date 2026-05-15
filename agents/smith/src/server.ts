@@ -521,6 +521,28 @@ export function buildApp(): Hono {
         try {
           await session.prompt(message);
           conversationIndex.recordTurn(conversationId, message);
+        } catch (e) {
+          const msg = (e as Error).message ?? "";
+          // pi rejects a concurrent prompt unless we pass
+          // streamingBehavior. Happens when a previous turn's stream
+          // was abandoned (browser closed mid-response, tab switch,
+          // two tabs racing) — pi keeps the old turn alive server-side
+          // and refuses the new one. "followUp" queues us behind it.
+          if (msg.includes("Agent is already processing")) {
+            console.warn(
+              `[smith] convId=${conversationId} was busy — queuing this prompt as followUp`,
+            );
+            try {
+              await session.prompt(message, { streamingBehavior: "followUp" });
+              conversationIndex.recordTurn(conversationId, message);
+            } catch (e2) {
+              errorMessage = `queued prompt failed: ${(e2 as Error).message}`;
+              stopReason = "error";
+            }
+          } else {
+            errorMessage = msg;
+            stopReason = "error";
+          }
         } finally {
           unsubscribe();
           approvalStore.events.off("pending", onPending);
