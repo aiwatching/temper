@@ -66,6 +66,17 @@ async def search(
             "'cross_encoder' (LLM-rescored, slower + token cost)."
         ),
     ] = None,
+    min_score: Annotated[
+        float | None,
+        Query(
+            ge=0.0,
+            le=1.0,
+            description="Reranker score floor — hits below this are dropped "
+            "server-side during reranking. Only meaningful with "
+            "reranker=cross_encoder (true relevance in [0,1]). For rrf the "
+            "scores are rank-based so a fixed floor has limited meaning.",
+        ),
+    ] = None,
 ) -> SearchResponse:
     ns_list: list[str] | None
     if namespaces:
@@ -88,7 +99,7 @@ async def search(
             as_of=as_of, edge_types=et, node_labels=nl,
             center_node_uuid=center,
             bfs_origin_node_uuids=bfs, bfs_max_depth=bfs_max_depth,
-            reranker=reranker,
+            reranker=reranker, min_score=min_score,
         )
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc

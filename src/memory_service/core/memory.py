@@ -524,6 +524,7 @@ async def search(
     bfs_origin_node_uuids: list[str] | None = None,
     bfs_max_depth: int = 3,
     reranker: str | None = None,
+    min_score: float | None = None,
 ) -> list[SearchHit]:
     """Search across the caller's readable namespaces.
 
@@ -631,6 +632,18 @@ async def search(
     search_filter = _type_filter(edge_types=edge_types, node_labels=node_labels)
     over_fetch = limit * 4 if as_of is not None else limit
     config.limit = over_fetch
+
+    # Push the relevance floor into Graphiti's SearchConfig — this drops
+    # below-threshold hits *during* reranking (inside graphiti_core's
+    # rrf/cross_encoder), not after they round-trip out and back. Saves
+    # the cost of computing scores for losers and keeps the response
+    # payload tight without TEMPER doing a second post-filter pass.
+    # Only meaningful with cross_encoder (true [0,1] relevance); RRF
+    # scores are rank-based and not directly comparable across queries
+    # so a fixed floor there is mostly arbitrary — Graphiti applies it
+    # anyway, the caller should know what they're asking for.
+    if min_score is not None:
+        config.reranker_min_score = min_score
 
     # FalkorDB-specific workaround:
     #

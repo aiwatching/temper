@@ -13,7 +13,9 @@ the same harness powering openclaw / harness. Smith is a TEMPER
 *client*; nothing here imports `memory_service`.
 
 > **For depth**, see:
-> - `docs/design.md` — full design / architecture / contracts / glossary
+> - `docs/smith-architecture.md` — current 3-layer architecture (Plugin / Resource / Task) on top of pi
+> - `docs/pi-architecture.md` — pi-coding-agent's ExtensionAPI surface, what it gives us, what it doesn't
+> - `docs/design.md` — earlier design notes / contracts / glossary
 > - `docs/roadmap.md` — TODO + cross-cutting concerns (security, etc.)
 > - `docs/fortinet-mcp-servers.md` — internal MCP servers Smith targets
 > - `docs/framework-comparison.md` — how we picked pi-coding-agent
