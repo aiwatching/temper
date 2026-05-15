@@ -75,6 +75,31 @@ async function runOnce(): Promise<void> {
     console.log(
       `[smith.schedule] applied ${result.applied}/${plan.counts.total} (${result.failed} failed)`,
     );
+
+    // After consolidate cleans the graph, rebuild communities so
+    // memory_search's community-kind hits stay fresh. One LLM-clustered
+    // community summarizes N related entities — denser context per
+    // recall hit than raw entity summaries, and Graphiti only writes
+    // them when this endpoint is called. Best-effort: a community
+    // build failure shouldn't roll back the consolidate that just
+    // succeeded.
+    try {
+      const comm = await t.buildCommunities(ns);
+      appendAudit({
+        kind: "schedule_communities",
+        namespace: ns,
+        communities_created: comm.communities_created,
+        community_edges_created: comm.community_edges_created,
+      });
+      console.log(
+        `[smith.schedule] communities rebuilt on ${ns}: ` +
+        `${comm.communities_created} communities, ${comm.community_edges_created} edges`,
+      );
+    } catch (e) {
+      const detail = e instanceof TemperError ? e.detail : (e as Error).message;
+      console.warn(`[smith.schedule] build_communities failed: ${detail}`);
+      appendAudit({ kind: "schedule_communities_failed", namespace: ns, error: detail });
+    }
   } catch (e) {
     const detail = e instanceof TemperError ? e.detail : (e as Error).message;
     console.warn(`[smith.schedule] tick failed: ${detail}`);

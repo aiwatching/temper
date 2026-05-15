@@ -36,11 +36,25 @@ export interface SearchArgs {
   nodeLabels?: string[];
   edgeTypes?: string[];
   asOf?: string;                 // ISO-8601
-  center?: string;
   // "rrf" (default, no LLM, rank-based scores), "mmr" (diversity),
   // "cross_encoder" (LLM-rescored, true relevance in [0,1] — comparable
   // across queries, suitable for threshold filtering).
   reranker?: "rrf" | "mmr" | "cross_encoder";
+  // Relevance floor — passed through to Graphiti's
+  // SearchConfig.reranker_min_score so server-side reranking drops
+  // below-threshold hits before they leave the search code. Only
+  // useful with reranker="cross_encoder" (true [0,1] scores). Range
+  // [0,1]; reasonable values: 0.3 (loose), 0.5 (strict).
+  minScore?: number;
+  // Graph-topology biasing. center re-ranks hits by proximity to this
+  // node UUID (Graphiti auto-swaps to node_distance reranker when rrf
+  // is used + center is set). bfsOrigins walks the graph N hops from
+  // these seed UUIDs and includes everything reached — true
+  // "associated information" retrieval, not semantic-match. Pair with
+  // bfsMaxDepth to control the radius.
+  center?: string;
+  bfsOrigins?: string[];
+  bfsMaxDepth?: number;
 }
 
 export interface SearchHit {
@@ -155,6 +169,59 @@ export interface ResummarizeResult {
   note?: string;
 }
 
+export interface BuildCommunitiesResult {
+  namespace: string;
+  communities_created: number;
+  community_edges_created: number;
+}
+
+// ─── memory_blocks ──────────────────────────────────────────────────────
+// Structured per-user key/value memory — the storage for first-person
+// assertions (nickname, preferences, daily routine) that Graphiti's
+// entity extraction is structurally bad at. See TEMPER's
+// core/blocks.py for the design rationale.
+
+export type BlockScope = "own" | "global" | "both";
+
+export interface MemoryBlock {
+  id: string;
+  user_id: string;
+  agent_slug: string;
+  block_key: string;
+  block_value: unknown;
+  pinned: boolean;
+  priority: number;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+  updated_by: string | null;
+  scope: "own" | "global";
+}
+
+export interface UpsertBlockArgs {
+  value: unknown;
+  pinned?: boolean;
+  priority?: number;
+  description?: string;
+  scope?: BlockScope;
+  agentSlug?: string;
+}
+
+export interface PatchBlockArgs {
+  value?: unknown;             // deep-merge target (JSONB)
+  pinned?: boolean;
+  priority?: number;
+  description?: string;
+  scope?: BlockScope;
+  agentSlug?: string;
+}
+
+export interface ListBlocksArgs {
+  scope?: BlockScope;          // default: "both"
+  pinned?: boolean;
+  prefix?: string;
+}
+
 export class Temper {
   private baseUrl: string;
   private apiKey: string;
@@ -222,7 +289,10 @@ export class Temper {
     if (args.edgeTypes?.length) params.edge_types = args.edgeTypes.join(",");
     if (args.asOf) params.as_of = args.asOf;
     if (args.center) params.center = args.center;
+    if (args.bfsOrigins?.length) params.bfs_origins = args.bfsOrigins.join(",");
+    if (args.bfsMaxDepth !== undefined) params.bfs_max_depth = args.bfsMaxDepth;
     if (args.reranker) params.reranker = args.reranker;
+    if (args.minScore !== undefined) params.min_score = args.minScore;
     // NOTE: TEMPER returns `facts`, not `hits`. The variable name in the
     // client API stays SearchHit because that's what callers expect to
     // see in tool output — the wire field is just where it lives.
@@ -298,6 +368,86 @@ export class Temper {
     return this.req<ResummarizeResult>(
       "POST",
       `/v1/admin/entities/${entityUuid}/resummarize`,
+    );
+  }
+
+  /** Cluster entities + rebuild community summaries for a namespace.
+   *  Communities are LLM-summarized neighborhoods — one community ≈
+   *  N entities in coverage, so memory_search picks them up as
+   *  dense, low-token recall context. Heavy operation; trigger from
+   *  a scheduled job after consolidate, not from the hot path. */
+  async buildCommunities(namespace?: string): Promise<BuildCommunitiesResult> {
+    const params: Record<string, string> = {};
+    if (namespace) params.namespace = namespace;
+    return this.req<BuildCommunitiesResult>("POST", "/v1/admin/communities/build", { params });
+  }
+
+  // ─── memory_blocks (KV memory, not Graphiti) ──────────────────────
+
+  async listMemoryBlocks(args: ListBlocksArgs = {}): Promise<MemoryBlock[]> {
+    const params: Record<string, string | boolean> = {};
+    if (args.scope) params.scope = args.scope;
+    if (args.pinned !== undefined) params.pinned = args.pinned;
+    if (args.prefix) params.prefix = args.prefix;
+    const body = await this.req<{ blocks?: MemoryBlock[] }>(
+      "GET", "/v1/memory/blocks", { params },
+    );
+    return body.blocks ?? [];
+  }
+
+  async getMemoryBlock(
+    key: string, scope: BlockScope = "own",
+  ): Promise<MemoryBlock | null> {
+    try {
+      return await this.req<MemoryBlock>(
+        "GET", `/v1/memory/blocks/${encodeURIComponent(key)}`,
+        { params: { scope } },
+      );
+    } catch (e) {
+      if (e instanceof TemperError && e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  async upsertMemoryBlock(key: string, args: UpsertBlockArgs): Promise<MemoryBlock> {
+    return this.req<MemoryBlock>(
+      "PUT", `/v1/memory/blocks/${encodeURIComponent(key)}`,
+      {
+        body: {
+          value: args.value,
+          pinned: args.pinned,
+          priority: args.priority,
+          description: args.description,
+          scope: args.scope,
+          agent_slug: args.agentSlug,
+        },
+      },
+    );
+  }
+
+  async patchMemoryBlock(key: string, args: PatchBlockArgs): Promise<MemoryBlock> {
+    return this.req<MemoryBlock>(
+      "PATCH", `/v1/memory/blocks/${encodeURIComponent(key)}`,
+      {
+        body: {
+          value: args.value,
+          pinned: args.pinned,
+          priority: args.priority,
+          description: args.description,
+          scope: args.scope,
+          agent_slug: args.agentSlug,
+        },
+      },
+    );
+  }
+
+  async deleteMemoryBlock(
+    key: string, scope: BlockScope = "own", agentSlug?: string,
+  ): Promise<void> {
+    const params: Record<string, string> = { scope };
+    if (agentSlug) params.agent_slug = agentSlug;
+    await this.req<void>(
+      "DELETE", `/v1/memory/blocks/${encodeURIComponent(key)}`, { params },
     );
   }
 

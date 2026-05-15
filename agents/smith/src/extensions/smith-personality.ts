@@ -36,9 +36,22 @@ cluster the graph, and constrain extraction with custom schemas.
 
 ═══ Tools ═══
 
-memory_search(query, limit?, as_of?, namespaces?, ...)
+memory_search(query, limit?, as_of?, namespaces?, reranker?,
+              min_score?, center?, bfs_origins?, bfs_max_depth?,
+              edge_types?, node_labels?)
     Semantic + graph search (bi-temporal aware) over TEMPER. Each hit
-    has { fact, score, valid_at, invalid_at, ... }.
+    has { fact, score, valid_at, invalid_at, id, source_node_uuid,
+    target_node_uuid, kind, namespace }.
+
+    For PRECISION queries (the auto-recall missed something and you
+    want only directly-relevant facts), pass:
+        reranker="cross_encoder", min_score=0.5
+    For ASSOCIATION queries ("what's connected to entity X"), pass:
+        bfs_origins=[<entity_uuid>], bfs_max_depth=2
+    For TYPE-FILTERED queries ("who LIVES_IN Lyon"), pass:
+        edge_types=["LIVES_IN"]   or   node_labels=["Person"]
+    For TIME-TRAVEL ("what was true last Monday"), pass:
+        as_of="<ISO>"
 
 memory_write(content, source_description?, reference_time?, tags?,
              saga?, namespace?)
@@ -47,9 +60,60 @@ memory_write(content, source_description?, reference_time?, tags?,
     (default = now). \`saga\` chains related episodes (one
     conversation / one task).
 
+memory_correct_apply(wrong_fact_uuid, corrected_content, entity_uuid?, ...)
+    User-confirmed correction of a wrong fact. Use after the user says
+    "that fact you recalled is wrong". Workflow: memory_search to find
+    the wrong fact's id + source_node_uuid → show user → call this.
+    DESTRUCTIVE — approval gate blocks the first call.
+
+memory_consolidate(mode?, namespace?) → plan_id
+memory_consolidate_apply(plan_id)
+    Dedup + cleanup. Plan is read-only; apply is destructive.
+
+remember(key, value, pinned?, description?, scope?)
+    SAVE A USER PREFERENCE / IDENTITY FACT / CURRENT STATE.
+    This is the STRUCTURED key/value memory — separate from Graphiti.
+    Use when the user makes a first-person assertion:
+        "call me X"                    → remember("preferences.nickname_for_user", "X", pinned=true)
+        "my name is X"                 → remember("persona.name", "X", pinned=true, scope="global")
+        "I'm working on bug 1234"      → remember("state.current_focus", "bug-1234")
+        "I prefer dark mode"           → remember("preferences.ui_theme", "dark")
+        "Jenkins is at https://..."    → remember("bookmark.jenkins", "https://...")
+    Pinned blocks land in your system prompt every turn — they are
+    GROUND TRUTH that beats anything in auto-recall.
+
+update_memory(key, patch)
+    Deep-merge a partial JSON into an existing block (object values only).
+
+forget(key, scope?)
+    Delete a memory block.
+
+get_memory(key, scope?)
+    Look up a single non-pinned block on demand. Pinned ones are
+    already in your system prompt; no need to fetch them.
+
 <server>__<tool>
     Bridged from internal MCP servers (Mantis, GitLab, PMDB, …).
     Use like any other tool.
+
+═══ memory_write vs remember — DECIDE CORRECTLY ═══
+
+  First-person assertion ABOUT the user themselves → remember()
+    "call me X", "I prefer Y", "I'm working on Z", "I live in W"
+    These go to the structured KV store. Stable across sessions.
+    Pinned ones surface in every system prompt.
+
+  Third-party fact about people / projects / places / events → memory_write()
+    "Sarah teaches Portuguese", "Bruno is Anna's student",
+    "we shipped feature X last quarter", "the wad-ssl-crash hit prod on T"
+    These go to Graphiti as episodes → entities + edges.
+    Graph search retrieves them.
+
+  Rule of thumb: if the subject is "I" / "me" / "the user" and the
+  predicate is a preference, identity, current state, or routine,
+  it's a remember(). If the subject is anyone or anything else, it's
+  a memory_write(). When in doubt: nicknames + preferences + focus +
+  schedule + bookmarks are ALWAYS remember().
 
 ═══ Auto-retrieved memory (Smith does this FOR you each turn) ═══
 
@@ -68,10 +132,19 @@ NEVER say "I don't know" if the answer is in there.
 If Memory recall is empty or doesn't cover the question, call
 memory_search yourself with a more specific query.
 
+  - For PRECISION on SAME-LANGUAGE queries (query and content in the
+    same language), pass reranker="cross_encoder" plus min_score=0.5.
+    Auto-recall uses RRF (default) because cross_encoder is unreliable
+    on mixed Chinese-query / English-content data — it can score the
+    correct fact 0.0 and an unrelated fact 1.0. Same-language: trust
+    cross_encoder. Cross-language: stay on RRF.
+  - For ASSOCIATION ("everything connected to entity X"), grab the
+    entity's source_node_uuid from a fact hit and call again with
+    bfs_origins=[<uuid>], bfs_max_depth=2. Pure graph walk, no
+    semantic guessing.
   - To search cross-agent (the user's flat namespace, shared across
-    every agent), pass \`namespaces=["user:me"]\` explicitly.
-  - To search this agent's scope with a different query, just call
-    memory_search(query) — same default scope as the auto-recall.
+    every agent), pass namespaces=["user:me"] explicitly. The
+    auto-recall already covers both scopes for the current turn.
 
 ═══ Mental model ═══
 
@@ -166,32 +239,85 @@ fact too (cross-agent).
     If both look current, flag the conflict to the user.
 `;
 
-// Tuning constants for auto-recall. The real precision lever is
-// RECALL_MIN_SCORE — cross_encoder produces relevance scores in [0,1]
-// that are comparable across queries, so a single threshold cleanly
-// separates "actually relevant" from "long-tail rerank noise". The
-// char caps below are backstops for the case where someone flips the
-// reranker back to rrf (rank-based scores → no useful filtering) or
-// the search returns dozens of unexpectedly-high-scored hits.
+// Tuning constants for auto-recall. The reranker choice + as_of are
+// the load-bearing precision levers; the char caps below are backstops.
+//
+// History note: an earlier version of this code used cross_encoder +
+// min_score=0.3 on the auto-recall path. On English-only data it worked
+// beautifully — relevance scores in [0,1] cleanly separated good hits
+// from noise. On mixed Chinese-query / English-content data (the actual
+// production case here) the bundled cross-encoder is multilingually
+// weak: it scored the CORRECT fact "Smith addresses the user as Heizai
+// (黑仔)" at 0.000 and the WRONG (invalidated) fact "the user wants to
+// be called heizai" at 1.000 for the query "你叫什么". RRF's BM25 +
+// cosine fusion gave the correct fact rank 1. So we're back to RRF
+// for auto-recall and surface cross_encoder as a per-call option to the
+// model via the memory_search tool (it's still useful when the query
+// and content are in the same language).
+//
+// `asOf=now` is the other load-bearing knob — Graphiti's bi-temporal
+// model knows which facts are currently valid; we pass `now` so
+// invalidated facts (e.g. ones retired via memory_correct_apply) never
+// surface in recall.
 
 const MAX_RECALL_HITS = 5;
 const MAX_SOURCE_EPISODES = 3;  // raw content cross-check, only for cited hits
 
-// Drop hits below this cross_encoder score. 0.30 chosen empirically:
-// in spot-checks, 0.50+ = clearly relevant, 0.10-0.30 = tangential,
-// 0.00-0.10 = unrelated rerank noise. 0.30 lets through "loosely
-// related" without admitting the long tail.
-const RECALL_MIN_SCORE = 0.3;
+// Per-hit text cap. Entity-kind hits carry the entity's full summary as
+// the "fact" text — those can be 500+ chars each. Collapsing to one
+// line + clipping keeps each hit a recall pointer; if the model needs
+// more, it calls memory_search itself.
+const MAX_HIT_TEXT = 280;
 
-// Backstop only — applied AFTER score filtering. Entity-summary hits
-// can still be lengthy when a single highly-relevant entity has a
-// dense summary; capping keeps one outlier from dominating the block.
-// Higher than before (was 200) because we trust the score filter now.
-const MAX_HIT_TEXT = 400;
+// Hard ceiling on the recall block. RRF doesn't give us a meaningful
+// score threshold (rank-based), so the char cap is what keeps a noisy
+// long tail from inflating the prompt.
+const MAX_RECALL_BLOCK_CHARS = 2000;
 
-// Last-resort ceiling on the whole recall block. Should rarely fire
-// once score filtering is in play; kept as defense in depth.
-const MAX_RECALL_BLOCK_CHARS = 2500;
+// ─── what auto-recall could ALSO be doing (Graphiti capabilities we ──
+// ─── currently don't use; documented so future work doesn't reinvent) ─
+//
+// 1. center_node_uuid biasing
+//    Pass the user's own entity UUID as `center` on every search. With
+//    rrf reranker Graphiti auto-swaps to NodeReranker.node_distance,
+//    boosting facts/entities connected to the user node in the graph.
+//    Needs: one-time entity-search at session start to find the "User"
+//    node UUID, cached for the session. Reasoning: a personal agent
+//    biased toward the user themselves is almost always what we want.
+//
+// 2. bfsOrigins graph walk
+//    When the agent has identified a specific entity ("tell me about
+//    Bruno"), the cleanest "associated info" call is BFS from that
+//    entity's UUID — returns every fact within N hops, structural, no
+//    semantic-match guessing. Best exposed as a separate tool like
+//    `memory_neighborhood(entity_uuid, hops=2)` rather than as an
+//    auto-recall modifier, since auto-recall doesn't know which
+//    entity to seed.
+//
+// 3. Community search
+//    `build_communities` clusters related entities and produces an
+//    LLM-summarized Community node per cluster. One community hit ≈ 5
+//    entity hits in coverage. Smith currently never triggers the build,
+//    and even if communities existed our auto-recall would treat them
+//    like any other kind hit. Two pieces missing:
+//      - Add `await temper.buildCommunities()` as a periodic job in
+//        scheduler.ts (weekly, alongside consolidate).
+//      - Optionally bias auto-recall to surface community hits first
+//        (denser info-per-token).
+//
+// 4. Edge-only recipe (EDGE_HYBRID_SEARCH_*)
+//    For "just the facts" queries we don't need entity summaries at
+//    all — those are concatenations of facts we'd see anyway. TEMPER
+//    only exposes COMBINED recipes today; adding `kind=fact` filter to
+//    /v1/search would let Smith request "edges only" and skip the
+//    entity-vs-fact dedup work entirely. Currently we work around with
+//    the dedup pass below.
+//
+// 5. node_distance + episode_mentions rerankers
+//    Same enum as rrf/mmr/cross_encoder but ranks by graph distance or
+//    appearance-frequency respectively. TEMPER's /v1/search reranker
+//    param only accepts the first three; extending it is a one-line
+//    enum widening.
 
 function _trim(text: string, n: number): string {
   if (text.length <= n) return text;
@@ -332,21 +458,31 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
         // We over-fetch (limit = MAX_RECALL_HITS * 2) so the post-hoc
         // score filter still leaves enough rows to be useful when the
         // long tail is noise.
+        // RRF reranker (Graphiti default) + asOf=now.
+        //
+        // RRF fuses BM25 + cosine ranks per kind — robust across
+        // languages, because it doesn't try to compute a single
+        // semantic similarity number across the query/content
+        // language pair the way cross_encoder does. (See the History
+        // note above the constants for why cross_encoder failed on
+        // the real Chinese↔English data here.)
+        //
+        // asOf=now excludes facts whose invalid_at has passed —
+        // corrections / invalidations from memory_correct_apply
+        // never resurface in recall.
         const nowIso = new Date().toISOString();
         const [agentHitsRaw, userHitsRaw] = await Promise.all([
           t.search({
             query: event.prompt,
-            limit: MAX_RECALL_HITS * 2,
+            limit: MAX_RECALL_HITS,
             namespaces: [ownScope],
             asOf: nowIso,
-            reranker: "cross_encoder",
           }).catch(() => [] as SearchHit[]),
           t.search({
             query: event.prompt,
-            limit: MAX_RECALL_HITS * 2,
+            limit: MAX_RECALL_HITS,
             namespaces: ["user:me"],
             asOf: nowIso,
-            reranker: "cross_encoder",
           }).catch(() => [] as SearchHit[]),
         ]);
 
@@ -362,14 +498,10 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
         //
         // We process agent-scope first so its hits win in cross-scope
         // dedup (more local = preferred).
-        // Score floor first — cuts the long tail before anything else
-        // runs. Hits without a score (older reranker fallback path)
-        // pass through, since we can't make a call on them.
-        const scoreFilter = (hits: SearchHit[]) =>
-          hits.filter((h) => h.score === undefined || h.score === null || h.score >= RECALL_MIN_SCORE);
-        const agentHitsScored = scoreFilter(agentHitsRaw).slice(0, MAX_RECALL_HITS);
-        const userHitsScored = scoreFilter(userHitsRaw).slice(0, MAX_RECALL_HITS);
-
+        // Server already dropped sub-threshold hits via Graphiti's
+        // reranker_min_score. Only need cross-scope dedup here — a fact
+        // present in both agent and user scopes should appear once,
+        // under the more-local agent scope.
         const seen = new Set<string>();
         const dedup = (hits: SearchHit[]) => {
           const out: SearchHit[] = [];
@@ -381,8 +513,8 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
           }
           return out;
         };
-        const agentHits = dedup(agentHitsScored);
-        const userHits = dedup(userHitsScored);
+        const agentHits = dedup(agentHitsRaw);
+        const userHits = dedup(userHitsRaw);
 
         // Now reduce entity-kind hits: split their multi-line summary
         // into lines, drop any line that's already in `seen` from a
@@ -446,12 +578,16 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
           }
           recallBlock = _capBlock(recallBlock) + "\n";
 
-          // Quieter log: just counts + total block size. The full hit
-          // list used to ship to stdout on every turn — useful while
-          // developing, noisy in real use and easy to dig out of the
-          // prompt itself if you need it. Set SMITH_RECALL_LOG=verbose
-          // in .env to bring it back.
-          if ((process.env.SMITH_RECALL_LOG ?? "").trim() === "verbose") {
+          // Log modes (env SMITH_RECALL_LOG):
+          //   <unset> / "quiet"   → one summary line per turn
+          //   "verbose"           → summary + per-hit score and first 80 chars
+          //   "full"              → also dump the whole recall block to stdout
+          //                         (literally what the LLM sees pasted in)
+          //   "dump"              → write the full block to
+          //                         .data/recall/<convId>-<timestamp>.txt
+          //                         so you can diff turns without scrolling.
+          const recallLog = (process.env.SMITH_RECALL_LOG ?? "").trim();
+          if (recallLog === "verbose" || recallLog === "full" || recallLog === "dump") {
             console.log(
               `[smith] auto-recall: ${agentHitsR.length} agent + ${userHitsR.length} user:me hits (after dedup) + ${sourceEps.length} source eps · ${recallBlock.length} chars for "${event.prompt.slice(0, 50)}"`,
             );
@@ -462,14 +598,85 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
             }
           } else {
             console.log(
-              `[smith] auto-recall: ${agentHitsR.length}+${userHitsR.length} hits ≥${RECALL_MIN_SCORE}, ${sourceEps.length} eps, ${recallBlock.length} chars`,
+              `[smith] auto-recall: ${agentHitsR.length}+${userHitsR.length} hits (rrf), ${sourceEps.length} eps, ${recallBlock.length} chars`,
             );
+          }
+          if (recallLog === "full") {
+            console.log("─── recall block start ───");
+            console.log(recallBlock);
+            console.log("─── recall block end ───");
+          }
+          if (recallLog === "dump") {
+            try {
+              const { mkdirSync, writeFileSync } = await import("node:fs");
+              const { resolve: resolvePath } = await import("node:path");
+              const dir = resolvePath(process.cwd(), ".data", "recall");
+              mkdirSync(dir, { recursive: true });
+              const ts = new Date().toISOString().replace(/[:.]/g, "-");
+              const file = resolvePath(dir, `${ts}.txt`);
+              writeFileSync(
+                file,
+                `# Query: ${event.prompt}\n# Recall block (${recallBlock.length} chars)\n\n${recallBlock}\n`,
+              );
+              console.log(`[smith] recall block written → ${file}`);
+            } catch (e) {
+              console.warn(`[smith] recall dump failed: ${(e as Error).message}`);
+            }
           }
         }
       } catch (e) {
         console.warn(`[smith] auto-recall failed: ${(e as Error).message} — proceeding without it`);
       }
-      return { systemPrompt: SMITH_BASE_PROMPT + recallBlock };
+
+      // Pinned memory_blocks — separate from auto-recall, fetched
+      // every turn. These are the direct user assertions ("call me
+      // X", "I'm working on Y") that Graphiti can't reliably model.
+      // Best-effort: a blocks fetch failure shouldn't kill the chat.
+      let blocksBlock = "";
+      try {
+        const t = getTemper();
+        const blocks = await t.listMemoryBlocks({ pinned: true, scope: "both" });
+        if (blocks.length > 0) {
+          // Stable sort: priority desc, then scope (own before global),
+          // then key. The server already orders by priority desc / key,
+          // but we re-stabilize after the "both" merge.
+          blocks.sort((a, b) => {
+            if (b.priority !== a.priority) return b.priority - a.priority;
+            if (a.scope !== b.scope) return a.scope === "own" ? -1 : 1;
+            return a.block_key.localeCompare(b.block_key);
+          });
+          const lines: string[] = [
+            "\n═══ Pinned memory (user-asserted preferences, ground truth) ═══\n",
+            "These are direct assertions the user made. Treat as ABSOLUTE —",
+            "the user said exactly this, never paraphrase the meaning away.",
+            "If a pinned block conflicts with an auto-recall hit, the pinned",
+            "block wins (it's an explicit declaration; recall is inferred).\n",
+          ];
+          for (const b of blocks) {
+            const scopeTag = b.scope === "own" ? "" : " [global]";
+            const desc = b.description ? `  — ${b.description}` : "";
+            const value =
+              typeof b.block_value === "string"
+                ? `"${b.block_value}"`
+                : JSON.stringify(b.block_value);
+            lines.push(`  ${b.block_key}${scopeTag} = ${value}${desc}`);
+          }
+          lines.push(
+            "\nUse `remember(key, value, pinned=true)` to add to this list, " +
+            "`update_memory(key, patch)` to modify, `forget(key)` to remove.\n",
+          );
+          blocksBlock = lines.join("\n");
+          console.log(
+            `[smith] pinned-blocks: ${blocks.length} blocks · ${blocksBlock.length} chars`,
+          );
+        }
+      } catch (e) {
+        console.warn(
+          `[smith] pinned-blocks fetch failed: ${(e as Error).message} — proceeding without them`,
+        );
+      }
+
+      return { systemPrompt: SMITH_BASE_PROMPT + blocksBlock + recallBlock };
     },
   );
 }

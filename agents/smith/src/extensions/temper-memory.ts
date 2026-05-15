@@ -28,15 +28,35 @@ export function temperMemoryExtension(pi: PiExtensionAPI): void {
   const temper = new Temper();
 
   // ---- memory_search ----
+  //
+  // Exposes most of TEMPER's search precision knobs to the model. Smith's
+  // own before_agent_start hook already runs a high-precision auto-recall
+  // (cross_encoder + min_score=0.3) and pastes hits into the prompt — so
+  // the model only calls THIS tool when it needs something the auto-recall
+  // missed. Common patterns the model should pick:
+  //
+  //   - "tell me more about X" right after recall surfaced X →
+  //       memory_search(query="X", reranker="cross_encoder", min_score=0.5)
+  //       for precision; or center=<X's uuid> to bias by graph distance.
+  //   - "give me everything connected to entity X" →
+  //       memory_search(query=..., bfs_origins=[<uuid>], bfs_max_depth=2)
+  //       structural recall, not semantic guessing.
+  //   - "as of <past date>" → as_of=<ISO>.
+  //   - schema-typed queries ("who LIVES_IN Lyon?") →
+  //       edge_types=["LIVES_IN"] / node_labels=["Person","Place"].
   pi.registerTool({
     name: "memory_search",
     label: "Search memory",
     description:
       "Semantic search over the user's long-term memory in TEMPER. Call " +
-      "this at task start, when the user references prior context " +
-      "(\"as I mentioned\", \"last time\"), or before answering anything " +
-      "personal. Hits include fact, valid_at, invalid_at, score — surface " +
-      "only the top 1–3 paraphrased.",
+      "this when the auto-recall block at the top of your system prompt " +
+      "didn't cover the question — the auto-recall already runs a " +
+      "high-precision cross_encoder pass for every turn. Use this tool " +
+      "when you need a more specific query, a tighter score threshold, " +
+      "graph-topology biasing (center / bfs_origins), or type-filtered " +
+      "results. Hits include fact, score, valid_at, invalid_at, id, " +
+      "source_node_uuid, target_node_uuid — surface only the top 1–3 " +
+      "paraphrased.",
     parameters: Type.Object({
       query: Type.String({
         description: "Free-text search terms — keywords or a short question.",
@@ -54,26 +74,116 @@ export function temperMemoryExtension(pi: PiExtensionAPI): void {
           format: "date-time",
           description:
             "ISO-8601 instant. Returns facts that were active at that time " +
-            "(handles 'what was true last week?' questions).",
+            "(handles 'what was true last week?' questions). Defaults to " +
+            "'now' on the server when you pass reranker=cross_encoder, " +
+            "so retired/invalidated facts get filtered automatically.",
         }),
       ),
       namespaces: Type.Optional(
         Type.Array(Type.String(), {
           description:
             "Restrict scope. Omit to use your default agent namespace + " +
-            "cross-agent recall (recommended).",
+            "cross-agent recall. Pass ['user:me'] for the user's flat " +
+            "cross-agent namespace; ['agent:me/<slug>'] for a specific " +
+            "agent's private memory.",
+        }),
+      ),
+      reranker: Type.Optional(
+        Type.Union(
+          [Type.Literal("rrf"), Type.Literal("mmr"), Type.Literal("cross_encoder")],
+          {
+            default: "rrf",
+            description:
+              "Ranking strategy. 'rrf' (default) is fast and free — good " +
+              "for browse-style queries. 'cross_encoder' costs one LLM " +
+              "call but gives true relevance in [0,1] — required if you " +
+              "want to pair with min_score. 'mmr' optimizes for diversity " +
+              "(less redundant hits).",
+          },
+        ),
+      ),
+      min_score: Type.Optional(
+        Type.Number({
+          minimum: 0,
+          maximum: 1,
+          description:
+            "Relevance floor [0,1] — only meaningful with " +
+            "reranker='cross_encoder'. Suggested values: 0.3 loose, " +
+            "0.5 strict. Server-side filter; below-threshold hits are " +
+            "dropped during reranking and never returned.",
+        }),
+      ),
+      center: Type.Optional(
+        Type.String({
+          description:
+            "Node UUID to bias ranking around. Facts/entities closer to " +
+            "this node in the graph score higher. Pair with reranker " +
+            "omitted (auto-swaps to node_distance) when you want " +
+            "graph-topology recall (e.g. 'related to the User entity').",
+        }),
+      ),
+      bfs_origins: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Seed entity UUIDs for a BFS walk. Returns every fact/entity " +
+            "reachable within bfs_max_depth hops — true 'associated " +
+            "information' retrieval, not semantic match. Use when the " +
+            "user asks about a specific named entity and you want its " +
+            "neighborhood, not a fuzzy keyword search.",
+        }),
+      ),
+      bfs_max_depth: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: 5,
+          default: 2,
+          description: "BFS hop limit. Default 2; rarely useful past 3.",
+        }),
+      ),
+      edge_types: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Restrict to relations with these names (e.g. ['LIVES_IN', " +
+            "'TEACHES']). Cheap server-side filter — use when the query " +
+            "type is known.",
+        }),
+      ),
+      node_labels: Type.Optional(
+        Type.Array(Type.String(), {
+          description:
+            "Restrict entity hits to these labels (e.g. ['Person', " +
+            "'Place']). Cheap server-side filter.",
         }),
       ),
     }),
     async execute(
       _toolCallId: string,
-      params: { query: string; limit?: number; as_of?: string; namespaces?: string[] },
+      params: {
+        query: string;
+        limit?: number;
+        as_of?: string;
+        namespaces?: string[];
+        reranker?: "rrf" | "mmr" | "cross_encoder";
+        min_score?: number;
+        center?: string;
+        bfs_origins?: string[];
+        bfs_max_depth?: number;
+        edge_types?: string[];
+        node_labels?: string[];
+      },
     ) {
       const hits = await temper.search({
         query: params.query,
         limit: params.limit,
         asOf: params.as_of,
         namespaces: params.namespaces,
+        reranker: params.reranker,
+        minScore: params.min_score,
+        center: params.center,
+        bfsOrigins: params.bfs_origins,
+        bfsMaxDepth: params.bfs_max_depth,
+        edgeTypes: params.edge_types,
+        nodeLabels: params.node_labels,
       });
       return {
         content: [
@@ -444,6 +554,226 @@ export function temperMemoryExtension(pi: PiExtensionAPI): void {
       return {
         content: [{ type: "text", text: steps.join("\n") }],
         details,
+      };
+    },
+  });
+
+  // ─── memory_blocks (KV memory, NOT Graphiti) ────────────────────────
+  //
+  // The class of memory Graphiti is bad at: first-person assertions about
+  // self / preferences / current state. Each block is a JSONB value under
+  // a string key, optionally pinned (auto-included in system prompt).
+  //
+  // When to use what:
+  //   "Call me X" / "I prefer Y" / "I'm working on Z" → remember(...)
+  //   "Sarah teaches Portuguese" / "Bruno is Anna's student"  → memory_write(...)
+  //   "What was true at <past time>"                          → memory_search(as_of=...)
+
+  // ---- remember ----
+  pi.registerTool({
+    name: "remember",
+    label: "Remember a user preference / state (KV memory)",
+    description:
+      "Save a structured key/value memory block. Use for first-person " +
+      "assertions: nicknames, preferences, current focus, daily routine, " +
+      "external bookmarks. NOT for third-party facts (use memory_write " +
+      "for those). Set pinned=true if the user wants you to always know " +
+      "this every turn (e.g. 'call me X', 'always greet me with Y'). " +
+      "The block replaces any prior value at the same key — no merge.",
+    parameters: Type.Object({
+      key: Type.String({
+        minLength: 1,
+        description:
+          "Dot-prefixed key. Convention: 'preferences.X' for likes/dislikes, " +
+          "'persona.X' for identity facts, 'state.X' for current working " +
+          "context, 'routine.X' for recurring patterns, 'bookmark.X' for " +
+          "external links. Anything else is fine — caller picks.",
+      }),
+      value: Type.Any({
+        description: "Block value. Any JSON shape. Replaces existing value.",
+      }),
+      pinned: Type.Optional(
+        Type.Boolean({
+          default: false,
+          description:
+            "true = auto-injected into the system prompt every turn. " +
+            "Use sparingly — pinned content costs prompt tokens on " +
+            "every call. Default false.",
+        }),
+      ),
+      description: Type.Optional(
+        Type.String({
+          description:
+            "One-liner shown to you on read so the block is self-documenting.",
+        }),
+      ),
+      scope: Type.Optional(
+        Type.Union(
+          [Type.Literal("own"), Type.Literal("global")],
+          {
+            default: "own",
+            description:
+              "'own' (default) = visible only to this agent (Smith). " +
+              "'global' = every agent under this user sees it. Use " +
+              "'global' for cross-agent identity facts like the user's name.",
+          },
+        ),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: {
+        key: string;
+        value: unknown;
+        pinned?: boolean;
+        description?: string;
+        scope?: "own" | "global";
+      },
+    ) {
+      const block = await temper.upsertMemoryBlock(params.key, {
+        value: params.value,
+        pinned: params.pinned,
+        description: params.description,
+        scope: params.scope ?? "own",
+      });
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `Remembered '${block.block_key}' = ${JSON.stringify(block.block_value)} ` +
+              `(scope=${block.scope}, pinned=${block.pinned})`,
+          },
+        ],
+        details: { key: block.block_key, scope: block.scope, pinned: block.pinned },
+      };
+    },
+  });
+
+  // ---- update_memory (deep JSONB merge) ----
+  pi.registerTool({
+    name: "update_memory",
+    label: "Patch a memory block (deep merge)",
+    description:
+      "Deep-merge a partial JSON value into an existing memory block. " +
+      "Use when adding/changing one field on a block whose value is an " +
+      "object (e.g. preferences.drinks already exists as " +
+      "{prefers: 'americano'}; add {avoids: ['latte']} via update_memory). " +
+      "Lists and scalars are REPLACED, not appended.",
+    parameters: Type.Object({
+      key: Type.String({ minLength: 1 }),
+      patch: Type.Any({
+        description: "Partial JSON to deep-merge into the existing value.",
+      }),
+      scope: Type.Optional(
+        Type.Union(
+          [Type.Literal("own"), Type.Literal("global")],
+          { default: "own" },
+        ),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { key: string; patch: unknown; scope?: "own" | "global" },
+    ) {
+      try {
+        const block = await temper.patchMemoryBlock(params.key, {
+          value: params.patch,
+          scope: params.scope ?? "own",
+        });
+        return {
+          content: [{
+            type: "text",
+            text: `Updated '${block.block_key}' = ${JSON.stringify(block.block_value)}`,
+          }],
+          details: { key: block.block_key },
+        };
+      } catch (e) {
+        const msg = e instanceof TemperError ? e.detail : (e as Error).message;
+        return {
+          content: [{ type: "text", text: `update_memory failed: ${msg}` }],
+          details: { error: msg },
+        };
+      }
+    },
+  });
+
+  // ---- forget ----
+  pi.registerTool({
+    name: "forget",
+    label: "Forget (delete) a memory block",
+    description:
+      "Delete a memory block by key. Use when the user explicitly says " +
+      "'forget X' or asks to remove a preference. Not for invalidating " +
+      "facts (use memory_correct_apply for Graphiti facts).",
+    parameters: Type.Object({
+      key: Type.String({ minLength: 1 }),
+      scope: Type.Optional(
+        Type.Union(
+          [Type.Literal("own"), Type.Literal("global")],
+          { default: "own" },
+        ),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { key: string; scope?: "own" | "global" },
+    ) {
+      try {
+        await temper.deleteMemoryBlock(params.key, params.scope ?? "own");
+        return {
+          content: [{ type: "text", text: `Forgot '${params.key}'.` }],
+          details: { key: params.key },
+        };
+      } catch (e) {
+        const msg = e instanceof TemperError ? e.detail : (e as Error).message;
+        return {
+          content: [{ type: "text", text: `forget failed: ${msg}` }],
+          details: { error: msg },
+        };
+      }
+    },
+  });
+
+  // ---- get_memory ----
+  pi.registerTool({
+    name: "get_memory",
+    label: "Fetch a memory block by key",
+    description:
+      "Look up a single memory block. Pinned blocks are already in your " +
+      "system prompt every turn — only call this for non-pinned blocks " +
+      "you actually need to read on demand (e.g. a bookmark URL). " +
+      "Returns null if not found.",
+    parameters: Type.Object({
+      key: Type.String({ minLength: 1 }),
+      scope: Type.Optional(
+        Type.Union(
+          [Type.Literal("own"), Type.Literal("global")],
+          {
+            default: "own",
+            description:
+              "'own' falls back to 'global' if not found in own scope.",
+          },
+        ),
+      ),
+    }),
+    async execute(
+      _toolCallId: string,
+      params: { key: string; scope?: "own" | "global" },
+    ) {
+      const block = await temper.getMemoryBlock(params.key, params.scope ?? "own");
+      if (block === null) {
+        return {
+          content: [{ type: "text", text: `(no block named '${params.key}')` }],
+          details: { found: false },
+        };
+      }
+      return {
+        content: [{
+          type: "text",
+          text: JSON.stringify(block, null, 2),
+        }],
+        details: { found: true, key: block.block_key, scope: block.scope },
       };
     },
   });
