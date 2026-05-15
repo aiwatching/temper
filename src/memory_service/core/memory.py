@@ -52,6 +52,12 @@ class InvalidRequestError(MemoryError):
     http_status = 400
 
 
+class NamespaceSleepingError(MemoryError):
+    """Raised when a read/write hits a namespace currently being
+    consolidated. Maps to HTTP 423 Locked at the API edge."""
+    http_status = 423
+
+
 @dataclass
 class WriteRequest:
     namespace: str
@@ -237,6 +243,8 @@ async def add_episode(
         raise InvalidRequestError(str(exc)) from exc
     if not await can_write(user, ns, db):
         raise PermissionDeniedError(_write_denied_hint(user, ns))
+    from memory_service.core.consolidation import assert_namespace_unlocked
+    assert_namespace_unlocked(ns)
 
     client = _require_client()
     reference_time = req.reference_time or datetime.now(UTC)
@@ -436,6 +444,8 @@ async def add_episodes_bulk(
         raise InvalidRequestError(str(exc)) from exc
     if not await can_write(user, ns, db):
         raise PermissionDeniedError(_write_denied_hint(user, ns))
+    from memory_service.core.consolidation import assert_namespace_unlocked
+    assert_namespace_unlocked(ns)
 
     client = _require_client()
     from graphiti_core.utils.bulk_utils import RawEpisode
@@ -539,6 +549,15 @@ async def search(
             )
     else:
         readable = await readable_namespaces_for(user, db)
+
+    # Reject the search outright if ANY of the namespaces we'd hit is
+    # currently sleeping under consolidation. Conservative: an apply
+    # in flight could be midway through merging facts, and a read at
+    # that moment returns inconsistent state.
+    from memory_service.core.consolidation import assert_namespace_unlocked
+
+    for n in readable:
+        assert_namespace_unlocked(n)
 
     # Build encoded→raw lookup so we can return the API-surface namespace
     # ("user:<uuid>") instead of the Graphiti-internal group_id ("user__...").
@@ -882,6 +901,8 @@ async def get_episode(user: User, episode_id: str, db: AsyncSession) -> dict[str
     if not await can_read(user, ns, db):
         # Don't leak existence to unprivileged callers — 404 not 403.
         raise NotFoundError(f"Episode {episode_id} not found")
+    from memory_service.core.consolidation import assert_namespace_unlocked
+    assert_namespace_unlocked(ns)
 
     # In sync writes graphiti_episode_id == id; in async writes it's
     # whatever Graphiti assigned during the background extraction. If
@@ -1267,6 +1288,8 @@ async def set_fact_invalid_at(
         raise PermissionDeniedError(
             f"User '{user.email}' cannot modify facts in namespace '{ns.raw}'"
         )
+    from memory_service.core.consolidation import assert_namespace_unlocked
+    assert_namespace_unlocked(ns)
     edge.invalid_at = invalid_at
     try:
         await edge.save(driver)
@@ -1292,6 +1315,8 @@ async def delete_fact(user: User, edge_uuid: str, db: AsyncSession) -> bool:
         raise PermissionDeniedError(
             f"User '{user.email}' cannot modify facts in namespace '{ns.raw}'"
         )
+    from memory_service.core.consolidation import assert_namespace_unlocked
+    assert_namespace_unlocked(ns)
     try:
         await edge.delete(driver)
     except Exception as exc:
@@ -1356,6 +1381,8 @@ async def list_episodes(
     """Returns (rows, next_cursor). Cursor is the created_at of the last row."""
     stmt = select(EpisodeMetadata).order_by(EpisodeMetadata.created_at.desc())
 
+    from memory_service.core.consolidation import assert_namespace_unlocked
+
     if namespace:
         try:
             ns = resolve(namespace, user)
@@ -1365,9 +1392,12 @@ async def list_episodes(
             raise PermissionDeniedError(
                 f"User '{user.email}' cannot read namespace '{ns.raw}'"
             )
+        assert_namespace_unlocked(ns)
         stmt = stmt.where(EpisodeMetadata.namespace == ns.raw)
     else:
         readable = await readable_namespaces_for(user, db)
+        for n in readable:
+            assert_namespace_unlocked(n)
         stmt = stmt.where(EpisodeMetadata.namespace.in_([n.raw for n in readable]))
 
     if before_cursor is not None:
@@ -1391,6 +1421,9 @@ async def delete_episode(user: User, episode_id: str, db: AsyncSession) -> None:
     # arrives with Phase 1.3/1.4.)
     if not user.is_super_admin and meta.created_by_user_id != user.id:
         raise NotFoundError(f"Episode {episode_id} not found")
+
+    from memory_service.core.consolidation import assert_namespace_unlocked
+    assert_namespace_unlocked(meta.namespace)
 
     graphiti_id = meta.graphiti_episode_id
     if graphiti_id is not None:
