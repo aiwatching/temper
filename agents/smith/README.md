@@ -75,14 +75,52 @@ curl -X POST http://127.0.0.1:18099/chat \
 
 ## What it does today
 
-- `POST /chat` — single turn. Body `{message, conversationId?}`. Returns the
-  assistant's final text. `conversationId` defaults to `"default"`. SSE
-  streaming TBD.
+- `GET /` — browser chat UI: markdown-rendered replies, streaming
+  token-by-token via SSE, tool calls surface as inline pills,
+  reasoning models' thinking blocks render as a collapsed `<details>`.
+- `POST /chat` — single turn. Body `{message, conversationId?}`.
+  Content negotiates on the Accept header:
+    - `Accept: text/event-stream` → SSE: `delta` / `thinking` /
+      `tool_start` / `tool_end` / `error` / `done` events
+    - default → single JSON `{reply, stopReason}`
+  Conversations persist as JSONL in `.data/smith-sessions/<id>.jsonl`
+  and resume across restart.
 - `GET /healthz` — pings Temper + echoes whoami + counts active sessions.
 - `memory_search` / `memory_write` tools wired against TEMPER's HTTP API.
-- `MCP_SERVERS` env-var driven MCP bridge — declares servers as
-  `name=stdio:///path/to/binary` or `name=http(s)://host/mcp`, listed
-  tools get registered as `<name>__<tool>` on the pi side.
+  Auto-recall runs every turn against `agent:me/<slug>` only (per-agent
+  isolation; user:me is opt-in via explicit `memory_search`).
+- **Skills** under `.smith/skills/*.md` — markdown bundles the LLM
+  loads on demand. See `.smith/skills/example-mantis-bug-format.md`
+  for the format.
+- **Prompt templates** under `.smith/prompts/*.md` — slash commands
+  the user can trigger (e.g. `/standup`). See `.smith/prompts/standup.md`.
+- `MCP_SERVERS` env-var driven MCP bridge (still WIP for `npx -y <pkg>`-style
+  packages).
+
+### Skill & prompt-template format
+
+Every `.md` file under `.smith/skills/` or `.smith/prompts/` opens
+with YAML frontmatter pi parses:
+
+```yaml
+---
+name: short-stable-id          # required, used in references
+description: |                 # required for skills, optional for prompts
+  Sentence that tells the LLM when to load this skill. Be concrete —
+  "load when the user is drafting a bug report" beats "use sometimes".
+---
+```
+
+Below the frontmatter is freeform Markdown. The LLM reads the
+description in every turn and decides whether to "open" the skill
+based on the description's match against what it needs to do.
+
+Prompt templates work the same way but are invoked by name with
+`/<name>` in the user's message; pi expands the body in place.
+
+We ship two examples in the repo as templates / sanity checks; real
+team-curated content will live in a separate npm package
+(`@fortinet/smith-skills`, planned per `docs/roadmap.md` §B6).
 
 ## What's deferred
 

@@ -142,9 +142,22 @@ class SmithSessionPool {
       );
     }
 
+    // Skills + prompt templates live under <cwd>/.smith/. Drop a .md
+    // there with frontmatter and pi auto-loads it. See
+    // .smith/skills/example.md for the shape. The directory ships
+    // with the repo; teams can layer their own bundle on top
+    // (planned: `@fortinet/smith-skills` npm package — roadmap B6).
+    const smithRoot = resolvePath(process.cwd(), ".smith");
+    const skillsPath = resolvePath(smithRoot, "skills");
+    const promptsPath = resolvePath(smithRoot, "prompts");
+    mkdirSync(skillsPath, { recursive: true });
+    mkdirSync(promptsPath, { recursive: true });
+
     const resourceLoader = new DefaultResourceLoader({
       cwd: process.cwd(),
       agentDir: process.cwd(),                  // we don't ship ~/.pi-style assets
+      additionalSkillPaths: [skillsPath],
+      additionalPromptTemplatePaths: [promptsPath],
       extensionFactories: [
         // Order matters: temper-memory must be available even if MCP
         // setup fails partway through. Personality goes first so the
