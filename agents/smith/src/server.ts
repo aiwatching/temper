@@ -170,7 +170,11 @@ export function buildApp(): Hono {
   app.get("/", (c) => c.redirect("/chat"));
   app.get("/chat", (c) => c.html(CHAT_PAGE));
   app.get("/briefs", (c) => c.html(BRIEFS_PAGE));
-  app.get("/plugins", (c) => c.html(PLUGINS_PAGE));
+  // /plugins is a dual route: HTML page for browser navigation,
+  // JSON list for fetch() calls. The /plugins JSON handler in
+  // registerPluginRoutes() does the Accept-header check (browser
+  // navigates with text/html → page; fetch() defaults / explicit
+  // application/json → list).
 
   // ---- approval gate ----
   //
@@ -600,8 +604,17 @@ function validateUpsertBody(b: unknown): {
 }
 
 function registerPluginRoutes(app: Hono): void {
-  // List all plugins (no secrets in response).
+  // GET /plugins is dual-purpose: browser navigation gets the HTML
+  // page (PLUGINS_PAGE) so plugins.jsx can boot; everything else
+  // (fetch() from that same page, curl, memctl) gets the JSON list.
+  // We split on Accept header because both surfaces want the same
+  // URL — moving JSON under /api/plugins would work too but creates
+  // unnecessary churn for the few callers we have.
   app.get("/plugins", (c) => {
+    const accept = c.req.header("accept") ?? "";
+    if (accept.includes("text/html")) {
+      return c.html(PLUGINS_PAGE);
+    }
     const rows = listPlugins();
     return c.json({ plugins: rows.map(rowToWire) });
   });

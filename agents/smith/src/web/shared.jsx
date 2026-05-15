@@ -36,6 +36,11 @@ async function api(path, opts = {}) {
   const r = await fetch(path, {
     ...opts,
     headers: authHeaders({
+      // Explicit Accept so the server can content-negotiate. Some
+      // routes (notably /plugins) double as HTML pages — without
+      // this, fetch's default `*/*` would let the HTML page handler
+      // win and we'd parse <!doctype …> as JSON.
+      "Accept": "application/json",
       ...(opts.body ? { "Content-Type": "application/json" } : {}),
       ...(opts.headers || {}),
     }),
