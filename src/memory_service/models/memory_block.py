@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -21,6 +21,13 @@ from memory_service.models._base import Base, TimestampMixin, UUIDPKMixin
 
 
 GLOBAL_AGENT_SLUG = "*"
+
+# Portable JSON column: JSONB on Postgres (indexable, jsonb-specific
+# operators if we ever need them), generic JSON on SQLite / other
+# dialects. We don't currently use any JSONB-only SQL ops — the deep
+# merge in core/blocks.py is Python-side — so the SQLite fallback is
+# functionally equivalent.
+JSONColumn = JSON().with_variant(JSONB(), "postgresql")
 
 
 class MemoryBlock(Base, UUIDPKMixin, TimestampMixin):
@@ -39,8 +46,8 @@ class MemoryBlock(Base, UUIDPKMixin, TimestampMixin):
         index=True,
     )
     block_key: Mapped[str] = mapped_column(String(255))
-    # JSONB. Caller decides shape — service treats as opaque.
-    block_value: Mapped[Any] = mapped_column(JSONB)
+    # JSON. Caller decides shape — service treats as opaque.
+    block_value: Mapped[Any] = mapped_column(JSONColumn)
 
     # Defaulted fields come after.
     # '*' sentinel = global block, visible to every agent under this user.
