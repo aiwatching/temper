@@ -1,288 +1,368 @@
-# Memory frameworks — mem0 vs graphiti
+# Memory frameworks — mem0 vs graphiti (deep dive)
 
-Recap of the decision that picked graphiti for TEMPER, and an
-honest re-look in light of the forge pivot to a browser-extension
-data-source model.
+Two redos of this document:
 
-> Status 2026-05-16: TEMPER is on graphiti. This doc exists to
-> serve as the source-of-truth comparison and revisit whether
-> forge should adopt the same stack or pick differently.
+> v1 (earlier 2026-05-16): misread the new agent's use case as
+> "indexing web page dumps". Recommended mem0 / pgvector for it.
+> THAT WAS WRONG.
+>
+> v2 (this doc): the chrome-extension agent has the **same use
+> case as Smith** — enterprise employee memory (decisions, people,
+> projects, tasks). It just delivers as a browser extension
+> instead of an HTTP service, and ingests browser-native data
+> (Gmail, Calendar, internal pages) instead of MCP. The memory
+> shape doesn't change. graphiti is still the right call.
+
+Below: the deep comparison, why graphiti wins for this shape, and
+exactly where mem0 would lose.
 
 ---
 
-## At a glance
+## 1. The use case (corrected)
 
-| Dimension                | mem0                          | graphiti                                    |
+The agent is a personal **enterprise-employee memory** for one
+user. Concretely it needs to answer:
+
+| Query                                      | What's needed under the hood |
+|---|---|
+| "Who's working on the auth refactor"       | Person → WORKING_ON → Project, graph walk |
+| "What did we decide about JWT vs session"  | Decision episode, fact edge with valid_at |
+| "Has Sarah replied to my Friday thread"    | Entity-filter + temporal query |
+| "What's the status of bug 12483"           | Project state with bi-temporal updates |
+| "Who reports to David"                     | Person → REPORTS_TO → Person, graph walk |
+| "When did Bob switch from team A to B"     | Bi-temporal: A.invalid_at = T, B.valid_at = T |
+| "Show me everything about FortiNAC project"| Entity-centric BFS, multiple hops |
+| "What was true about X last quarter"       | as_of = <past date>, return facts valid then |
+
+This is **all entity-relation reasoning over time**. None of it is
+"vector search through a pile of blobs". The use case has not
+changed just because the host moved from a standalone server to a
+chrome extension.
+
+What HAS changed about the delivery:
+
+- **Ingest source**: was MCP servers (Mantis, GitLab, Outlook).
+  Now Chrome (Gmail API, Calendar API, page DOM scraping for
+  internal Confluence / Jira / etc).
+- **Auth**: was per-MCP-server (painful, unstable). Now per-Google /
+  per-OAuth at user level (browser handles it).
+- **Network topology**: extension → TEMPER over HTTP. No MCP
+  middleware.
+- **Loop placement**: TBD — agent loop in extension JS or
+  delegated to cloud LLM service.
+
+None of that changes the memory backend choice.
+
+---
+
+## 2. Deep comparison
+
+### 2.1 The fundamental difference: what is "a memory"
+
+**mem0** treats memory as **classified text**:
+
+```
+input:  "Sarah said in standup that Bob needs to ship auth by Friday"
+↓ LLM classify
+memories: [
+  "Sarah said Bob needs to ship auth by Friday",
+  "Auth deadline is Friday",
+  "Bob is working on auth"
+]
+↓ embed each, store in pgvector with metadata { user_id, ts }
+```
+
+3 blobs, each with an embedding + timestamp + user. To find "what
+auth deadline?" → cosine similarity over the query. The connection
+"Bob → auth → Friday" is **implicit in the text** of memory blob #1.
+
+**graphiti** treats memory as **entities + relations + temporal
+facts**:
+
+```
+input:  "Sarah said in standup that Bob needs to ship auth by Friday"
+↓ LLM extract
+entities: Sarah(Person), Bob(Person), AuthProject(Project),
+           StandupMeeting(Event)
+edges:    Sarah ATTENDED StandupMeeting (valid_at=now, source=ep1)
+          Bob OWNS AuthProject (valid_at=now, source=ep1)
+          AuthProject HAS_DEADLINE "Friday" (valid_at=now, source=ep1)
+↓ persist as graph nodes + edges with bi-temporal validity
+```
+
+Same input, structurally decomposed. "What auth deadline?" → look
+up `AuthProject` node → follow `HAS_DEADLINE` edge → "Friday". No
+similarity search needed; the answer is a graph traversal.
+
+When 3 weeks later Bob hands auth to Alice:
+
+```
+input:  "Bob handed auth project to Alice today"
+
+mem0 effect:
+  → new memory blob "Bob handed auth to Alice"
+  → search for "auth owner" gets BOTH old blob (Bob) and new blob
+    (Alice). Which wins? The reranker hopefully picks the newer
+    one. Hopefully.
+
+graphiti effect:
+  → Bob OWNS AuthProject: invalid_at set to today
+  → Alice OWNS AuthProject: valid_at = today, invalid_at = NULL
+  → search "auth owner" with as_of=now → Alice. as_of=2 weeks ago
+    → Bob. The conflict is structurally resolved, both queryable.
+```
+
+This is the load-bearing difference for an enterprise-memory agent.
+Decisions, project ownership, team membership, meeting attendance —
+**all of these change over time**. mem0's "newer memory wins via
+rerank" pattern works ok for casual use; it does NOT work when the
+user asks "who owned auth in Q2?" and the agent confidently answers
+"Alice" because that's the most-recent embedded blob.
+
+### 2.2 Search precision on entity questions
+
+Same scenario: user has 6 months of meeting notes. Asks "who's on
+the auth team?"
+
+**mem0**:
+- Query embeds to a vector
+- Top-K vector search across all stored memory blobs
+- Reranker reorders by relevance
+- Returns 5-10 blobs that MENTION auth + team
+- Agent reads them, infers who's on the team
+
+This works when the team is mentioned together explicitly. Breaks
+when team membership is scattered across N meetings: "Bob owns the
+auth refactor" + "Sarah reviewed the auth design" + "Alice on the
+auth standup". No single blob says "the auth team is [Bob, Sarah,
+Alice]". Vector search won't aggregate.
+
+**graphiti**:
+- Query parses to entity hint "auth team" or AuthProject
+- BFS from AuthProject: find all Person nodes with edges back
+  (OWNS, REVIEWED, ATTENDED_STANDUP_FOR, etc.)
+- Filter to currently-valid edges
+- Return: [Bob, Sarah, Alice]
+
+The graph traversal *aggregates* by structure, not by collocation
+in text. This is the use case graphiti exists to solve.
+
+### 2.3 Querying first-person assertions ("how should I address you")
+
+**Both libraries fail at this differently**, which is why TEMPER
+added `memory_blocks` as a third primitive.
+
+- mem0: classifier turns "call me X" into a memory blob.
+  Subsequent assertion "no wait, call me Y" creates blob #2.
+  Vector search for "how to address user" returns both; the LLM
+  agent has to pick. Sometimes picks wrong.
+- graphiti: extraction turns "call me X" into an entity-summary
+  update. Pronoun-flip bug: extractor occasionally renders the
+  summary as "X wants to be called Heizai" (subject flip). The
+  user reported this multiple times; we built memory_blocks to
+  bypass extraction for this class of fact.
+
+`memory_blocks` is a flat JSONB KV store. The agent writes
+`preferences.nickname_for_user = "陛下"` directly, no extraction.
+This sits alongside graphiti, not instead of it. Same as
+TEMPER does today.
+
+A chrome-extension agent would use blocks the same way for
+identity / preferences / current focus. Cross-agent (forge +
+smith eventually both use it).
+
+### 2.4 Cost analysis at enterprise scale
+
+Assume one user generates these episodes/day:
+
+- 30 emails worth indexing (subject, sender, gist)
+- 5 calendar events
+- 20 Confluence/Jira page-reads worth indexing (titles + summaries)
+- 10 explicit "remember this" agent interactions
+
+Total: ~65 episodes/day, ~24k/year per user.
+
+| Library     | LLM cost/episode | 24k episodes cost | Search cost |
+|---|---|---|---|
+| graphiti    | 3 calls × ~1500 input + ~500 output tokens at GPT-4o-mini = ~$0.006 | ~$144/year/user | ~$0.001/search × 200 searches/day ≈ $73/year |
+| mem0        | 1 call × ~1000 input + ~200 output tokens = ~$0.001 | ~$24/year/user | ~$0.0002/search × 200 ≈ $14/year |
+| Custom thin | 0 LLM (just embed) = ~$0.00002 | ~$0.50/year/user | embed-only ≈ $3/year |
+
+graphiti is **~5× more expensive than mem0, ~250× more than thin**.
+
+But: for enterprise SaaS pricing per user, ~$200/year on memory
+infra is rounding error against the underlying salary of the
+employee. The decision is "does it answer the questions correctly",
+not "is it free". If graphiti answers "who owned auth in Q2"
+correctly and mem0 doesn't, the cost differential is a non-issue.
+
+### 2.5 Infrastructure footprint
+
+| | graphiti | mem0 |
 |---|---|---|
-| Storage backend          | vector DB (pgvector / qdrant / chroma) | graph DB (Neo4j / FalkorDB / Kuzu)        |
-| Primary primitive        | "memory" (text + embedding)   | episode → entities + relations + facts      |
-| Extraction at write      | 1 LLM call (classify, optional dedup) | 2–3 LLM calls (entity extract + edge extract + summary) |
-| Search                   | vector + optional reranker    | hybrid BM25 + cosine + graph distance, 3 rerankers |
-| Temporal model           | snapshot (no time-travel)     | bi-temporal: valid_at + invalid_at per fact |
-| Conflict handling        | UPDATE replaces               | new fact invalidates old; both stay queryable |
-| Entity reasoning         | weak (entities are tags)      | first-class (nodes + typed edges)           |
-| Multi-tenant keys        | user_id / agent_id            | namespace / group_id                        |
-| Infra footprint          | pgvector ≈ Postgres + 1 ext   | Postgres + FalkorDB (Redis-protocol graph)  |
-| Write throughput         | high (single LLM call)        | low (multi-pass extraction)                 |
-| Write cost per episode   | ~1¢ at GPT-4o-mini rates      | ~3–5¢ (3 LLM calls, longer prompts)         |
-| Read latency             | ~50–200ms                     | ~100–500ms (multi-index fan-out)            |
-| Maturity                 | older, broader adoption       | newer, fast-moving, more research-y         |
-| API ergonomics           | simple (.add / .search / .update / .delete) | richer surface, more knobs to learn |
+| Required services | Postgres + FalkorDB (or Neo4j) | Postgres + pgvector ext |
+| New deploy unit | FalkorDB process (Redis protocol, small) | none (postgres extension) |
+| Backup story | dump postgres + falkor RDB | dump postgres |
+| Multi-tenant isolation | group_id partition | user_id row filter |
+| Local-dev story | docker compose up falkor | nothing extra |
+
+graphiti has one more process. It's small (~50MB RAM steady, RDB
+snapshots like Redis). For an enterprise deploy this is
+unremarkable. For a single-user-extension model where the backend
+is co-located, also fine — FalkorDB starts in seconds.
+
+### 2.6 What graphiti gets you that's hard to retrofit
+
+- **Audit trail**: every fact ever asserted is queryable with its
+  valid_at + invalid_at. If a compliance officer asks "what
+  ownership records existed on date X", graphiti just answers.
+  Retrofitting bi-temporal into mem0 requires reimplementing the
+  data model.
+- **Entity-typed schemas**: you can declare `Person` has required
+  fields (email, team, role); extraction conforms. mem0's
+  classifier is free-form.
+- **Communities**: graphiti's `build_communities` clusters related
+  entities into LLM-summarized groups, dense recall hits. mem0
+  doesn't have this.
+- **Cross-document reasoning**: BFS from an entity reaches facts
+  across N source documents at once. mem0's vector search has no
+  notion of "follow this edge".
+
+### 2.7 What mem0 gets you that graphiti makes hard
+
+- **Fast bulk ingest**: feeding 10 years of email history is
+  practical with mem0 (~$240 at the numbers above). With graphiti
+  it's ~$1400 in extraction.
+- **Simpler debugging**: a memory blob's content is the source of
+  truth. With graphiti you debug an extractor chain that may have
+  decided your fact wasn't a fact, or flipped the pronoun, or
+  collapsed two entities.
+- **Smaller surface to learn**: 4 verbs, done.
+- **More production examples in the wild**: more code on GitHub,
+  more blog posts on integration patterns.
 
 ---
 
-## mem0 — what it is
+## 3. TEMPER's already-paid investment
 
-A Python library that treats memory as **text + embedding +
-metadata**, with an LLM-driven extraction layer on top. Workflow:
+TEMPER currently has:
+
+- graphiti wrapped via `core/memory.py` with bi-temporal search,
+  reranker controls, namespace partition
+- `memory_blocks` primitive for first-person assertions (the
+  pronoun-flip mitigation)
+- Typed memory layer (`/v1/memory/tasks`, `/focus`, `/preferences`,
+  `/events`, `/turn_context`) on top of both
+- The "extraction quality" debugging history (see
+  `docs/extraction-quality-2026-05.md`) — we've tuned this
+- Multi-user namespace + API key auth + admin import flow
+
+Switching to mem0 means **throwing away all of that** and
+re-debugging extraction quality on a different stack. The cost of
+the switch is months, not weeks. Unless the destination is clearly
+better, the switch is bad.
+
+For this use case, mem0 is NOT clearly better. It's clearly
+**cheaper** but on the dimensions that matter for enterprise
+memory (entity reasoning + bi-temporal correctness), it's worse.
+
+---
+
+## 4. The "but my extension can't run FalkorDB" question
+
+The chrome-extension shape might suggest "everything has to fit
+in the browser". It doesn't. The extension is the **client**;
+TEMPER stays where it is (cloud or self-hosted box).
 
 ```
-.add(messages=[...], user_id="alex")
-  → LLM classifies the conversation into N "memories"
-  → embedding-encode each
-  → store in vector DB with metadata
-
-.search("what does alex like for breakfast", user_id="alex")
-  → embed the query
-  → vector search top-K
-  → optional rerank
-  → return text + metadata
+┌────────────────────┐         ┌─────────────────────────┐
+│ Chrome extension   │  HTTPS  │ TEMPER service          │
+│  - DOM scrape     ─┼────────►│  - /v1/episodes  (write)│
+│  - Gmail API call  │         │  - /v1/search    (read) │
+│  - Cal API call    │         │  - /v1/memory/*  (typed)│
+│  - LLM agent loop  │◄────────┼─────────────────────────┤
+│  - chat UI         │         │  - Postgres             │
+└────────────────────┘         │  - FalkorDB             │
+                               │  - graphiti             │
+                               └─────────────────────────┘
 ```
 
-### Strengths
-
-- **Cheap writes.** One LLM call per message batch to classify
-  what's worth remembering vs noise.
-- **Simple ops.** pgvector is "Postgres with a `vector` column" —
-  no separate DB cluster to deploy/monitor.
-- **Battle-tested.** More production deployments than graphiti;
-  more Stack Overflow / GitHub issue answers.
-- **Easy API.** `.add()`, `.search()`, `.update()`, `.delete()` —
-  four verbs and you're integrated.
-- **Built-in graph mode (newer).** Added in late 2025; basic
-  relation extraction layered on top of the memory primitive.
-- **Strong dedup.** Built-in semantic dedup at write time —
-  re-adding "I live in Lyon" won't store a duplicate.
-
-### Weaknesses
-
-- **No time-travel.** A memory has one current value. If the user
-  says "I moved from Lyon to Paris", the old "Lyon" memory either
-  gets overwritten or sits there as a stale duplicate. You can't
-  query "what was true 6 months ago".
-- **Weak relation reasoning.** Entities are tags, not graph nodes.
-  "Who teaches Bruno?" is harder to answer than "things about
-  Bruno"; the answer might live in a single embedded blob you
-  retrieve by similarity, but you can't graph-walk from `Bruno` →
-  `LEARNS_FROM` → `Sarah`.
-- **Black-box extraction.** The classifier prompt is the library's
-  default. Tuning it for company-specific patterns (Mantis bug
-  format, internal acronyms) means forking or wrapping.
-- **Conflict policy is "overwrite".** No bi-temporal trail. If
-  your auditor asks "when did this fact change", you don't have
-  the data.
+The extension does NOT need FalkorDB. It needs TEMPER's HTTP API.
+The shift from MCP to extension doesn't change anything about
+TEMPER's side of the wire.
 
 ---
 
-## graphiti — what it is
+## 5. Recommendation (final)
 
-A Python library from Zep that treats memory as a **knowledge
-graph with bi-temporal validity**. Workflow:
+**Stay on graphiti via TEMPER.** Reasons in priority order:
 
-```
-graphiti.add_episode(
-  group_id="agent:alice/smith",
-  episode_body="Bruno is Sarah's student in Lyon",
-  source_description="from chat with Alice",
-)
-  → LLM call 1: extract entities  (Bruno, Sarah, Lyon)
-  → LLM call 2: extract edges     (Bruno LEARNS_FROM Sarah,
-                                   Sarah LIVES_IN Lyon)
-  → LLM call 3: build / update entity summaries
-  → write nodes + edges to graph DB with valid_at = now
+1. **The data shape is entity-relation-heavy across time** — exactly
+   what graphiti is built for. mem0's blob-classifier model loses
+   the structure that makes "who owns auth", "what changed when",
+   "show me everything about Sarah" answerable correctly.
 
-graphiti.search("who teaches Bruno", group_id="agent:alice/smith")
-  → BM25 over edge labels
-  → vector search over entity summaries
-  → graph BFS from candidates
-  → rerank (rrf / mmr / cross_encoder)
-  → return ranked facts
-```
+2. **TEMPER is already wrapped, debugged, and operating** —
+   throwing away that investment requires the destination to be
+   substantially better. mem0 is cheaper-not-better for this shape.
 
-### Strengths
+3. **The cost difference is rounding error at enterprise scale** —
+   $144/year/user vs $24/year vs salary is invisible.
 
-- **Bi-temporal.** Every edge has `valid_at` + `invalid_at`. You
-  can ask "what was true on March 15" and get the right answer.
-  When a new fact contradicts an old one, graphiti auto-invalidates
-  the old (sets `invalid_at = now`) instead of deleting it. Audit
-  trail comes for free.
-- **First-class relations.** Bruno is a `Person` node with edges
-  to other nodes. "Tell me everything connected to Bruno" = BFS
-  from Bruno's UUID. Useful for entity-centric agents.
-- **Multiple rerankers.** rrf (free, rank-based), mmr (diversity),
-  cross_encoder (LLM-rescored, true [0,1] relevance). Tunable
-  per-query.
-- **Multi-namespace.** `group_id` partitions the graph — same
-  schema can hold one user's data, one agent's data, public
-  encyclopedic data, all queryable independently or in union.
-- **Active research.** Zep ships features fast; the library is
-  evolving (community detection, schema-typed entities, search
-  recipes).
+4. **memory_blocks pattern is portable** — the second primitive
+   we built (for the pronoun-flip mitigation) plugs into either
+   library. Not a graphiti-lock-in concern.
 
-### Weaknesses
+5. **Bi-temporal queries become real demands** — "what did we
+   decide last quarter" is the kind of question enterprise users
+   ask weekly. mem0 has no native answer.
 
-- **Heavy writes.** 3 LLM calls per episode. Indexing a year of
-  email costs real money + is slow. Bulk import is painful.
-- **Extra DB.** FalkorDB (Redis-protocol graph) or Neo4j alongside
-  Postgres. One more process to run, monitor, back up.
-- **Extraction quality varies.** TEMPER hit the "agency flip"
-  bug — model summarized "user calls me Heizai" as "user wants to
-  be called Heizai", because the entity-summary LLM call doesn't
-  always preserve the subject. Real production issue; required
-  building `memory_blocks` as a second primitive to bypass the
-  extractor for first-person assertions.
-- **Search complexity.** The same answer can hit through fact-kind
-  edge, entity-kind node summary, or community-kind cluster. You
-  have to dedup at the client layer (smith-personality.ts has
-  this whole "drop entity hits whose lines duplicate fact hits"
-  reducer because of it).
-- **Costlier per-query.** Multi-index fan-out + reranker = ~3x
-  what a single pgvector lookup costs.
-- **Smaller ecosystem.** Fewer adapters, less middleware, fewer
-  blog posts on "how I made it work in prod".
+What TO do differently from the Smith setup:
+
+- **Reuse the typed memory layer** (`task_add`, `set_focus`,
+  `note_event`, etc.) — agent-side wrappers stay the same
+  regardless of host.
+- **Re-think ingest source patterns** — Gmail/Cal are
+  structured-event sources, much cleaner than DOM scraping.
+  Build typed import paths:
+    * `import_gmail_thread(thread_id)` →
+      multiple episodes (one per substantive reply)
+    * `import_cal_event(event_id)` →
+      one episode with attendees as entities
+    * `import_doc(url, content)` →
+      one episode tagged source=confluence/jira/etc.
+- **OAuth handling lives in the extension** — Chrome's
+  identity API handles Google OAuth cleanly. No MCP middleware
+  needed.
+
+What NOT to do:
+
+- Don't replicate TEMPER inside the extension. It's a service.
+- Don't try to wedge browser-history page-text dumps into
+  graphiti. Filter to "interesting" pages first (the user
+  explicitly bookmarked / explicit ask / time-spent threshold).
+  Random page text is noise that costs extraction LLM calls.
+- Don't fork TEMPER for the extension client. Use the HTTP API.
+  If the extension wants offline cache, that's a thin layer on
+  top — not a fork.
 
 ---
 
-## TEMPER's actual choices in 2026-05
+## 6. Where this could flip later
 
-What we ended up with after running both paths in our heads + one
-of them (graphiti) in code:
+Signals that would change the recommendation:
 
-1. **graphiti for episode + entity + fact memory.** Strong for the
-   agent's curated, structured-ish data: "Sarah teaches Portuguese",
-   "the wad-ssl bug hit prod on T", decisions, project state.
-2. **memory_blocks for first-person assertions.** Built as a
-   second primitive after graphiti's extractor kept flipping
-   pronouns on user identity facts (nickname, preferences,
-   current focus). Plain JSONB KV. See `docs/memory-blocks.md`.
-3. **typed memory layer** on top of both. Agents call
-   `task_add()` / `set_focus()` / `note_event()`; TEMPER decides
-   where to land (block vs graphiti episode).
+- mem0 ships proper bi-temporal support → its biggest weakness
+  for this use case disappears. Still has the entity-aggregation
+  gap.
+- graphiti's extractor breaks on a new class of input we haven't
+  hit yet → forces another primitive (a la memory_blocks). If
+  this happens for a 3rd class, time to question the stack.
+- A new library combines vector + graph + bi-temporal cleanly →
+  evaluate.
+- The agent loop moves to fully local (LLM in browser) → ingest
+  cost per LLM call goes to ~zero, mem0 vs graphiti cost gap
+  disappears entirely. graphiti still wins on data shape.
 
-The takeaway: **graphiti alone wasn't enough for our use case**.
-The bi-temporal + entity-relation model is great when the data is
-"events about people/projects" but bad when the data is "the user
-saying something about themselves". The second pattern is too
-common to leave broken, so we added blocks.
-
-mem0 would have had the same first-person-assertion problem if
-used alone — its classifier would dedup or paraphrase the
-nickname declaration. Neither library handles this cleanly
-without a second primitive.
-
----
-
-## Forge — chrome-extension data source — which one?
-
-Forge's pivot context (per 2026-05-16):
-
-- Drop MCP entirely (auth was a pain, integration unstable).
-- Chrome extension ingests **browser data**: page content, URLs,
-  reading history, possibly Gmail snippets, calendar entries.
-- Volume: **high** (every page visited could become an episode).
-- Structure: **low** — mostly free-form page text + metadata.
-- Query pattern: "what was that article about X I read last
-  Tuesday" (mostly recency + topical search, not entity-centric).
-- Latency target: probably async ingest, real-time read.
-
-### Cost analysis
-
-Assume the user reads 50 web pages a day worth indexing.
-
-| Library     | LLM cost / day                   | Storage cost      | Read cost / query |
-|---|---|---|---|
-| graphiti    | 50 × 3 calls × ~1500 input tokens = ~225k tok = ~$0.30/day at GPT-4o-mini | pgvector + FalkorDB | ~3 LLM rerank calls |
-| mem0        | 50 × 1 call × ~1000 tokens = ~50k tok = ~$0.07/day | pgvector only | embedding + 0-1 LLM |
-| Custom thin | 50 × 0 LLM = $0 (just embed)     | pgvector only     | embedding only    |
-
-Over a year: graphiti ≈ $110, mem0 ≈ $25, thin ≈ $0 + embedding API.
-
-### Fit analysis
-
-| Need                                  | graphiti           | mem0               | Custom thin (pgvector + embeddings) |
-|---|---|---|---|
-| High write throughput                 | ❌ slow            | ✓ ok               | ✓ fastest                            |
-| Bi-temporal queries ("last Tuesday")  | ✓ native          | ❌ no              | could add `seen_at` column           |
-| Entity reasoning ("about Sarah")      | ✓                 | weak                | weak                                  |
-| Conflict resolution                   | ✓ auto             | overwrite           | none                                  |
-| Operationally simple                  | ❌ FalkorDB        | ✓ pgvector         | ✓ pgvector                            |
-| Strong dedup of repeat pages          | extractor decides | ✓ built in          | DIY similarity threshold              |
-| Privacy / runs locally                | depends on infra  | depends on infra    | most controllable                     |
-
-### Recommendation
-
-For forge as described, **graphiti is overkill**. The data is
-mostly "I read this page, here's the text" — there's no entity-
-relation graph to traverse, no bi-temporal "what did I believe at
-time T" pattern to answer. The browser already records timestamps.
-
-**Two reasonable paths:**
-
-1. **mem0** — if you want a library that handles classification +
-   dedup + search out of the box. Cheap to write, easy to
-   integrate. The graph mode is there if you discover you do want
-   entity reasoning later.
-
-2. **Custom thin layer (pgvector + embeddings + sqlite metadata)**
-   — if you want maximum control + zero LLM cost at ingest time
-   and don't want a library defining your data model. Roughly:
-
-   ```sql
-   CREATE TABLE pages (
-     id          UUID PRIMARY KEY,
-     url         TEXT NOT NULL,
-     title       TEXT,
-     content     TEXT,
-     embedding   vector(1536),
-     visited_at  TIMESTAMPTZ,
-     tags        TEXT[]
-   );
-   CREATE INDEX ON pages USING hnsw (embedding vector_cosine_ops);
-   ```
-
-   That + a Python service with `add_page(url, content)` /
-   `search(query, k=10)` / `purge(before=...)` is maybe 200
-   lines and outperforms either library on this specific
-   workload.
-
-**Don't use TEMPER as-is for forge data.** TEMPER's graphiti
-extractor is tuned for "structured agent observations", not
-"web page text dumps". Trying to fit forge's data into TEMPER
-would either pollute the graph with noise (every page becomes
-entities + edges) or require turning off extraction (which
-defeats the point of running graphiti).
-
-**Do consider sharing the memory_blocks primitive across both.**
-Identity / preferences are user-level and should be visible to
-both forge and smith. TEMPER's blocks layer is small, generic
-KV, and works fine as a shared user-state primitive.
-
----
-
-## When to revisit
-
-This comparison is a snapshot of state in 2026-05. Things that
-would change the recommendation:
-
-- mem0 ships strong bi-temporal support → its weak-spot vs
-  graphiti shrinks
-- graphiti's extraction quality on first-person assertions gets
-  fixed upstream → memory_blocks becomes optional, not load-bearing
-- A new library combines both well → revisit
-- forge's data shape evolves beyond "web pages" into entity-heavy
-  domains → graphiti becomes more relevant
-
-For now, the lines are clear: **graphiti for curated structured
-agent memory (TEMPER's existing scope), mem0 or a thin custom
-layer for high-volume low-structure browser data (forge's
-incoming scope)**.
+For now: **graphiti via TEMPER, no change in backend for the
+extension agent**.
