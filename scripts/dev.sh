@@ -105,7 +105,10 @@ mkdir -p .data
 # / TSVECTOR / GIN / plpgsql triggers that SQLite can't render. Default
 # to the docker-compose Postgres on localhost:5432. Override with
 # DATABASE_URL env if your Postgres lives elsewhere.
-DEFAULT_DB="postgresql+asyncpg://memory:memory@localhost:5432/memory_service"
+PG_USER="${POSTGRES_USER:-memory}"
+PG_PASS="${POSTGRES_PASSWORD:-memory}"
+PG_DB="${POSTGRES_DB:-memory_service}"
+DEFAULT_DB="postgresql+asyncpg://${PG_USER}:${PG_PASS}@localhost:5432/${PG_DB}"
 export DATABASE_URL="${DATABASE_URL:-$DEFAULT_DB}"
 
 if [[ "$DATABASE_URL" == sqlite* ]]; then

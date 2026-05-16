@@ -15,6 +15,14 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+# docker-compose.yml uses `${POSTGRES_PASSWORD:?...must be set...}` —
+# that interpolation runs against the HOST shell env and fails BEFORE
+# the dev override's `environment:` block is merged. So we have to
+# set the dev creds at the shell layer too.
+export POSTGRES_USER="${POSTGRES_USER:-memory}"
+export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-memory}"
+export POSTGRES_DB="${POSTGRES_DB:-memory_service}"
+
 # Already running and healthy?
 if docker ps --format '{{.Names}}' | grep -q '^temper-postgres-1$'; then
   if docker exec temper-postgres-1 pg_isready -U memory -d memory_service >/dev/null 2>&1; then
