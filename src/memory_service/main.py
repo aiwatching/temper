@@ -25,6 +25,7 @@ from memory_service.api.v1 import sagas as v1_sagas
 from memory_service.api.v1 import search as v1_search
 from memory_service.api.v1 import stats as v1_stats
 from memory_service.api.v1 import system as v1_system
+from memory_service.api.v1 import typed_memory as v1_typed_memory
 from memory_service.api.v1 import user_admin as v1_user_admin
 from memory_service.api.v1 import users as v1_users
 from memory_service.config import get_settings
@@ -130,6 +131,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_stats.router, prefix="/v1")
     app.include_router(v1_consolidate.router, prefix="/v1")
     app.include_router(v1_blocks.router, prefix="/v1")
+    app.include_router(v1_typed_memory.router, prefix="/v1")
 
     # Admin page + static
     app.include_router(admin_router)
