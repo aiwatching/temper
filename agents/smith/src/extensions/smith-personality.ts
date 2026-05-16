@@ -469,10 +469,16 @@ function renderTurnContext(ctx: {
   const parts: string[] = [];
 
   // --- Active tasks ----------------------------------------------------
+  // ALWAYS rendered, even when empty. The empty-case branch is
+  // load-bearing: without it, the model concludes "no Active tasks
+  // section exists" → "tasks must be empty / not tracked" and answers
+  // "you have no tasks" even when recall below has task-like episodes
+  // from before the typed memory tools existed. The empty-state hint
+  // tells the model to look in recall and offer migration.
+  parts.push("\n═══ Active tasks (state.active_tasks) ═══");
   if (ctx.active_tasks.length > 0) {
     parts.push(
-      "\n═══ Active tasks (state.active_tasks) ═══\n",
-      "These are what the user is currently working on. When asked",
+      "\nThese are what the user is currently working on. When asked",
       "'what are my tasks / what am I doing', this list IS the answer —",
       "do not say you have no record. Reference items by `id` if the",
       "user wants to update or complete one.\n",
@@ -484,9 +490,27 @@ function renderTurnContext(ctx: {
       );
     }
     parts.push(
-      "\nTools: `task_add`, `task_update`, `task_complete`, `list_tasks`.\n",
+      "\nTools: `task_add`, `task_update`, `task_complete`, `list_tasks`.",
+    );
+  } else {
+    parts.push(
+      "\n(empty — no tasks registered via task_add yet)",
+      "",
+      "IMPORTANT: empty here does NOT mean the user has no tasks. It",
+      "only means none have been registered through the typed path.",
+      "If the user asks 'what are my tasks / 我的任务 / 当前任务' and",
+      "this list is empty:",
+      "  1. Look at the Memory recall section below for task-like",
+      "     content from past conversations ('user mentioned working",
+      "     on X', 'asked to remember Y', etc).",
+      "  2. If you find candidates, surface them and ASK the user",
+      "     whether to register them via task_add so they persist in",
+      "     the active list. Don't auto-add without confirmation.",
+      "  3. Only say 'no tasks recorded' if recall is also silent on",
+      "     anything task-like.",
     );
   }
+  parts.push("");
 
   // --- Current focus ---------------------------------------------------
   if (ctx.current_focus) {
