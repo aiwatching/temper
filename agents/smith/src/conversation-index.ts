@@ -21,6 +21,25 @@ import {
 } from "node:fs";
 import { dirname, resolve as resolvePath } from "node:path";
 
+export type ForkRange = "A" | "B" | "C" | "E";
+
+export interface ForkInfo {
+  /** Source conv id (today only "main", but the schema's general). */
+  conv: string;
+  /** Index (0-based) of the anchored assistant reply in the source's
+   *  React turn array. Used for the back-link UI on the source. */
+  anchor_turn: number;
+  /** Which scoping rule was used at fork time. See HTTP /conversations/fork docs. */
+  range: ForkRange;
+  /** N rounds before/after for range="C". Ignored otherwise. */
+  n?: number;
+  /** The rendered "Branched from..." block, captured at fork time so
+   *  later edits to the source don't change what this branch sees. */
+  snippet: string;
+  /** ISO timestamp the fork was created. */
+  forkedAt: string;
+}
+
 export interface IndexEntry {
   id: string;
   /** Short label for the picker — first user message slice, or "(untitled)". */
@@ -40,7 +59,17 @@ export interface IndexEntry {
     since: string;      // ISO instant the wait started
     note?: string;      // optional context — what we're waiting for, expected resolution
   };
+  /** True for the single persistent "home" conversation. Cannot be
+   *  deleted; clear() drops the JSONL but keeps the entry + id. Created
+   *  on first boot by ensureMain() below. */
+  isMain?: boolean;
+  /** Populated when this conv was created via POST /conversations/fork.
+   *  Branches that started from scratch (no fork) don't have it. */
+  forkedFrom?: ForkInfo;
 }
+
+/** Reserved id for the persistent home conv. */
+export const MAIN_CONV_ID = "main";
 
 class ConversationIndex {
   private indexPath = resolvePath(
@@ -155,6 +184,79 @@ class ConversationIndex {
     all[id] = rest;
     this.writeAll(all);
     return all[id];
+  }
+
+  /** Idempotent: create the main entry if it doesn't yet exist. Called
+   *  once on boot. We seed messageCount=0 / firstMessage="(home)" so
+   *  the picker has something readable until the user actually chats. */
+  ensureMain(): IndexEntry {
+    const all = this.readAll();
+    if (all[MAIN_CONV_ID]) return all[MAIN_CONV_ID];
+    const now = new Date().toISOString();
+    const main: IndexEntry = {
+      id: MAIN_CONV_ID,
+      title: "Main",
+      firstMessage: "(home)",
+      lastUsedAt: now,
+      messageCount: 0,
+      isMain: true,
+    };
+    all[MAIN_CONV_ID] = main;
+    this.writeAll(all);
+    return main;
+  }
+
+  /** Reset a conv's index entry after its JSONL has been wiped — keep
+   *  the id + isMain flag so the picker still shows it, but zero out
+   *  the turn count and bump the lastUsedAt. Used by /clear. */
+  resetTranscript(id: string): IndexEntry | null {
+    const all = this.readAll();
+    const e = all[id];
+    if (!e) return null;
+    all[id] = {
+      ...e,
+      firstMessage: e.isMain ? "(home)" : "(cleared)",
+      lastUsedAt: new Date().toISOString(),
+      messageCount: 0,
+    };
+    this.writeAll(all);
+    return all[id];
+  }
+
+  /** Insert a freshly-forked conv, carrying over the source's snapshot
+   *  as its first message preview. JSONL stays empty until the branch's
+   *  first turn — the fork snippet is consulted by smith-personality
+   *  via `forkedFrom` at every turn instead. */
+  createFork(args: {
+    id: string;
+    title: string;
+    forkedFrom: ForkInfo;
+  }): IndexEntry {
+    const all = this.readAll();
+    if (all[args.id]) {
+      throw new Error(`createFork: conv ${args.id} already exists`);
+    }
+    const now = new Date().toISOString();
+    const e: IndexEntry = {
+      id: args.id,
+      title: args.title || "Branch",
+      firstMessage: args.forkedFrom.snippet.slice(0, 200),
+      lastUsedAt: now,
+      messageCount: 0,
+      forkedFrom: args.forkedFrom,
+    };
+    all[args.id] = e;
+    this.writeAll(all);
+    return e;
+  }
+
+  /** All branches with forkedFrom.conv === id. Used for the back-link
+   *  icons that show on the source's anchored replies. */
+  branchesOf(id: string): IndexEntry[] {
+    const all = this.readAll();
+    return Object.values(all)
+      .filter((e) => e.forkedFrom?.conv === id)
+      .sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt));
   }
 }
 

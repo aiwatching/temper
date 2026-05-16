@@ -25,6 +25,7 @@ import { closeDb } from "./db/sqlite.js";
 import { runMigrations } from "./db/migrations.js";
 import { migrateEnvSettings } from "./db/migrate_env_settings.js";
 import { getSetting, setSetting } from "./db/settings.js";
+import { conversationIndex } from "./conversation-index.js";
 import { startJobsEngine, stopJobsEngine } from "./jobs-engine.js";
 import { getPluginManager } from "./plugins/manager.js";
 import { migrateEnvMcpServers } from "./plugins/migrate_env.js";
@@ -69,6 +70,10 @@ async function main(): Promise<void> {
     });
     console.log(`[smith] timezone auto-detected: ${tz} (override in /settings)`);
   }
+
+  // 2c. Ensure the persistent "main" conversation exists. It's the
+  //     home Smith always returns to — never deleted, only cleared.
+  conversationIndex.ensureMain();
 
   // 3. Now safe to read config; getConfig() reads settings, falls
   //    back to env for anything not yet imported (covers the very

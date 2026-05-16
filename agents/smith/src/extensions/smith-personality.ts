@@ -21,6 +21,7 @@
  * model's responsibility — writing is always intentional.
  */
 import { getConfig } from "../config.js";
+import { conversationIndex } from "../conversation-index.js";
 import { Temper } from "../temper.js";
 import type {
   PinnedBlockWire,
@@ -427,7 +428,10 @@ function _capBlock(block: string): string {
     "\n\n[... context block truncated to stay under " + MAX_RECALL_BLOCK_CHARS + " chars; call memory_search for more]\n";
 }
 
-export function smithPersonalityExtension(pi: PiExtensionAPI): void {
+export function smithPersonalityExtension(
+  pi: PiExtensionAPI,
+  conversationId: string,
+): void {
   // Lazy Temper client — one per session lifetime (factory is called
   // once per session, handler is called per agent_start).
   let temper: Temper | null = null;
@@ -503,7 +507,17 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
       // answering "what time is it" or computing relative times,
       // and we want it before any pinned/recall noise.
       const clockBlock = renderClock(getConfig().timezone);
-      return { systemPrompt: SMITH_BASE_PROMPT + clockBlock + contextBlock };
+
+      // Fork snippet, when present, sits between clock and the
+      // pinned/recall context. It's the "where this conversation
+      // came from" framing — useful before the model sees what's
+      // currently in memory.
+      const entry = conversationIndex.get(conversationId);
+      const forkBlock = entry?.forkedFrom?.snippet
+        ? entry.forkedFrom.snippet + "\n"
+        : "";
+
+      return { systemPrompt: SMITH_BASE_PROMPT + clockBlock + forkBlock + contextBlock };
     },
   );
 }

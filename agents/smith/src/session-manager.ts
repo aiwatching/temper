@@ -178,7 +178,7 @@ class SmithSessionPool {
         // mcp-bridge still honors MCP_SERVERS env for backward compat.
         // Once a plugin is added via the registry, drop it from
         // MCP_SERVERS — pi.registerTool throws on duplicate names.
-        (pi) => smithPersonalityExtension(pi),
+        (pi) => smithPersonalityExtension(pi, conversationId),
         (pi) => typedMemoryExtension(pi),       // task_*/set_focus/set_preference/note_event
         (pi) => scheduledJobsExtension(pi),     // schedule_job / list_scheduled_jobs / ...
         (pi) => temperMemoryExtension(pi),      // memory_search + legacy escape hatches

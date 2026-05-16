@@ -29,7 +29,9 @@ import { existsSync, unlinkSync } from "node:fs";
 
 import { approvalStore, type PendingApproval } from "./approval-store.js";
 import { getConfig, SETTING_KEYS } from "./config.js";
-import { conversationIndex } from "./conversation-index.js";
+import { conversationIndex, MAIN_CONV_ID, type ForkRange } from "./conversation-index.js";
+import { buildForkSnippet, readConversationTurns } from "./lib/fork-snippet.js";
+import { randomBytes as _randomBytes } from "node:crypto";
 import {
   isInstalled,
   listSettings,
@@ -371,6 +373,14 @@ export function buildApp(): Hono {
 
   app.delete("/conversations/:id", async (c) => {
     const id = c.req.param("id");
+    // The main conv is the user's persistent home — it can be cleared
+    // (drops the JSONL but keeps the entry) but never fully deleted.
+    if (id === MAIN_CONV_ID) {
+      return c.json(
+        { error: "main conversation can't be deleted — use POST /conversations/main/clear instead" },
+        400,
+      );
+    }
     const archive = c.req.query("archive") === "true";
     const entry = conversationIndex.get(id);
 
@@ -415,6 +425,138 @@ export function buildApp(): Hono {
     }
     conversationIndex.delete(id);
     return c.json({ deleted: true, archived });
+  });
+
+  // ---- /conversations/:id/clear ----
+  //
+  // Drops the JSONL transcript but keeps the index entry + id. Used
+  // for the main conv (which can't be deleted) and also for branches
+  // when the user wants a fresh start without losing the conv slot.
+  //
+  // ?archive=true (default true for main, optional for branches) ships
+  // a one-shot summary to TEMPER first so the discussion isn't lost.
+  app.post("/conversations/:id/clear", async (c) => {
+    const id = c.req.param("id");
+    const entry = conversationIndex.get(id);
+    if (!entry) return c.json({ error: "not found" }, 404);
+
+    const archiveParam = c.req.query("archive");
+    const archive = archiveParam == null
+      ? Boolean(entry.isMain)            // default on for main, off elsewhere
+      : archiveParam === "true";
+
+    let archived: { episode_id?: string } | null = null;
+    if (archive && entry.messageCount > 0) {
+      try {
+        const t = new Temper();
+        const content =
+          `Conversation '${entry.title}' (id=${entry.id}, ` +
+          `${entry.messageCount} turns, last active ${entry.lastUsedAt}) ` +
+          `was cleared on ${new Date().toISOString()}.\n\n` +
+          `First user message: ${entry.firstMessage.slice(0, 400)}`;
+        archived = (await t.write({
+          content,
+          sourceType: "text",
+          sourceDescription: "smith conversation clear-archive",
+          tags: ["conversation-summary", "cleared"],
+        })) as { episode_id?: string };
+      } catch (e) {
+        return c.json(
+          { error: `archive failed: ${(e as Error).message}`, cleared: false },
+          502,
+        );
+      }
+    }
+
+    await getSessionPool().dispose(id);
+
+    const jsonl = resolvePath(
+      process.cwd(), ".data", "smith-sessions", `${id}.jsonl`,
+    );
+    if (existsSync(jsonl)) {
+      try { unlinkSync(jsonl); } catch { /* ignore */ }
+    }
+    conversationIndex.resetTranscript(id);
+    return c.json({ cleared: true, archived });
+  });
+
+  // ---- /conversations/fork ----
+  //
+  // Create a branch off a source conversation, seeded with a snippet
+  // of the cited reply (range A/B/C/E) so the model has the context
+  // it needs to continue. The branch is otherwise independent:
+  //   - new JSONL file (no inherited history)
+  //   - the snippet is rendered into the system prompt at every turn
+  //     (see smith-personality.ts) but never copied into the JSONL
+  //   - identity / preferences / pinned blocks still apply (they're
+  //     in TEMPER, not conv-scoped)
+  //
+  // Body: { source: string, anchor_turn: int, range: 'A'|'B'|'C'|'E',
+  //         n?: int (for C), name?: string (branch label) }
+  app.post("/conversations/fork", async (c) => {
+    type Body = {
+      source?: string;
+      anchor_turn?: number;
+      range?: ForkRange;
+      n?: number;
+      name?: string;
+    };
+    let body: Body;
+    try { body = (await c.req.json()) as Body; }
+    catch { return c.json({ error: "JSON body required" }, 400); }
+
+    const source = body.source?.trim() || MAIN_CONV_ID;
+    const anchor = body.anchor_turn;
+    if (typeof anchor !== "number" || anchor < 0) {
+      return c.json({ error: "anchor_turn (>=0) is required" }, 400);
+    }
+    const range = (body.range ?? "B") as ForkRange;
+    if (!["A", "B", "C", "E"].includes(range)) {
+      return c.json({ error: "range must be A | B | C | E" }, 400);
+    }
+
+    const srcEntry = conversationIndex.get(source);
+    if (!srcEntry) return c.json({ error: `source conv '${source}' not found` }, 404);
+
+    const turns = readConversationTurns(source);
+    if (anchor >= turns.length) {
+      return c.json({ error: `anchor_turn ${anchor} out of range (0..${turns.length - 1})` }, 400);
+    }
+
+    const snippet = buildForkSnippet({
+      sourceConv: source,
+      turns,
+      anchor_turn: anchor,
+      range,
+      n: body.n,
+    });
+
+    // Generate the branch id. Short + readable + collision-safe.
+    const branchId = "br-" + _randomBytes(4).toString("hex");
+    const name = (body.name ?? "").trim() ||
+      `Branch from ${source} @ turn ${anchor}`;
+
+    const entry = conversationIndex.createFork({
+      id: branchId,
+      title: name,
+      forkedFrom: {
+        conv: source,
+        anchor_turn: anchor,
+        range,
+        n: body.n,
+        snippet,
+        forkedAt: new Date().toISOString(),
+      },
+    });
+    return c.json(entry, 201);
+  });
+
+  // ---- /conversations/:id/branches ----
+  // Returns the branches that were forked off this conv. Used by the
+  // UI to render the ↳ back-link badge on the cited reply.
+  app.get("/conversations/:id/branches", (c) => {
+    const id = c.req.param("id");
+    return c.json({ branches: conversationIndex.branchesOf(id) });
   });
 
   // ---- health ----
