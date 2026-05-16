@@ -24,6 +24,7 @@ import { getConfig, mapEnvForPi } from "./config.js";
 import { closeDb } from "./db/sqlite.js";
 import { runMigrations } from "./db/migrations.js";
 import { migrateEnvSettings } from "./db/migrate_env_settings.js";
+import { startJobsEngine, stopJobsEngine } from "./jobs-engine.js";
 import { getPluginManager } from "./plugins/manager.js";
 import { migrateEnvMcpServers } from "./plugins/migrate_env.js";
 import { startSchedulerIfConfigured, stopScheduler } from "./scheduler.js";
@@ -65,10 +66,12 @@ async function main(): Promise<void> {
   banner();
   serve({ fetch: app.fetch, hostname: cfg.smithHost, port: cfg.smithPort });
   startSchedulerIfConfigured();
+  startJobsEngine();
 
   for (const sig of ["SIGINT", "SIGTERM"] as const) {
     process.on(sig, async () => {
       console.log(`\n  ${sig} — disposing sessions...`);
+      stopJobsEngine();
       stopScheduler();
       await getPluginManager().disposeAll();
       await getSessionPool().disposeAll();

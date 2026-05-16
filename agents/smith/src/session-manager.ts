@@ -26,6 +26,7 @@ import {
 import { getConfig, type SmithConfig } from "./config.js";
 import { approvalGateExtension } from "./extensions/approval-gate.js";
 import { compactionPolicyExtension } from "./extensions/compaction-policy.js";
+import { scheduledJobsExtension } from "./extensions/scheduled-jobs.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
 import { typedMemoryExtension } from "./extensions/typed-memory.js";
 import { mcpBridgeExtension } from "./extensions/mcp-bridge.js";
@@ -177,6 +178,7 @@ class SmithSessionPool {
         // MCP_SERVERS — pi.registerTool throws on duplicate names.
         (pi) => smithPersonalityExtension(pi),
         (pi) => typedMemoryExtension(pi),       // task_*/set_focus/set_preference/note_event
+        (pi) => scheduledJobsExtension(pi),     // schedule_job / list_scheduled_jobs / ...
         (pi) => temperMemoryExtension(pi),      // memory_search + legacy escape hatches
         (pi) => { void pluginSystemExtension(pi); }, // fire-and-forget
         (pi) => { void mcpBridgeExtension(pi); },    // legacy env path

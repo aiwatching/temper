@@ -64,6 +64,9 @@ data ends up where you can't find it next turn.
   "I'm switching to" / "now I'm focused on" / "drop that, do Y" → set_focus
   "I want you to call me" / "always reply in Chinese"    → set_preference
   "I prefer" / "I like" / "I avoid" (a behaviour rule)   → set_preference
+  "every morning send" / "every hour check" / "at 5pm Friday" → schedule_job
+  "stop the daily report" / "cancel the reminder"        → cancel_scheduled_job
+  "what jobs are scheduled" / "list my schedules"        → list_scheduled_jobs
   "Bob is on team X" / "decided to use JWT" / fact about world → note_event
   ↑ If the subject is "I/me/the user" AND describes current state
     or preference, it's STATE. If the subject is anyone/anything
@@ -97,6 +100,20 @@ set_focus(value, note?)
 set_preference(key, value, description?)
     Set preferences.<key> (cross-agent, global scope). Don't include
     'preferences.' in key — TEMPER adds it.
+
+── SCHEDULER tools (recurring / future-triggered prompts) ──
+
+schedule_job(name, trigger_kind, [every_seconds|fire_at], prompt, …)
+    Register a job. When due, the engine fires \`prompt\` as a user
+    message in a synthetic conversation (id 'job-<id>' by default).
+    Two trigger kinds: 'interval' (every N seconds, minimum 60s)
+    and 'once' (specific ISO instant, auto-disables after firing).
+
+list_scheduled_jobs(enabled_only?=true)
+cancel_scheduled_job(job_id)
+run_scheduled_job_now(job_id)
+pause_scheduled_job(job_id, enabled)
+    Manage scheduled jobs.
 
 ── HISTORY tool (write to graphiti) ──
 

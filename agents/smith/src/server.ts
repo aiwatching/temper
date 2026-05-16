@@ -48,6 +48,17 @@ import {
   upsertPlugin,
 } from "./plugins/repository.js";
 import { MCPPlugin } from "./plugins/mcp.js";
+import {
+  createJob,
+  deleteJob,
+  forceDueNow,
+  getJobById,
+  listJobs,
+  updateJob,
+  type Trigger,
+  type Action,
+} from "./db/jobs-repo.js";
+import { runJobNow } from "./jobs-engine.js";
 
 // ---- inline vendor + UI source ----
 //
@@ -187,7 +198,7 @@ export function buildApp(): Hono {
     // secret from the URL hash before any /approve, /deny, etc. fires.
     // /setup is NEVER bearer-gated (the wizard happens before any
     // bearer exists). /settings IS gated (post-install editor).
-    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?|plugins(?:\/.*)?|settings(?:\/.*)?)$/;
+    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?|plugins(?:\/.*)?|settings(?:\/.*)?|jobs(?:\/.*)?)$/;
     app.use(async (c, next) => {
       if (!GATED_PATH.test(c.req.path)) return next();
       if (c.req.method === "GET" && (c.req.path === "/chat" || c.req.path === "/plugins" || c.req.path === "/settings")) {
@@ -612,6 +623,7 @@ export function buildApp(): Hono {
   // effect (the existing in-memory MCP client keeps the old config).
   registerPluginRoutes(app);
   registerSetupRoutes(app);
+  registerJobsRoutes(app);
 
   return app;
 }
@@ -1044,6 +1056,118 @@ function registerPluginRoutes(app: Hono): void {
       return c.json({
         ok: false, ms: Date.now() - started, error: (e as Error).message,
       });
+    }
+  });
+}
+
+// --- /jobs routes ---
+//
+// CRUD for scheduled job definitions. The engine ticks separately
+// (see jobs-engine.ts) and reads the same table.
+//
+//   GET    /jobs                  list all (default enabled only)
+//   GET    /jobs/:id              one
+//   POST   /jobs                  create  body: { name, description?, trigger, action }
+//   PATCH  /jobs/:id              partial update
+//   DELETE /jobs/:id              hard delete
+//   POST   /jobs/:id/run          fire immediately (out-of-band)
+//   POST   /jobs/:id/due-now      schedule for the next tick
+//
+// All gated by the auth gate above (path-prefix `/jobs` covered by
+// the same gate as `/plugins` / `/settings`).
+function registerJobsRoutes(app: Hono): void {
+  app.get("/jobs", (c) => {
+    const enabledRaw = c.req.query("enabled");
+    const enabled =
+      enabledRaw === "true" ? true : enabledRaw === "false" ? false : undefined;
+    return c.json({ jobs: listJobs({ enabled }) });
+  });
+
+  app.get("/jobs/:id", (c) => {
+    const j = getJobById(c.req.param("id"));
+    return j ? c.json(j) : c.json({ error: "not found" }, 404);
+  });
+
+  app.post("/jobs", async (c) => {
+    let body: Record<string, unknown>;
+    try { body = (await c.req.json()) as Record<string, unknown>; }
+    catch { return c.json({ error: "JSON body required" }, 400); }
+
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (!name) return c.json({ error: "name is required" }, 400);
+    const trigger = body.trigger as Trigger | undefined;
+    if (!trigger || typeof trigger !== "object" || !("kind" in trigger)) {
+      return c.json({ error: "trigger is required" }, 400);
+    }
+    const action = body.action as Action | undefined;
+    if (!action || typeof action !== "object" || !("kind" in action)) {
+      return c.json({ error: "action is required" }, 400);
+    }
+    try {
+      const j = createJob({
+        name,
+        description: typeof body.description === "string" ? body.description : undefined,
+        trigger,
+        action,
+        enabled: body.enabled !== false,
+        updatedBy: "http:/jobs",
+      });
+      return c.json(j, 201);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 400);
+    }
+  });
+
+  app.patch("/jobs/:id", async (c) => {
+    let body: Record<string, unknown>;
+    try { body = (await c.req.json()) as Record<string, unknown>; }
+    catch { return c.json({ error: "JSON body required" }, 400); }
+
+    try {
+      const j = updateJob(c.req.param("id"), {
+        name: typeof body.name === "string" ? body.name : undefined,
+        description:
+          body.description === null
+            ? null
+            : typeof body.description === "string"
+              ? body.description
+              : undefined,
+        trigger: body.trigger as Trigger | undefined,
+        action: body.action as Action | undefined,
+        enabled: typeof body.enabled === "boolean" ? body.enabled : undefined,
+        updatedBy: "http:/jobs",
+      });
+      return c.json(j);
+    } catch (e) {
+      const msg = (e as Error).message;
+      const status = msg.includes("not found") ? 404 : 400;
+      return c.json({ error: msg }, status);
+    }
+  });
+
+  app.delete("/jobs/:id", (c) => {
+    const ok = deleteJob(c.req.param("id"));
+    return ok ? c.body(null, 204) : c.json({ error: "not found" }, 404);
+  });
+
+  app.post("/jobs/:id/run", async (c) => {
+    const j = getJobById(c.req.param("id"));
+    if (!j) return c.json({ error: "not found" }, 404);
+    try {
+      await runJobNow(j);
+      const fresh = getJobById(j.id);
+      return c.json(fresh);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  app.post("/jobs/:id/due-now", (c) => {
+    try {
+      const j = forceDueNow(c.req.param("id"));
+      return c.json(j);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 404);
     }
   });
 }
