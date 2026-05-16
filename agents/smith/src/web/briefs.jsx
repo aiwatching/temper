@@ -80,7 +80,8 @@ const BriefApp = () => {
   };
 
   return (
-    <div className="smith-app" style={{ display: 'grid', gridTemplateRows: 'auto 1fr auto', gridTemplateColumns: '1fr 300px', position: 'relative' }}>
+    <AppShell current="briefs">
+      <div className="smith-app" style={{ height: '100%', display: 'grid', gridTemplateRows: 'auto 1fr auto', gridTemplateColumns: '1fr 300px', position: 'relative' }}>
       {/* top bar */}
       <header style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px', borderBottom: '1px solid var(--line)', background: 'var(--panel)' }}>
         <div className="row" style={{ gap: 9 }}>
@@ -295,7 +296,8 @@ const BriefApp = () => {
       {manageOpen && (
         <ManageSheet onClose={() => setManageOpen(false)} />
       )}
-    </div>
+      </div>
+    </AppShell>
   );
 };
 

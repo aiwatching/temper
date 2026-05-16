@@ -77,7 +77,8 @@ const TasksApp = () => {
   void now; // referenced just to re-render on the minute tick
 
   return (
-    <div className="smith-app col" style={{ height: '100%', overflow: 'hidden' }}>
+    <AppShell current="tasks">
+      <div className="col" style={{ height: '100%', overflow: 'hidden' }}>
       {/* header */}
       <div style={{ padding: '14px 22px 0', borderBottom: '1px solid var(--line)', background: 'var(--panel)', flex: '0 0 auto' }}>
         <div className="spread" style={{ marginBottom: 12 }}>
@@ -157,7 +158,8 @@ const TasksApp = () => {
           <TaskDetail task={selectedTask} onClose={() => setSelected(null)} onAction={load} />
         )}
       </div>
-    </div>
+      </div>
+    </AppShell>
   );
 };
 

@@ -20,7 +20,8 @@ const ChatApp = () => {
   };
 
   return (
-    <div className="smith-app">
+    <AppShell current="chat">
+      <div className="smith-app" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* top bar */}
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px', borderBottom: '1px solid var(--line)', background: 'var(--panel)' }}>
         <Avatar kind="smith" size="lg" />
@@ -36,10 +37,7 @@ const ChatApp = () => {
             : healthErr ? '(/healthz unreachable)' : '…'}
         </span>
         <span style={{ flex: 1 }} />
-        <a href="/briefs" className="btn sm subtle" title="Open the dashboard view"><Icon name="side" size={12} /> Briefs</a>
-        <a href="/tasks" className="btn sm subtle" title="Unified tasks view"><Icon name="flash" size={12} /> Tasks</a>
-        <a href="/plugins" className="btn sm subtle" title="Manage MCP plugins"><Icon name="cog" size={12} /> Plugins</a>
-        <a href="/settings" className="btn sm subtle" title="Smith settings"><Icon name="cog" size={12} /> Settings</a>
+        {/* nav rail on the left handles cross-screen navigation now */}
         <ConvPicker
           activeId={chat.convId}
           conversations={list}
@@ -71,7 +69,8 @@ const ChatApp = () => {
           <Composer onSend={chat.send} busy={chat.busy} placeholder="消息 Smith — Enter 发送" />
         </div>
       </footer>
-    </div>
+      </div>
+    </AppShell>
   );
 };
 

@@ -96,7 +96,8 @@ const PluginsApp = () => {
   };
 
   return (
-    <div className="smith-app">
+    <AppShell current="plugins">
+      <div className="smith-app" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 18px', borderBottom: '1px solid var(--line)', background: 'var(--panel)' }}>
         <Avatar kind="smith" size="lg" />
         <div className="row" style={{ gap: 6 }}>
@@ -156,7 +157,8 @@ const PluginsApp = () => {
           onRotated={() => { setSecretFor(null); flash('Secret rotated. Takes effect on next plugin poll (≤30s) — no restart needed.'); load(); }}
         />
       )}
-    </div>
+      </div>
+    </AppShell>
   );
 };
 

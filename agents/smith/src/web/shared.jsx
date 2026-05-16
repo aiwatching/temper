@@ -102,6 +102,170 @@ const StatusDot = ({ status }) => (
   <span className={`dot ${status === 'ok' ? 'ok' : status === 'warn' ? 'warn' : status === 'bad' || status === 'degraded' ? 'bad' : ''}`} />
 );
 
+// ─── nav rail + app shell ────────────────────────────────────────────────
+//
+// 56px dark rail on the left of every "logged-in" screen. Replicates
+// docs/design/src/app-shell.jsx but each screen still ships as its own
+// HTML page — clicking a rail icon is a real navigation, not a
+// client-side route swap. Trade-off: every nav costs a fresh React
+// bundle parse (Babel-standalone is the big one), but the vendor JS is
+// cached by the browser after first load so it's fast in practice and
+// each page can stay focused.
+//
+// Active state: by `location.pathname` startsWith the screen prefix —
+// /chat matches /chat#conv=..., /tasks matches /tasks/<anything>.
+//
+// Tasks badge: pulls real count of (pending + waiting) tasks from
+// /tasks on mount. Cheap (one fetch), refreshes every 30s so stale
+// numbers don't sit forever in the rail.
+//
+// Keyboard nav: G then D/T/M/S/B switches screens. Skipped when an
+// input/textarea is focused so users can type "g" without warping.
+const NAV_ITEMS = [
+  { id: 'chat',     icon: 'chat',  label: 'Chat',      href: '/chat',     key: 'd' },
+  { id: 'briefs',   icon: 'side',  label: 'Briefs',    href: '/briefs',   key: 'b' },
+  { id: 'tasks',    icon: 'check', label: '任务',       href: '/tasks',    key: 't', badge: 'tasks' },
+  { id: 'plugins',  icon: 'flash', label: 'MCP',        href: '/plugins',  key: 'm' },
+  { id: 'settings', icon: 'cog',   label: '设置',        href: '/settings', key: 's' },
+];
+
+function currentScreenFromPath() {
+  const p = location.pathname;
+  if (p.startsWith('/chat')) return 'chat';
+  if (p.startsWith('/briefs')) return 'briefs';
+  if (p.startsWith('/tasks')) return 'tasks';
+  if (p.startsWith('/plugins')) return 'plugins';
+  if (p.startsWith('/settings')) return 'settings';
+  return null;
+}
+
+function useNavBadges() {
+  const [badges, setBadges] = useState({});
+  useEffect(() => {
+    let stopped = false;
+    const load = async () => {
+      try {
+        const data = await api('/tasks');
+        if (stopped) return;
+        const list = data.tasks || [];
+        const tasks = list.filter(t => t.status === 'pending' || t.status === 'waiting').length;
+        setBadges({ tasks: tasks > 0 ? tasks : null });
+      } catch (_) {
+        if (!stopped) setBadges({});
+      }
+    };
+    load();
+    const t = setInterval(load, 30_000);
+    return () => { stopped = true; clearInterval(t); };
+  }, []);
+  return badges;
+}
+
+const NavRail = ({ current }) => {
+  const screen = current ?? currentScreenFromPath();
+  const badges = useNavBadges();
+
+  // Keyboard: g then <key>. Match the design's behaviour.
+  useEffect(() => {
+    let last = 0, lastKey = '';
+    const h = (e) => {
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) return;
+      const now = Date.now();
+      if (lastKey === 'g' && now - last < 800) {
+        const hit = NAV_ITEMS.find(i => i.key === e.key.toLowerCase());
+        if (hit) {
+          e.preventDefault();
+          if (location.pathname !== hit.href) location.href = hit.href;
+        }
+        lastKey = '';
+        return;
+      }
+      lastKey = e.key.toLowerCase();
+      last = now;
+    };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, []);
+
+  return (
+    <nav style={{
+      width: 56, flex: '0 0 56px',
+      backgroundImage: 'linear-gradient(180deg, #1A1A14, #14140F)',
+      color: '#C3BEB1',
+      display: 'flex', flexDirection: 'column',
+      padding: '10px 0',
+      borderRight: '1px solid #0A0A07',
+    }}>
+      <div style={{ padding: '4px 0 10px', display: 'flex', justifyContent: 'center' }}>
+        <a href="/chat" style={{
+          width: 32, height: 32, borderRadius: 8,
+          background: 'var(--accent)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: 'white', textDecoration: 'none',
+        }} title="Smith">
+          <Icon name="spark" size={16} />
+        </a>
+      </div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, marginTop: 6 }}>
+        {NAV_ITEMS.slice(0, -1).map(item => (
+          <NavButton key={item.id} item={item} active={screen === item.id} badge={item.badge ? badges[item.badge] : null} />
+        ))}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, paddingBottom: 4 }}>
+        <NavButton item={NAV_ITEMS[NAV_ITEMS.length - 1]} active={screen === 'settings'} />
+      </div>
+    </nav>
+  );
+};
+
+const NavButton = ({ item, active, badge }) => (
+  <a
+    href={item.href}
+    title={`${item.label}  (g ${item.key})`}
+    style={{
+      width: 40, height: 40, borderRadius: 8,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      background: active ? 'rgba(255,255,255,0.10)' : 'transparent',
+      color: active ? '#FAFAF7' : '#A29F95',
+      transition: 'all 0.15s',
+      position: 'relative',
+      textDecoration: 'none',
+    }}
+  >
+    <Icon name={item.icon} size={17} />
+    {badge != null && (
+      <span style={{
+        position: 'absolute', top: 4, right: 4,
+        minWidth: 14, height: 14, padding: '0 4px',
+        borderRadius: 7, background: 'var(--danger)', color: 'white',
+        fontSize: 9, fontWeight: 600, fontFamily: 'var(--mono)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        lineHeight: 1,
+      }}>{badge}</span>
+    )}
+    {active && (
+      <span style={{
+        position: 'absolute', left: -10, top: 8, bottom: 8, width: 2,
+        background: '#FAFAF7', borderRadius: 1,
+      }} />
+    )}
+  </a>
+);
+
+/** Wrap a page in the nav rail. Pages call this in their root render. */
+const AppShell = ({ current, children }) => (
+  <div className="smith-app" style={{ display: 'flex', height: '100%', flexDirection: 'row', minHeight: 0 }}>
+    <NavRail current={current} />
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {children}
+    </div>
+  </div>
+);
+
+window.NavRail = NavRail;
+window.AppShell = AppShell;
+
 const Avatar = ({ kind, label, size }) => {
   const className = `avatar ${kind === 'smith' ? 'smith' : ''} ${size === 'lg' ? 'lg' : size === 'sm' ? 'sm' : ''}`.trim();
   if (kind === 'smith') return <span className={className}><Icon name="spark" size={size === 'lg' ? 15 : 12} /></span>;
