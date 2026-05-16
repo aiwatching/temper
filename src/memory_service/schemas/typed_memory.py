@@ -165,6 +165,15 @@ class RecalledEpisodeOut(BaseModel):
     invalid_at: datetime | None = None
 
 
+class RecalledDocumentOut(BaseModel):
+    path: str
+    namespace: str
+    title: str
+    snippet: str
+    source: str | None = None
+    source_url: str | None = None
+
+
 class TurnContextResponse(BaseModel):
     """Everything an agent needs to assemble the system prompt for one turn.
 
@@ -184,5 +193,9 @@ class TurnContextResponse(BaseModel):
 
     # Graphiti recall against the user's message. Empty when no query.
     recalled_episodes: list[RecalledEpisodeOut]
+
+    # Document-FTS recall against the user's message. Empty when no
+    # query or when include_documents=false.
+    recalled_documents: list[RecalledDocumentOut] = Field(default_factory=list)
 
     namespaces_searched: list[str]

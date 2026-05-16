@@ -1,0 +1,607 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .docs-shell {
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    gap: 12px;
+    min-height: 70vh;
+  }
+  .docs-pane {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .docs-tree {
+    overflow-y: auto;
+    max-height: 75vh;
+  }
+  .docs-tree-toolbar {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+    flex-direction: column;
+  }
+  .docs-tree-toolbar input,
+  .docs-tree-toolbar select {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 12px;
+  }
+  .docs-tree-list {
+    padding: 4px 0;
+  }
+  .docs-row {
+    padding: 6px 12px;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    font-size: 12.5px;
+  }
+  .docs-row:hover { background: #f8fafc; }
+  .docs-row.active { border-left-color: var(--accent, #2A5FB8); background: #eaf2fb; }
+  .docs-row .path { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+  .docs-row .title { font-weight: 500; }
+  .docs-row .meta { font-size: 10.5px; color: var(--muted); margin-top: 2px; }
+  .docs-row .source-pill {
+    display: inline-block;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 10px;
+    padding: 0 5px;
+    background: #f6e7ff;
+    color: #6b3fa0;
+    border-radius: 3px;
+    margin-right: 4px;
+  }
+  .docs-editor-toolbar {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .docs-editor-toolbar .path-input {
+    flex: 1;
+    min-width: 200px;
+    padding: 4px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12px;
+  }
+  .docs-editor-toolbar button { font-size: 11px; padding: 4px 10px; }
+  .docs-editor-fields {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 100px 1fr 100px 1fr;
+    gap: 6px 12px;
+    font-size: 12px;
+    align-items: center;
+  }
+  .docs-editor-fields label { color: var(--muted); font-size: 11.5px; }
+  .docs-editor-fields input { padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; width: 100%; box-sizing: border-box; font-size: 12px; }
+  .docs-editor-body {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    overflow: hidden;
+  }
+  .docs-editor-body textarea {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    border-right: 1px solid var(--border);
+    padding: 12px;
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+    resize: none;
+    background: var(--bg);
+  }
+  .docs-preview {
+    overflow-y: auto;
+    padding: 12px 16px;
+    background: #fafbfc;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+  .docs-preview h1, .docs-preview h2, .docs-preview h3 { margin-top: 16px; margin-bottom: 8px; }
+  .docs-preview h1 { font-size: 20px; }
+  .docs-preview h2 { font-size: 16px; }
+  .docs-preview code { background: #f6f8fa; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .docs-preview pre { background: #f6f8fa; padding: 10px 12px; border-radius: 4px; overflow-x: auto; }
+  .docs-preview ul, .docs-preview ol { margin-left: 1.5em; }
+  .docs-preview .wikilink {
+    color: var(--accent, #2A5FB8);
+    text-decoration: none;
+    background: #eaf2fb;
+    padding: 0 4px;
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .docs-preview .wikilink:hover { background: #d4e3f5; }
+  .docs-meta {
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+    background: #f6f8fa;
+    font-size: 11px;
+    color: var(--muted);
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .backlinks {
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .backlinks h4 {
+    margin: 0 0 6px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  .backlinks-list { display: flex; flex-direction: column; gap: 3px; }
+  .backlinks-list a {
+    font-family: ui-monospace, Menlo, monospace;
+    font-size: 11.5px;
+    color: var(--accent, #2A5FB8);
+    text-decoration: none;
+  }
+  .backlinks-list a:hover { text-decoration: underline; }
+  .empty-state { text-align: center; padding: 40px 12px; color: var(--muted); font-size: 13px; }
+  .search-results {
+    border-top: 1px solid var(--border);
+    max-height: 30vh;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .search-result {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .search-result:hover { background: #f8fafc; }
+  .search-result .snippet {
+    font-size: 11.5px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+  .search-result .snippet :where(b, mark, strong) { background: #fff3a3; }
+</style>
+
+<section class="card" x-data="docsPage()" x-init="boot()">
+  <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px">
+    <h2 style="margin:0">Documents (wiki)</h2>
+    <span style="font-size:11.5px; color:var(--muted)">
+      Long-form markdown · wikilinks · revisions · FTS
+    </span>
+    <span style="flex:1"></span>
+    <button @click="newDoc()">+ New document</button>
+  </div>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="message"><div class="msg ok" x-text="message"></div></template>
+
+  <div class="docs-shell">
+
+    <!-- LEFT: tree + search -->
+    <aside class="docs-pane docs-tree">
+      <div class="docs-tree-toolbar">
+        <select x-model="filterNamespace" @change="load()">
+          <option value="">all namespaces</option>
+          <template x-for="ns in availableNamespaces" :key="ns">
+            <option :value="ns" x-text="ns"></option>
+          </template>
+        </select>
+        <input type="text" placeholder="path prefix (e.g. projects/)"
+               x-model="filterPrefix" @input.debounce.350ms="load()" />
+        <input type="text" placeholder="search content (FTS)"
+               x-model="searchQuery" @input.debounce.350ms="runSearch()" />
+        <select x-model="filterSource" @change="load()">
+          <option value="">all sources</option>
+          <option value="mantis">mantis</option>
+          <option value="confluence">confluence</option>
+          <option value="notion">notion</option>
+          <option value="agent-generated">agent-generated</option>
+          <option value="manual">manual</option>
+          <option value="import">import</option>
+        </select>
+      </div>
+
+      <!-- Search results panel (when query active) -->
+      <template x-if="searchHits.length > 0">
+        <div class="search-results">
+          <template x-for="h in searchHits" :key="`${h.namespace}::${h.path}`">
+            <div class="search-result" @click="openByPath(h.namespace, h.path)">
+              <div><b x-text="h.title"></b></div>
+              <div class="path" x-text="h.path"></div>
+              <div class="snippet" x-html="h.snippet"></div>
+            </div>
+          </template>
+        </div>
+      </template>
+
+      <!-- Regular tree list -->
+      <div class="docs-tree-list">
+        <template x-if="docs.length === 0 && !searchQuery">
+          <div class="empty-state">
+            No documents yet. Click <em>+ New document</em>.
+          </div>
+        </template>
+        <template x-for="d in docs" :key="d.id">
+          <div class="docs-row"
+               :class="{ active: current && d.id === current.id }"
+               @click="openByPath(d.namespace, d.path)">
+            <div class="title">
+              <template x-if="d.source"><span class="source-pill" x-text="d.source"></span></template>
+              <span x-text="d.title"></span>
+            </div>
+            <div class="path" x-text="d.path"></div>
+            <div class="meta">
+              <span x-text="d.namespace"></span> ·
+              <span x-text="d.word_count + ' words'"></span> ·
+              <span x-text="d.updated_at.replace('T',' ').slice(0,16)"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </aside>
+
+    <!-- RIGHT: editor + preview + meta -->
+    <section class="docs-pane">
+      <template x-if="!current && !editing">
+        <div class="empty-state" style="flex:1; display:flex; align-items:center; justify-content:center">
+          Select a document on the left, or click <em>+ New document</em>.
+        </div>
+      </template>
+
+      <template x-if="current || editing">
+        <div style="display:flex; flex-direction:column; flex:1; min-height:0">
+          <div class="docs-editor-toolbar">
+            <input class="path-input" x-model="editor.path"
+                   :disabled="!editing.isNew" placeholder="projects/auth/refactor" />
+            <input class="path-input" x-model="editor.title"
+                   placeholder="title" style="flex:0 1 200px" />
+            <select x-model="editor.namespace" :disabled="!editing.isNew" style="font-size:11px">
+              <template x-for="ns in availableNamespaces" :key="ns">
+                <option :value="ns" x-text="ns"></option>
+              </template>
+            </select>
+            <button @click="save()" :disabled="!editor.path || !editor.title">Save</button>
+            <button class="secondary" @click="reloadCurrent()" :disabled="editing.isNew">Reload</button>
+            <button class="danger" @click="confirmDelete()" :disabled="editing.isNew">Delete</button>
+          </div>
+
+          <div class="docs-editor-fields">
+            <label>Source</label>
+            <input x-model="editor.source" placeholder="mantis / confluence / notion / agent-generated" />
+            <label>Source URL</label>
+            <input x-model="editor.source_url" placeholder="https://..." />
+            <label>Tags</label>
+            <input x-model="editor.tags_str" placeholder="comma,separated,tags" />
+            <label>Frontmatter (JSON)</label>
+            <input x-model="editor.frontmatter_str" placeholder='{"sprint":"24"}' />
+          </div>
+
+          <div class="docs-editor-body">
+            <textarea x-model="editor.content"
+                      @input.debounce.250ms="renderPreview()"
+                      placeholder="# Title&#10;&#10;Write markdown here. Use [[other-path]] to link."></textarea>
+            <div class="docs-preview" x-html="preview"></div>
+          </div>
+
+          <div class="docs-meta">
+            <span x-text="`updated ${current ? current.updated_at.replace('T',' ').slice(0,16) : '(new)'}`"></span>
+            <template x-if="current && current.updated_by">
+              <span x-text="`by ${current.updated_by}`"></span>
+            </template>
+            <template x-if="current && current.imported_at">
+              <span x-text="`imported ${current.imported_at.replace('T',' ').slice(0,16)}`"></span>
+            </template>
+            <template x-if="current && current.source_url">
+              <a :href="current.source_url" target="_blank" rel="noopener" style="color:var(--accent,#2A5FB8)">↗ source</a>
+            </template>
+            <span x-text="`${editor.content.length} chars`"></span>
+            <span style="margin-left:auto">
+              <a href="#" @click.prevent="loadRevisions()" x-show="current">history</a>
+            </span>
+          </div>
+
+          <template x-if="backlinks.length > 0">
+            <div class="backlinks">
+              <h4 x-text="`Backlinks (${backlinks.length})`"></h4>
+              <div class="backlinks-list">
+                <template x-for="b in backlinks" :key="`${b.source_namespace}::${b.source_path}`">
+                  <a href="#" @click.prevent="openByPath(b.source_namespace, b.source_path)">
+                    <span x-text="b.source_path"></span>
+                    <template x-if="b.label">
+                      <span style="color:var(--muted)" x-text="' — '+b.label"></span>
+                    </template>
+                  </a>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <template x-if="revisions.length > 0">
+            <div class="backlinks">
+              <h4 x-text="`Revisions (${revisions.length})`"></h4>
+              <div class="backlinks-list">
+                <template x-for="r in revisions" :key="r.id">
+                  <a href="#" @click.prevent="openRevision(r)">
+                    <span x-text="r.revised_at.replace('T',' ').slice(0,16)"></span>
+                    <template x-if="r.revised_by">
+                      <span style="color:var(--muted)" x-text="' · '+r.revised_by"></span>
+                    </template>
+                    <template x-if="r.reason">
+                      <span style="color:var(--muted)" x-text="' · '+r.reason"></span>
+                    </template>
+                  </a>
+                </template>
+              </div>
+            </div>
+          </template>
+        </div>
+      </template>
+    </section>
+  </div>
+</section>
+
+<!-- marked for markdown preview rendering. Loaded from local static
+     would be cleaner; CDN is fine for admin UI. -->
+<script src="https://cdn.jsdelivr.net/npm/marked@15/marked.min.js"></script>
+
+<script>
+function docsPage() {
+  return {
+    docs: [],
+    docsCursor: null,
+    current: null,
+    editing: null,            // { isNew: bool } when an editor is open
+    editor: {
+      path: '', title: '', namespace: '', content: '',
+      source: '', source_url: '',
+      tags_str: '', frontmatter_str: '',
+    },
+    preview: '',
+    backlinks: [],
+    revisions: [],
+    availableNamespaces: [],
+    filterNamespace: '',
+    filterPrefix: '',
+    filterSource: '',
+    searchQuery: '',
+    searchHits: [],
+    error: null,
+    message: null,
+
+    async boot() {
+      await this.loadNamespaces();
+      await this.load();
+    },
+
+    async loadNamespaces() {
+      try {
+        const j = await window.ms.json('/v1/namespaces');
+        this.availableNamespaces = (j.namespaces || []).map(n => n.raw || n);
+      } catch (_) {
+        // Best-effort — if namespaces endpoint is gated for non-admin,
+        // we still want documents page to function. Fall back to a
+        // sensible default.
+        this.availableNamespaces = ['user:me'];
+      }
+      if (!this.editor.namespace && this.availableNamespaces.length) {
+        this.editor.namespace = this.availableNamespaces[0];
+      }
+    },
+
+    async load() {
+      this.error = null;
+      try {
+        const params = new URLSearchParams({ limit: '100' });
+        if (this.filterNamespace) params.set('namespace', this.filterNamespace);
+        if (this.filterPrefix) params.set('prefix', this.filterPrefix);
+        if (this.filterSource) params.set('source', this.filterSource);
+        const j = await window.ms.json(`/v1/documents?${params}`);
+        this.docs = j.documents || [];
+      } catch (e) { this.error = e.message; }
+    },
+
+    async runSearch() {
+      if (!this.searchQuery || this.searchQuery.length < 2) {
+        this.searchHits = [];
+        return;
+      }
+      try {
+        const params = new URLSearchParams({ q: this.searchQuery, limit: '20' });
+        if (this.filterNamespace) params.set('namespace', this.filterNamespace);
+        const j = await window.ms.json(`/v1/documents/search?${params}`);
+        this.searchHits = j.hits || [];
+      } catch (e) { this.error = e.message; }
+    },
+
+    async openByPath(namespace, path) {
+      this.error = null;
+      try {
+        const params = new URLSearchParams();
+        if (namespace) params.set('namespace', namespace);
+        const j = await window.ms.json(
+          `/v1/documents/${encodeURIComponent(path)}?${params}`.replace(/%2F/g, '/'),
+        );
+        this.current = j;
+        this.editing = { isNew: false };
+        this.editor = {
+          path: j.path, title: j.title, namespace: j.namespace,
+          content: j.content,
+          source: j.source || '',
+          source_url: j.source_url || '',
+          tags_str: (j.tags || []).join(','),
+          frontmatter_str: JSON.stringify(j.frontmatter || {}, null, 0),
+        };
+        this.renderPreview();
+        await this.loadBacklinks();
+        this.revisions = [];
+      } catch (e) { this.error = e.message; }
+    },
+
+    newDoc() {
+      this.current = null;
+      this.editing = { isNew: true };
+      this.editor = {
+        path: '', title: '',
+        namespace: this.filterNamespace || this.availableNamespaces[0] || 'user:me',
+        content: '# New document\n\n',
+        source: '', source_url: '',
+        tags_str: '', frontmatter_str: '{}',
+      };
+      this.preview = '';
+      this.backlinks = [];
+      this.revisions = [];
+    },
+
+    async save() {
+      this.error = null;
+      let frontmatter = {};
+      try { frontmatter = JSON.parse(this.editor.frontmatter_str || '{}'); }
+      catch (e) { this.error = `Frontmatter must be valid JSON: ${e.message}`; return; }
+      const body = {
+        title: this.editor.title,
+        content: this.editor.content,
+        content_type: 'markdown',
+        source: this.editor.source || null,
+        source_url: this.editor.source_url || null,
+        tags: (this.editor.tags_str || '').split(',').map(t => t.trim()).filter(Boolean),
+        frontmatter,
+        namespace: this.editor.namespace,
+      };
+      try {
+        const j = await window.ms.json(
+          `/v1/documents/${this.editor.path}`,
+          { method: 'PUT', body: JSON.stringify(body) },
+        );
+        this.message = `Saved ${j.namespace}/${j.path}`;
+        setTimeout(() => { this.message = null; }, 2500);
+        this.current = j;
+        this.editing = { isNew: false };
+        this.renderPreview();
+        await this.load();
+        await this.loadBacklinks();
+      } catch (e) { this.error = e.message; }
+    },
+
+    async reloadCurrent() {
+      if (this.current) {
+        await this.openByPath(this.current.namespace, this.current.path);
+      }
+    },
+
+    async confirmDelete() {
+      if (!this.current) return;
+      if (!confirm(`Delete '${this.current.path}'? Revisions + links also drop.`)) return;
+      try {
+        const params = new URLSearchParams({ namespace: this.current.namespace });
+        await window.ms.json(
+          `/v1/documents/${this.current.path}?${params}`,
+          { method: 'DELETE' },
+        );
+        this.message = `Deleted ${this.current.path}`;
+        setTimeout(() => { this.message = null; }, 2500);
+        this.current = null;
+        this.editing = null;
+        this.editor.content = '';
+        this.preview = '';
+        await this.load();
+      } catch (e) { this.error = e.message; }
+    },
+
+    renderPreview() {
+      if (typeof marked === 'undefined') {
+        this.preview = '<pre>' + this.escapeHtml(this.editor.content) + '</pre>';
+        return;
+      }
+      // Render wikilinks BEFORE markdown so they survive as <span>.
+      const wikiSafe = this.editor.content.replace(
+        /\[\[([^\]\|]+?)(?:\|([^\]]+))?\]\]/g,
+        (_, target, label) => {
+          const t = target.trim();
+          const l = (label || t).trim();
+          return `<a class="wikilink" data-target="${this.escapeHtml(t)}" href="#" onclick="event.preventDefault(); document.dispatchEvent(new CustomEvent('docs-open', { detail: '${this.escapeHtml(t)}' }))">${this.escapeHtml(l)}</a>`;
+        },
+      );
+      try {
+        this.preview = marked.parse(wikiSafe, { gfm: true, breaks: true });
+      } catch (_) {
+        this.preview = '<pre>' + this.escapeHtml(this.editor.content) + '</pre>';
+      }
+    },
+
+    escapeHtml(s) {
+      return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    },
+
+    async loadBacklinks() {
+      if (!this.current) return;
+      try {
+        const params = new URLSearchParams({ namespace: this.current.namespace });
+        const j = await window.ms.json(
+          `/v1/documents/${this.current.path}/backlinks?${params}`,
+        );
+        this.backlinks = j.backlinks || [];
+      } catch (_) { this.backlinks = []; }
+    },
+
+    async loadRevisions() {
+      if (!this.current) return;
+      try {
+        const params = new URLSearchParams({ namespace: this.current.namespace });
+        const j = await window.ms.json(
+          `/v1/documents/${this.current.path}/revisions?${params}`,
+        );
+        this.revisions = j.revisions || [];
+      } catch (e) { this.error = e.message; }
+    },
+
+    async openRevision(r) {
+      try {
+        const params = new URLSearchParams({ namespace: this.current.namespace });
+        const j = await window.ms.json(
+          `/v1/documents/${this.current.path}/revisions/${r.id}?${params}`,
+        );
+        // Load into editor but stay on the same path — user can save to restore.
+        this.editor.content = j.content;
+        this.editor.title = j.title;
+        this.renderPreview();
+        this.message = `Loaded revision from ${r.revised_at.replace('T',' ').slice(0,16)} — Save to restore`;
+        setTimeout(() => { this.message = null; }, 4000);
+      } catch (e) { this.error = e.message; }
+    },
+  };
+}
+
+// Wikilink click handler — listens for the custom event from inline
+// onclick (the only way to bind from dangerouslySetInnerHTML output).
+document.addEventListener('docs-open', (e) => {
+  const target = e.detail;
+  // Find the Alpine root, ask it to open the target.
+  const root = document.querySelector('[x-data]');
+  if (root && root._x_dataStack) {
+    const data = root._x_dataStack[0];
+    // Default to current namespace if no ns prefix on the wikilink.
+    const ns = data.current?.namespace || data.editor.namespace;
+    data.openByPath(ns, target);
+  }
+});
+</script>
+{% endblock %}

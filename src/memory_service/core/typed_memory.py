@@ -521,6 +521,23 @@ class RecalledEpisode:
     score: float
     valid_at: datetime | None
     invalid_at: datetime | None
+    # Documents this episode cross-references via [[wikilink]].
+    # Populated when episode_metadata.linked_document_paths is set;
+    # surfacing alongside the episode hit avoids a follow-up fetch.
+    linked_documents: list[RecalledDocument] | None = None
+
+
+@dataclass
+class RecalledDocument:
+    """Document surfaced in recall — either matched directly by FTS
+    against the turn query, or pulled in via [[wikilink]] from a
+    recalled episode."""
+    path: str
+    namespace: str
+    title: str
+    snippet: str
+    source: str | None
+    source_url: str | None
 
 
 @dataclass
@@ -530,6 +547,7 @@ class TurnContext:
     preferences: dict[str, Any]
     pinned_blocks: list[PinnedBlock]
     recalled_episodes: list[RecalledEpisode]
+    recalled_documents: list[RecalledDocument]
     namespaces_searched: list[str]
 
 
@@ -540,6 +558,8 @@ async def build_turn_context(
     query: str | None = None,
     recall_limit: int = 10,
     namespaces: list[str] | None = None,
+    include_documents: bool = True,
+    document_limit: int = 3,
 ) -> TurnContext:
     """One-shot context bundle for a turn.
 
@@ -600,11 +620,41 @@ async def build_turn_context(
                 valid_at=h.valid_at, invalid_at=h.invalid_at,
             ))
 
+    # --- documents (optional, query-gated, FTS only for now)
+    docs_recalled: list[RecalledDocument] = []
+    if include_documents and query and query.strip():
+        try:
+            # Local import — avoids a module-load cycle since
+            # core/documents.py imports from core/namespaces which
+            # this module also touches.
+            from memory_service.core import documents as doc_ops
+
+            doc_hits = await doc_ops.search_fts(
+                user, db, query.strip(),
+                namespace=None,  # all readable namespaces
+                limit=document_limit,
+            )
+            docs_recalled = [
+                RecalledDocument(
+                    path=d.path, namespace=d.namespace, title=d.title,
+                    snippet=d.snippet or "",
+                    source=d.source, source_url=d.source_url,
+                )
+                for d in doc_hits
+            ]
+        except doc_ops.DocumentError as exc:
+            _logger.warning("turn_context document recall failed: %s", exc)
+        except Exception as exc:
+            # Defensive — never let a bad search take down the whole
+            # context fetch. Recall-side failures degrade gracefully.
+            _logger.warning("turn_context document recall errored: %s", exc)
+
     return TurnContext(
         active_tasks=tasks,
         current_focus=focus_value,
         preferences=prefs,
         pinned_blocks=pinned,
         recalled_episodes=recalled,
+        recalled_documents=docs_recalled,
         namespaces_searched=ns_searched,
     )

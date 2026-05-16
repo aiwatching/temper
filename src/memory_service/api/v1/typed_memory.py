@@ -42,6 +42,7 @@ from memory_service.schemas.typed_memory import (
     PinnedBlockOut,
     PreferenceItem,
     PreferenceListResponse,
+    RecalledDocumentOut,
     RecalledEpisodeOut,
     SetFocusRequest,
     SetPreferenceRequest,
@@ -250,6 +251,11 @@ async def get_turn_context(
         str | None,
         Query(description="Comma-separated override; defaults to agent's own + user:me"),
     ] = None,
+    include_documents: Annotated[
+        bool,
+        Query(description="Fan recall out to FTS-search documents alongside episodes."),
+    ] = True,
+    document_limit: Annotated[int, Query(ge=0, le=10)] = 3,
 ) -> TurnContextResponse:
     ns_list = (
         [n.strip() for n in namespaces.split(",") if n.strip()]
@@ -257,6 +263,7 @@ async def get_turn_context(
     )
     ctx = await tm.build_turn_context(
         user, db, query=query, recall_limit=recall_limit, namespaces=ns_list,
+        include_documents=include_documents, document_limit=document_limit,
     )
     return TurnContextResponse(
         active_tasks=[_task_to_schema(t) for t in ctx.active_tasks],
@@ -275,6 +282,13 @@ async def get_turn_context(
                 score=r.score, valid_at=r.valid_at, invalid_at=r.invalid_at,
             )
             for r in ctx.recalled_episodes
+        ],
+        recalled_documents=[
+            RecalledDocumentOut(
+                path=d.path, namespace=d.namespace, title=d.title,
+                snippet=d.snippet, source=d.source, source_url=d.source_url,
+            )
+            for d in ctx.recalled_documents
         ],
         namespaces_searched=ctx.namespaces_searched,
     )
