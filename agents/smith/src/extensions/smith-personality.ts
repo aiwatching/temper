@@ -367,7 +367,7 @@ const MAX_HIT_TEXT = 280;
 // Hard ceiling on the recall block. RRF doesn't give us a meaningful
 // score threshold (rank-based), so the char cap is what keeps a noisy
 // long tail from inflating the prompt.
-const MAX_RECALL_BLOCK_CHARS = 2000;
+const MAX_RECALL_BLOCK_CHARS = 3000;
 
 // ─── what auto-recall could ALSO be doing (Graphiti capabilities we ──
 // ─── currently don't use; documented so future work doesn't reinvent) ─
@@ -543,92 +543,30 @@ function renderTurnContext(ctx: {
   recalled_episodes: RecalledEpisodeWire[];
   namespaces_searched: string[];
 }): string {
+  // Section order is load-bearing for the truncation policy in
+  // _capBlock: cap drops from the END, so the *most critical*
+  // identity-class context goes FIRST and the *most disposable*
+  // (recall) goes LAST.
+  //
+  // Concretely: a regression where "你叫我什么" → "不记得" came from
+  // putting preferences AFTER a long Active-tasks-empty hint, which
+  // pushed `preferences.how_to_call_user = "..."` past the 2000-char
+  // cap and got it cut mid-string. New order:
+  //
+  //   1. Preferences          (ground truth — must never be cut)
+  //   2. Other pinned         (user-asserted facts)
+  //   3. Current focus        (small)
+  //   4. Active tasks         (small when populated; terse hint when empty)
+  //   5. Recall               (best-effort; first to go under pressure)
   const parts: string[] = [];
 
-  // --- Active tasks ----------------------------------------------------
-  // ALWAYS rendered, even when empty. The empty-case branch is
-  // load-bearing: without it, the model concludes "no Active tasks
-  // section exists" → "tasks must be empty / not tracked" and answers
-  // "you have no tasks" even when recall below has task-like episodes
-  // from before the typed memory tools existed. The empty-state hint
-  // tells the model to look in recall and offer migration.
-  parts.push("\n═══ Active tasks (state.active_tasks) ═══");
-  if (ctx.active_tasks.length > 0) {
-    parts.push(
-      "\nThese are what the user is currently working on. When asked",
-      "'what are my tasks / what am I doing', this list IS the answer —",
-      "do not say you have no record. Reference items by `id` if the",
-      "user wants to update or complete one.\n",
-    );
-    for (const t of ctx.active_tasks) {
-      const notes = t.notes ? `  — ${t.notes}` : "";
-      parts.push(
-        `  [${t.id}] (${t.status}, p=${t.priority}) ${t.title}${notes}`,
-      );
-    }
-    parts.push(
-      "\nTools: `task_add`, `task_update`, `task_complete`, `list_tasks`.",
-    );
-  } else {
-    parts.push(
-      "\n(empty — no tasks registered via task_add yet)",
-      "",
-      "IMPORTANT: empty here does NOT mean the user has no tasks. It",
-      "only means none have been registered through the typed path.",
-      "If the user asks 'what are my tasks / 我的任务 / 当前任务' and",
-      "this list is empty, run these steps IN ORDER. Do NOT stop early:",
-      "",
-      "  1. Look at the Memory recall section below for task-like",
-      "     content from past conversations ('user mentioned working",
-      "     on X', 'asked to remember Y', etc).",
-      "",
-      "  2. If recall has NOTHING task-like (or is empty), DO NOT GIVE",
-      "     UP — auto-recall is keyed on the user's literal query and",
-      "     '你当前任务' won't match episodes that say things like ",
-      "     'send daily report' or 'check Mantis hourly'.",
-      "",
-      "     The user's 'tasks' can be ANY of these patterns in graphiti.",
-      "     Run memory_search with a WIDE keyword set that covers them:",
-      "       memory_search(",
-      "         query='任务 todo working on schedule routine daily " +
-      "hourly report notification reminder periodic',",
-      "         limit=20",
-      "       )",
-      "     This is one call, multiple keywords — RRF ranks documents",
-      "     containing more of these terms higher, so the relevant",
-      "     ones float to the top regardless of their exact wording.",
-      "",
-      "     If that returns hits, ALSO try a second call with the",
-      "     user's likely domain terms ('mantis', 'standup', specific",
-      "     project names you've seen in pinned memory) for precision.",
-      "",
-      "  3. If steps 1+2 surface candidate task-like episodes,",
-      "     paraphrase them to the user and ASK whether to register",
-      "     each via task_add so they persist in the active list. Do",
-      "     not auto-add without confirmation.",
-      "",
-      "  4. Only say 'no tasks recorded' AFTER step 2 also came up",
-      "     empty. Then offer to add new ones the user names.",
-    );
-  }
-  parts.push("");
-
-  // --- Current focus ---------------------------------------------------
-  if (ctx.current_focus) {
-    parts.push(
-      "\n═══ Current focus (state.current_focus) ═══\n",
-      `  ${ctx.current_focus}`,
-      "\nTool: `set_focus(value)` when the user switches focus.\n",
-    );
-  }
-
-  // --- Preferences -----------------------------------------------------
+  // --- 1. Preferences (CROSS-AGENT, GROUND TRUTH) ----------------------
   const prefKeys = Object.keys(ctx.preferences);
   if (prefKeys.length > 0) {
     parts.push(
       "\n═══ User preferences (cross-agent, ground truth) ═══\n",
-      "Standing instructions from the user — apply automatically without",
-      "asking again. Use `set_preference(key, value)` to change.\n",
+      "Standing instructions — apply automatically. Use `set_preference`",
+      "to change.\n",
     );
     for (const k of prefKeys.sort()) {
       const v = ctx.preferences[k];
@@ -638,7 +576,7 @@ function renderTurnContext(ctx: {
     parts.push("");
   }
 
-  // --- Other pinned blocks (non-canonical) ----------------------------
+  // --- 2. Other pinned (non-canonical) --------------------------------
   const canonical = new Set<string>([
     "state.active_tasks", "state.current_focus",
     ...prefKeys.map((k) => `preferences.${k}`),
@@ -666,14 +604,45 @@ function renderTurnContext(ctx: {
     parts.push("");
   }
 
-  // --- Recall (graphiti hits against this turn's query) ---------------
+  // --- 3. Current focus ------------------------------------------------
+  if (ctx.current_focus) {
+    parts.push(
+      "\n═══ Current focus (state.current_focus) ═══\n",
+      `  ${ctx.current_focus}`,
+      "\nTool: `set_focus(value)` when the user switches focus.\n",
+    );
+  }
+
+  // --- 4. Active tasks ------------------------------------------------
+  parts.push("\n═══ Active tasks (state.active_tasks) ═══");
+  if (ctx.active_tasks.length > 0) {
+    parts.push("\nReference items by `id` to update / complete.\n");
+    for (const t of ctx.active_tasks) {
+      const notes = t.notes ? `  — ${t.notes}` : "";
+      parts.push(
+        `  [${t.id}] (${t.status}, p=${t.priority}) ${t.title}${notes}`,
+      );
+    }
+    parts.push("");
+    parts.push("Tools: `task_add` / `task_update` / `task_complete` / `list_tasks`.");
+  } else {
+    // Empty-list hint — kept short to preserve budget for identity +
+    // recall. The long "wide keyword search" guidance lives in the
+    // SMITH_BASE_PROMPT instead now, so it's not paid for every turn.
+    parts.push(
+      "\n(empty — none registered via task_add yet)",
+      "If user asks about tasks: also `memory_search(query='任务 todo working on schedule routine daily report')` — old data may live in graphiti.",
+    );
+  }
+  parts.push("");
+
+  // --- 5. Recall (graphiti hits) — FIRST TO GET CUT IF OVER BUDGET ----
   if (ctx.recalled_episodes.length > 0) {
     parts.push(
       "\n═══ Memory recall (auto-retrieved for this turn) ═══\n",
-      "Facts from graphiti matching this turn's query. Lower priority",
-      "than the structured sections above — when they conflict, the",
-      "structured state wins (it's the current truth, recall is history).",
-      `Namespaces searched: ${ctx.namespaces_searched.join(", ")}\n`,
+      "Graphiti hits for this turn's query. Lower priority than the",
+      "structured sections above; structured state wins on conflict.",
+      `Namespaces: ${ctx.namespaces_searched.join(", ")}\n`,
     );
     const hits = ctx.recalled_episodes.slice(0, MAX_RECALL_HITS * 2);
     for (const [i, h] of hits.entries()) {
