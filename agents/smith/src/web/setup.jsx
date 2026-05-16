@@ -16,6 +16,7 @@ const SetupApp = () => {
   const [step, setStep] = React.useState(1);
   const [data, setData] = React.useState({
     agent_slug: 'smith',
+    timezone: '',  // Step2Identity seeds via Intl detect on first render
     temper_base_url: 'http://127.0.0.1:18088',
     temper_api_key: '',
     llm_provider: 'deepseek',
@@ -102,6 +103,22 @@ const Step1Welcome = ({ onNext }) => (
 
 const Step2Identity = ({ data, update, onNext, onBack }) => {
   const slugOk = /^[a-z0-9][a-z0-9_-]*$/.test(data.agent_slug);
+  const detectedTz = (typeof Intl !== 'undefined') ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
+  // Seed timezone on first render — auto-detect is the sensible default
+  // and reduces this step to zero clicks for most users.
+  React.useEffect(() => {
+    if (!data.timezone) update('timezone', detectedTz);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  let tzPreview;
+  try {
+    tzPreview = new Intl.DateTimeFormat('en-CA', {
+      timeZone: data.timezone || detectedTz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+      timeZoneName: 'shortOffset',
+    }).format(new Date());
+  } catch { tzPreview = '(invalid IANA name)'; }
   return (
     <>
       <h2 style={{ marginTop: 0 }}>Smith identity</h2>
@@ -109,6 +126,15 @@ const Step2Identity = ({ data, update, onNext, onBack }) => {
       <Field label="Agent slug" hint="agent:me/<slug>">
         <input value={data.agent_slug} onChange={e => update('agent_slug', e.target.value)} style={input} placeholder="smith" />
         {data.agent_slug && !slugOk && <div style={{ color:'var(--danger)', fontSize: 11, marginTop: 4 }}>Lowercase alnum + _ -; must start alnum.</div>}
+      </Field>
+      <Field label="Timezone" hint={`auto-detected from your browser; change anytime in /settings`}>
+        <input value={data.timezone || ''} onChange={e => update('timezone', e.target.value)}
+               style={input} placeholder={detectedTz} list="setup-tz-suggestions" />
+        <datalist id="setup-tz-suggestions">
+          {['Asia/Shanghai','Asia/Hong_Kong','Asia/Tokyo','Asia/Singapore','Europe/London','America/Los_Angeles','America/New_York','UTC'].map(z =>
+            <option key={z} value={z} />)}
+        </datalist>
+        <div className="muted" style={{ fontSize: 11, marginTop: 4, fontFamily: 'var(--mono)' }}>现在: {tzPreview}</div>
       </Field>
       <Actions next="Next" onNext={onNext} onBack={onBack} nextDisabled={!slugOk} />
     </>

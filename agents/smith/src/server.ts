@@ -422,6 +422,8 @@ export function buildApp(): Hono {
     const cfg = getConfig();
     const body: Record<string, unknown> = {
       status: "ok",
+      timezone: cfg.timezone,
+      now: new Date().toISOString(),
       temper_base_url: cfg.temperBaseUrl,
       llm_provider: cfg.llmProvider,
       llm_model: cfg.llmModel,
@@ -670,6 +672,7 @@ import { randomBytes } from "node:crypto";
 
 interface SetupPayload {
   agent_slug?: string;
+  timezone?: string;
   temper_base_url?: string;
   temper_api_key?: string;
   llm_provider?: string;
@@ -809,6 +812,7 @@ function registerSetupRoutes(app: Hono): void {
     }
 
     writeStr(SETTING_KEYS.smithAgentSlug, p.agent_slug, "Namespace suffix in TEMPER (agent:me/<slug>)");
+    writeStr(SETTING_KEYS.timezone, p.timezone, "IANA timezone — drives clock injection + relative-time interpretation");
     writeStr(SETTING_KEYS.temperBaseUrl, p.temper_base_url, "TEMPER instance base URL");
     writeSecret(SETTING_KEYS.temperApiKey, p.temper_api_key, "TEMPER API key");
     writeStr(SETTING_KEYS.llmProvider, p.llm_provider, "pi-ai provider id");

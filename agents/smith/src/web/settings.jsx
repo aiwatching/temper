@@ -76,6 +76,11 @@ const SettingsApp = () => {
                                onSaved={(s) => { flash(`Saved smith.agent_slug = ${s}`); load(); }} onError={setError} />
                 </Section>
 
+                <Section title="Timezone" desc="IANA name (e.g. Asia/Shanghai, America/Los_Angeles). Auto-detected from your OS on first boot. Used to render current time + interpret relative times in your messages (tomorrow / every morning / in 2h).">
+                  <TimezoneField row={byKey['smith.timezone']} setKey="smith.timezone"
+                                 onSaved={(s) => { flash(`Saved smith.timezone = ${s}`); load(); }} onError={setError} />
+                </Section>
+
                 <Section title="TEMPER memory service">
                   <StringField row={byKey['temper.base_url']} setKey="temper.base_url" placeholder="http://127.0.0.1:18088"
                                onSaved={(s) => { flash(`Saved temper.base_url`); load(); }} onError={setError} />
@@ -169,6 +174,67 @@ const Row = ({ children }) => (
 const KeyLabel = ({ k }) => (
   <code style={{ minWidth: 200, fontSize: 11, color: 'var(--ink-3)', background: 'transparent', border: 0, padding: 0 }}>{k}</code>
 );
+
+const TimezoneField = ({ row, setKey, onSaved, onError }) => {
+  const detected = (typeof Intl !== 'undefined') ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC';
+  const initial = typeof row?.value === 'string' && row.value ? row.value : detected;
+  const [v, setV] = React.useState(initial);
+  React.useEffect(() => {
+    if (typeof row?.value === 'string') setV(row.value);
+  }, [row?.value]);
+  const [tick, setTick] = React.useState(0);
+  React.useEffect(() => {
+    const t = setInterval(() => setTick(x => x + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+  let preview;
+  try {
+    preview = new Intl.DateTimeFormat('en-CA', {
+      timeZone: v, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+      timeZoneName: 'shortOffset',
+    }).format(new Date());
+  } catch {
+    preview = '(invalid IANA zone — Smith will fall back to ' + detected + ')';
+  }
+  void tick;
+  const save = async () => {
+    try {
+      await api(`/settings/${encodeURIComponent(setKey)}`, {
+        method: 'PUT', body: JSON.stringify({ value: v.trim() }),
+      });
+      onSaved(v.trim());
+    } catch (e) { onError(e.message); }
+  };
+  // Common zones for convenience; user can also type a free IANA name.
+  const COMMON = [
+    'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Tokyo', 'Asia/Singapore', 'Asia/Kolkata',
+    'Europe/London', 'Europe/Berlin', 'Europe/Paris',
+    'America/Los_Angeles', 'America/Denver', 'America/Chicago', 'America/New_York',
+    'UTC',
+  ];
+  return (
+    <div>
+      <Row>
+        <KeyLabel k={setKey} />
+        <input value={v} onChange={e => setV(e.target.value)} placeholder={detected}
+               list="tz-suggestions" style={input} />
+        <datalist id="tz-suggestions">
+          {COMMON.map(z => <option key={z} value={z} />)}
+        </datalist>
+        <button className="btn sm" onClick={save}>Save</button>
+        {v !== detected && (
+          <button className="btn sm subtle" title="Use OS-detected zone" onClick={() => setV(detected)}>
+            Use system ({detected})
+          </button>
+        )}
+      </Row>
+      <div className="muted" style={{ marginLeft: 200, marginTop: -4, marginBottom: 8, fontSize: 11, fontFamily: 'var(--mono)' }}>
+        现在: {preview}
+      </div>
+    </div>
+  );
+};
 
 const StringField = ({ row, setKey, placeholder, onSaved, onError }) => {
   const [v, setV] = React.useState(typeof row?.value === 'string' ? row.value : '');

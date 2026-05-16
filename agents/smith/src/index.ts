@@ -20,10 +20,11 @@
  */
 import { serve } from "@hono/node-server";
 
-import { getConfig, mapEnvForPi } from "./config.js";
+import { detectSystemTimezone, getConfig, mapEnvForPi, SETTING_KEYS } from "./config.js";
 import { closeDb } from "./db/sqlite.js";
 import { runMigrations } from "./db/migrations.js";
 import { migrateEnvSettings } from "./db/migrate_env_settings.js";
+import { getSetting, setSetting } from "./db/settings.js";
 import { startJobsEngine, stopJobsEngine } from "./jobs-engine.js";
 import { getPluginManager } from "./plugins/manager.js";
 import { migrateEnvMcpServers } from "./plugins/migrate_env.js";
@@ -55,6 +56,19 @@ async function main(): Promise<void> {
   //    already populated, so re-running is safe.
   migrateEnvSettings();      // TEMPER / LLM / SMITH_* settings → settings
   migrateEnvMcpServers();    // MCP_SERVERS → plugins
+
+  // 2b. Persist the OS-detected timezone on first sight. We want the
+  //     auto-detect to be visible + editable in /settings, not a
+  //     ghost value computed in-memory each boot. This is also what
+  //     surfaces it in setup wizard pre-fills.
+  if (getSetting(SETTING_KEYS.timezone) == null) {
+    const tz = detectSystemTimezone();
+    setSetting(SETTING_KEYS.timezone, tz, {
+      description: "IANA timezone — auto-detected on first boot, override anytime",
+      updatedBy: "boot-detect",
+    });
+    console.log(`[smith] timezone auto-detected: ${tz} (override in /settings)`);
+  }
 
   // 3. Now safe to read config; getConfig() reads settings, falls
   //    back to env for anything not yet imported (covers the very

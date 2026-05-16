@@ -20,12 +20,50 @@
  * when the auto-recall didn't bring enough. `memory_write` is the
  * model's responsibility — writing is always intentional.
  */
+import { getConfig } from "../config.js";
 import { Temper } from "../temper.js";
 import type {
   PinnedBlockWire,
   RecalledEpisodeWire,
   TypedTask,
 } from "../temper.js";
+
+/** Render "now" in the user's configured timezone, with full
+ *  context (date, time, weekday, TZ name + offset) so the model
+ *  can answer "what time is it" and compute relative times
+ *  ("tomorrow morning") correctly without guessing the zone. */
+function renderClock(tz: string): string {
+  const now = new Date();
+  let pretty: string;
+  let offset: string;
+  try {
+    const f = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+      hour12: false,
+      weekday: "short",
+      timeZoneName: "shortOffset",
+    });
+    const parts = f.formatToParts(now);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+    const y = get("year"), m = get("month"), d = get("day");
+    const hh = get("hour"), mm = get("minute"), ss = get("second");
+    const wd = get("weekday");
+    offset = get("timeZoneName") || "";
+    pretty = `${y}-${m}-${d} ${hh}:${mm}:${ss} (${wd})`;
+  } catch {
+    pretty = now.toISOString();
+    offset = "UTC";
+  }
+  return (
+    `\n═══ Current time ═══\n` +
+    `  ${pretty}  ·  TZ: ${tz}  ·  ${offset}  ·  ISO: ${now.toISOString()}\n` +
+    `  Use this when the user says "tomorrow", "in 2 hours", "every\n` +
+    `  morning at 9", etc. Convert relative times to ISO using THIS\n` +
+    `  zone; don't ask the user to clarify unless ambiguous.\n`
+  );
+}
 
 // biome-ignore lint: pi.ExtensionAPI types are still moving — see other extensions.
 type PiExtensionAPI = any;
@@ -460,7 +498,12 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
         );
       }
 
-      return { systemPrompt: SMITH_BASE_PROMPT + contextBlock };
+      // Clock block first so it sits at the top of the system
+      // prompt — the model is most likely to consult time when
+      // answering "what time is it" or computing relative times,
+      // and we want it before any pinned/recall noise.
+      const clockBlock = renderClock(getConfig().timezone);
+      return { systemPrompt: SMITH_BASE_PROMPT + clockBlock + contextBlock };
     },
   );
 }

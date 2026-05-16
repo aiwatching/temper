@@ -31,6 +31,13 @@ import { getSecretSetting, getSetting } from "./db/settings.js";
 type LlmProvider = string;
 
 export interface SmithConfig {
+  // IANA timezone name (e.g. "Asia/Shanghai", "America/Los_Angeles").
+  // Used to render "now" for the system prompt, to interpret natural-
+  // language times in user messages ("9am tomorrow"), and as the
+  // default zone for cron-style triggers when those land. Auto-detected
+  // on first boot from Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // user can override from /settings.
+  timezone: string;
   // Temper
   temperBaseUrl: string;
   temperApiKey: string;
@@ -71,6 +78,7 @@ export interface SmithConfig {
  * db/settings.ts (where they're documented).
  */
 const KEYS = {
+  timezone: "smith.timezone",
   temperBaseUrl: "temper.base_url",
   temperApiKey: "temper.api_key",
   llmProvider: "llm.provider",
@@ -82,6 +90,31 @@ const KEYS = {
   consolidateScheduleHours: "consolidate.schedule_hours",
   consolidateAutoApply: "consolidate.auto_apply",
 } as const;
+
+/** OS-detected timezone. Used as the default when no setting is
+ *  stored yet, and as the fallback if the stored value is invalid.
+ *  Falls back to "UTC" on the unusual case where Intl can't resolve. */
+export function detectSystemTimezone(): string {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz && typeof tz === "string") return tz;
+  } catch {
+    /* ignore */
+  }
+  return "UTC";
+}
+
+/** Validate an IANA timezone string. Returns the input on success,
+ *  the system default on failure — so a typo in /settings never
+ *  brings Smith down, it just falls back. */
+export function validateTimezone(tz: string): string {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return tz;
+  } catch {
+    return detectSystemTimezone();
+  }
+}
 
 function envStr(name: string, fallback = ""): string {
   return (process.env[name] ?? "").trim() || fallback;
@@ -141,6 +174,7 @@ export function getConfig(): SmithConfig {
   const smithPort = envNum("SMITH_PORT", 18099);
 
   return {
+    timezone: validateTimezone(dbStr(KEYS.timezone, "SMITH_TIMEZONE", detectSystemTimezone())),
     temperBaseUrl: dbStr(KEYS.temperBaseUrl, "TEMPER_BASE_URL", "http://127.0.0.1:18088"),
     temperApiKey: dbSecret(KEYS.temperApiKey, "TEMPER_API_KEY"),
     llmProvider: dbStr(KEYS.llmProvider, "LLM_PROVIDER", ""),
