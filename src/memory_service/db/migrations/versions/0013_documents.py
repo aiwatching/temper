@@ -53,15 +53,19 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_table(
         "documents",
+        # ids are VARCHAR(36) — see 0012 for the rationale. The FK to
+        # users.id (also VARCHAR(36) from migration 0001) requires
+        # matching types; Postgres rejects FKs that bridge UUID and
+        # VARCHAR.
         sa.Column(
             "id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(length=36),
             primary_key=True,
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=sa.text("gen_random_uuid()::text"),
         ),
         sa.Column(
             "user_id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(length=36),
             sa.ForeignKey("users.id", ondelete="CASCADE"),
             nullable=False,
         ),
@@ -215,7 +219,7 @@ def upgrade() -> None:
         "document_links",
         sa.Column(
             "source_document_id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(length=36),
             sa.ForeignKey("documents.id", ondelete="CASCADE"),
             nullable=False,
         ),
@@ -248,13 +252,13 @@ def upgrade() -> None:
         "document_revisions",
         sa.Column(
             "id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(length=36),
             primary_key=True,
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=sa.text("gen_random_uuid()::text"),
         ),
         sa.Column(
             "document_id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(length=36),
             sa.ForeignKey("documents.id", ondelete="CASCADE"),
             nullable=False,
         ),

@@ -45,15 +45,20 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     op.create_table(
         "memory_blocks",
+        # NOTE: ids are VARCHAR(36) (string-encoded UUIDs) throughout
+        # TEMPER's schema — see UUIDPKMixin / migration 0001's users
+        # table. Don't switch to native postgresql.UUID here without
+        # also migrating every other id column; the FK to users.id
+        # would mismatch and Postgres refuses the constraint.
         sa.Column(
             "id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(length=36),
             primary_key=True,
-            server_default=sa.text("gen_random_uuid()"),
+            server_default=sa.text("gen_random_uuid()::text"),
         ),
         sa.Column(
             "user_id",
-            postgresql.UUID(as_uuid=True),
+            sa.String(length=36),
             sa.ForeignKey("users.id", ondelete="CASCADE"),
             nullable=False,
         ),
