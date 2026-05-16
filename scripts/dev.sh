@@ -87,7 +87,12 @@ fi
 say "Embedding backend"
 scripts/start_embedding.sh
 
-# ---- 3. FalkorDB (Graphiti graph store) ----------------------------------
+# ---- 3a. Postgres --------------------------------------------------------
+
+say "Postgres"
+scripts/start_postgres.sh
+
+# ---- 3b. FalkorDB (Graphiti graph store) ---------------------------------
 
 say "FalkorDB"
 scripts/start_falkordb.sh
@@ -96,13 +101,40 @@ scripts/start_falkordb.sh
 
 say "Database"
 mkdir -p .data
-DEFAULT_DB="sqlite+aiosqlite:///$(pwd)/.data/ms-dev.db"
+# TEMPER is now Postgres-only — documents primitive uses JSONB / ARRAY
+# / TSVECTOR / GIN / plpgsql triggers that SQLite can't render. Default
+# to the docker-compose Postgres on localhost:5432. Override with
+# DATABASE_URL env if your Postgres lives elsewhere.
+DEFAULT_DB="postgresql+asyncpg://memory:memory@localhost:5432/memory_service"
 export DATABASE_URL="${DATABASE_URL:-$DEFAULT_DB}"
+
 if [[ "$DATABASE_URL" == sqlite* ]]; then
-  ok "using SQLite at $DATABASE_URL"
-  ok "(reset with: rm .data/ms-dev.db)"
-else
-  ok "using $DATABASE_URL"
+  echo
+  echo "  ⚠️  SQLite is no longer supported (documents primitive needs"
+  echo "      Postgres-only features). Bring Postgres up:"
+  echo
+  echo "          docker compose up -d db"
+  echo "          alembic upgrade head"
+  echo
+  echo "      Or set DATABASE_URL to point at your own Postgres."
+  echo
+  exit 1
+fi
+ok "using $DATABASE_URL"
+
+# Probe before uvicorn so a missing/wrong DB fails fast with a
+# readable hint instead of mid-startup SQLAlchemy stack trace.
+if ! pg_isready -h "$(echo "$DATABASE_URL" | sed -E 's#.*@([^:/]+).*#\1#')" \
+                -p "$(echo "$DATABASE_URL" | sed -E 's#.*:([0-9]+)/.*#\1#')" \
+                >/dev/null 2>&1; then
+  echo
+  echo "  ⚠️  Can't reach Postgres at $DATABASE_URL"
+  echo "      Start it:  docker compose up -d db"
+  echo "      Or override DATABASE_URL=postgresql+asyncpg://user:pass@host:port/db"
+  echo
+  # Don't exit hard — pg_isready may be missing on macOS without
+  # postgres-client installed. Just warn and continue; uvicorn will
+  # surface the real connection error on first request.
 fi
 
 # ---- 5. open browser & start uvicorn -------------------------------------

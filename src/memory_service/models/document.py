@@ -44,6 +44,10 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from memory_service.models._base import Base, TimestampMixin, UUIDPKMixin
 
+# Documents is Postgres-only by design (GIN, tsvector FTS, JSONB,
+# ARRAY containment). Run TEMPER against Postgres; SQLite paths are
+# not supported.
+
 
 class Document(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "documents"
@@ -76,8 +80,7 @@ class Document(Base, UUIDPKMixin, TimestampMixin):
     source_url: Mapped[str | None] = mapped_column(Text, default=None)
     imported_at: Mapped[datetime | None] = mapped_column(default=None)
 
-    # Auxiliary. JSONB is used unconditionally — documents is a
-    # Postgres-only feature (the FTS, GIN, tsvector all require it).
+    # Auxiliary. GIN-indexable.
     frontmatter: Mapped[dict[str, Any]] = mapped_column(
         JSONB, default=dict,
     )
@@ -85,8 +88,7 @@ class Document(Base, UUIDPKMixin, TimestampMixin):
         ARRAY(String(64)), default=list,
     )
 
-    # Search columns. content_tsv is maintained by a trigger; we
-    # never write to it from the ORM, just read.
+    # Maintained by trg_documents_tsv_refresh.
     content_tsv: Mapped[Any] = mapped_column(TSVECTOR, default="")
     # Reserved — embedding pipeline lands in N2. BYTEA for now (we'll
     # switch to pgvector's VECTOR type when the extension is required).

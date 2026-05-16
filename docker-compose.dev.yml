@@ -1,0 +1,26 @@
+# Dev override: expose Postgres + FalkorDB on localhost so the
+# host-side uvicorn (`scripts/dev.sh`) can reach them.
+#
+# Prod (docker-compose.yml alone) keeps Postgres internal-only —
+# this file is opt-in for local dev work.
+#
+# Usage:
+#   POSTGRES_PASSWORD=memory docker compose -f docker-compose.yml \
+#       -f docker-compose.dev.yml up -d postgres falkordb
+#
+# Or just use scripts/start_postgres.sh which wraps the above.
+
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+    # Dev password — overrides the .env.prod requirement so you don't
+    # need that file just to run uvicorn locally.
+    environment:
+      POSTGRES_USER: memory
+      POSTGRES_PASSWORD: memory
+      POSTGRES_DB: memory_service
+
+  falkordb:
+    ports:
+      - "127.0.0.1:6380:6379"
