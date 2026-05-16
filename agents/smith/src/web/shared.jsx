@@ -487,8 +487,21 @@ function useChatStream() {
           buf = buf.slice(idx + 2);
           let evt = "message", data = "";
           for (const line of raw.split("\n")) {
-            if (line.startsWith("event:")) evt = line.slice(6).trim();
-            else if (line.startsWith("data:")) data += line.slice(5).trim();
+            if (line.startsWith("event:")) {
+              evt = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+              // Per the SSE spec (WHATWG): strip ONE leading space
+              // after `data:` (the optional cosmetic gap), and join
+              // multiple data: lines in the same event with a literal
+              // newline. The old `.trim()` here stripped ALL leading
+              // and trailing whitespace AND dropped the newline-join,
+              // which mangled markdown — list items concatenated
+              // into one line, indented code blocks lost their
+              // indent. Reload fixed it because JSONL replay went
+              // through Markdown with the raw text intact.
+              const piece = line.slice(5).replace(/^ /, "");
+              data = data ? data + "\n" + piece : piece;
+            }
           }
           if (evt === "delta") {
             updateLastSmith((s) => ({ ...s, text: s.text + data }));
