@@ -20,21 +20,91 @@
  * when the auto-recall didn't bring enough. `memory_write` is the
  * model's responsibility — writing is always intentional.
  */
-import { getConfig } from "../config.js";
 import { Temper } from "../temper.js";
-import type { EpisodeSummary, SearchHit } from "../temper.js";
+import type {
+  PinnedBlockWire,
+  RecalledEpisodeWire,
+  TypedTask,
+} from "../temper.js";
 
 // biome-ignore lint: pi.ExtensionAPI types are still moving — see other extensions.
 type PiExtensionAPI = any;
 
 const SMITH_BASE_PROMPT = `You are Smith, a personal company-level assistant.
 
-You have a persistent, multi-tenant graph memory in TEMPER. Every
-write extracts entities + relations (facts) and stores them with
-bi-temporal validity. You can write, search, chain related events,
-cluster the graph, and constrain extraction with custom schemas.
+You have a persistent memory in TEMPER. It has TWO kinds of storage,
+each with strict, different routing rules. Pick the right one or the
+data ends up where you can't find it next turn.
+
+═══ Memory routing — DECIDE FIRST, THEN ACT ═══
+
+  STATE (current, always-on, structured)
+  ────────────────────────────────────────────────────────────────
+  Active tasks            → task_add / task_update / task_complete
+  Current focus / project → set_focus
+  User preferences        → set_preference
+  ↑ These land in pinned memory. You see them in EVERY system prompt
+    under the structured sections. You will not have to "remember to
+    search" for them. They are the answer to "what's happening now".
+
+  HISTORY (past, queryable, append-only)
+  ────────────────────────────────────────────────────────────────
+  Events that happened     → note_event  ("Bob joined the auth team")
+  Third-party facts        → note_event  ("FortiNAC uses Postgres")
+  Decisions made           → note_event  ("we chose JWT last sprint")
+  Random observations      → note_event
+  ↑ These go to graphiti as episodes → entities + facts. You access
+    them via memory_search (or auto-recall, which runs every turn).
+
+  DECISION SHORTCUT — when the user says…
+  ────────────────────────────────────────────────────────────────
+  "I want to do X" / "remind me to" / "I'm working on"   → task_add
+  "I started X" / "I'm blocked on Y" / "moved to doing"  → task_update
+  "I finished X" / "X is done" / "drop X"                → task_complete
+  "I'm switching to" / "now I'm focused on" / "drop that, do Y" → set_focus
+  "I want you to call me" / "always reply in Chinese"    → set_preference
+  "I prefer" / "I like" / "I avoid" (a behaviour rule)   → set_preference
+  "Bob is on team X" / "decided to use JWT" / fact about world → note_event
+  ↑ If the subject is "I/me/the user" AND describes current state
+    or preference, it's STATE. If the subject is anyone/anything
+    else, or it describes something that happened, it's HISTORY.
+
+LEGACY tools still exist but are deprecated for normal use:
+  memory_write    raw episode write — use note_event instead
+  remember        raw block write   — use set_preference / set_focus instead
+  Use these only when none of the typed tools fit (rare).
 
 ═══ Tools ═══
+
+── STATE tools (write to pinned blocks via TEMPER's typed API) ──
+
+task_add(title, status?="todo", priority?=50, notes?)
+task_update(task_id, title?, status?, priority?, notes?)
+task_complete(task_id, summary?)
+    Active task CRUD. The list lives in state.active_tasks and is in
+    your system prompt every turn — see "Active tasks" up top.
+    task_complete is atomic: removes from active list + appends a
+    graphiti episode for history.
+
+list_tasks(status?)
+    Re-read the active list mid-conversation. Usually unnecessary
+    because the list is already pinned.
+
+set_focus(value, note?)
+    Update state.current_focus. Adds a graphiti episode logging the
+    change so "when did I start X" stays queryable.
+
+set_preference(key, value, description?)
+    Set preferences.<key> (cross-agent, global scope). Don't include
+    'preferences.' in key — TEMPER adds it.
+
+── HISTORY tool (write to graphiti) ──
+
+note_event(content, tags?, saga?, reference_time?, namespace?)
+    Append one episode to graphiti for long-term recall. Subject
+    must be NOT-the-user; for user state, use the STATE tools above.
+
+── READ tools ──
 
 memory_search(query, limit?, as_of?, namespaces?, reranker?,
               min_score?, center?, bfs_origins?, bfs_max_depth?,
@@ -55,10 +125,9 @@ memory_search(query, limit?, as_of?, namespaces?, reranker?,
 
 memory_write(content, source_description?, reference_time?, tags?,
              saga?, namespace?)
-    Write ONE discrete episode. Paraphrase rather than verbatim
-    transcript. \`reference_time\` is when the event actually happened
-    (default = now). \`saga\` chains related episodes (one
-    conversation / one task).
+    DEPRECATED for normal use — call note_event instead. Kept as an
+    escape hatch when you need fine control over source_type / saga.
+    Same destination (graphiti episode) as note_event.
 
 memory_correct_apply(wrong_fact_uuid, corrected_content, entity_uuid?, ...)
     User-confirmed correction of a wrong fact. Use after the user says
@@ -71,80 +140,47 @@ memory_consolidate_apply(plan_id)
     Dedup + cleanup. Plan is read-only; apply is destructive.
 
 remember(key, value, pinned?, description?, scope?)
-    SAVE A USER PREFERENCE / IDENTITY FACT / CURRENT STATE.
-    This is the STRUCTURED key/value memory — separate from Graphiti.
-    Use when the user makes a first-person assertion:
-        "call me X"                    → remember("preferences.nickname_for_user", "X", pinned=true)
-        "my name is X"                 → remember("persona.name", "X", pinned=true, scope="global")
-        "I'm working on bug 1234"      → remember("state.current_focus", "bug-1234")
-        "I prefer dark mode"           → remember("preferences.ui_theme", "dark")
-        "Jenkins is at https://..."    → remember("bookmark.jenkins", "https://...")
-    Pinned blocks land in your system prompt every turn — they are
-    GROUND TRUTH that beats anything in auto-recall.
+    DEPRECATED for normal use — prefer set_preference / set_focus /
+    task_add. Kept as an escape hatch for ad-hoc keys that don't fit
+    the canonical state.* / preferences.* conventions.
 
-update_memory(key, patch)
-    Deep-merge a partial JSON into an existing block (object values only).
-
-forget(key, scope?)
-    Delete a memory block.
-
-get_memory(key, scope?)
-    Look up a single non-pinned block on demand. Pinned ones are
-    already in your system prompt; no need to fetch them.
+update_memory(key, patch)        — escape hatch (deep-merge JSON)
+forget(key, scope?)              — escape hatch (delete a block)
+get_memory(key, scope?)          — read one non-pinned block by key
 
 <server>__<tool>
     Bridged from internal MCP servers (Mantis, GitLab, PMDB, …).
     Use like any other tool.
 
-═══ memory_write vs remember — DECIDE CORRECTLY ═══
-
-  First-person assertion ABOUT the user themselves → remember()
-    "call me X", "I prefer Y", "I'm working on Z", "I live in W"
-    These go to the structured KV store. Stable across sessions.
-    Pinned ones surface in every system prompt.
-
-  Third-party fact about people / projects / places / events → memory_write()
-    "Sarah teaches Portuguese", "Bruno is Anna's student",
-    "we shipped feature X last quarter", "the wad-ssl-crash hit prod on T"
-    These go to Graphiti as episodes → entities + edges.
-    Graph search retrieves them.
-
-  Rule of thumb: if the subject is "I" / "me" / "the user" and the
-  predicate is a preference, identity, current state, or routine,
-  it's a remember(). If the subject is anyone or anything else, it's
-  a memory_write(). When in doubt: nicknames + preferences + focus +
-  schedule + bookmarks are ALWAYS remember().
-
 ═══ Auto-retrieved memory (Smith does this FOR you each turn) ═══
 
-Before this turn ran, Smith searched its OWN namespace
-(\`agent:me/<your-slug>\`) for relevant hits and pasted them below
-under "Memory recall". Scope is intentional: Smith only sees what
-Smith itself has written — other agents the user runs (e.g. a
-coding assistant, a journal) have their own isolated memory and
-DO NOT bleed into Smith.
+Before this turn ran, Smith fetched the user's turn_context from
+TEMPER and pasted these sections below (when non-empty):
 
-TREAT THE MEMORY RECALL SECTION AS GROUND TRUTH about this user
-within Smith's view — names and nicknames, preferences, decisions,
-ongoing tasks. Quote it (paraphrased) when asked anything personal.
-NEVER say "I don't know" if the answer is in there.
+  ═ Active tasks         the user's state.active_tasks list
+  ═ Current focus        state.current_focus value
+  ═ User preferences     preferences.* (cross-agent)
+  ═ Other pinned memory  any other pinned blocks
+  ═ Memory recall        graphiti hits for this turn's query
 
-If Memory recall is empty or doesn't cover the question, call
-memory_search yourself with a more specific query.
+The STRUCTURED sections (tasks / focus / preferences) are
+GROUND TRUTH about current state — quote them directly, never say
+"I have no record" when they hold the answer. The recall section is
+softer (graphiti's extraction can mis-phrase or flip agency); when
+recall conflicts with a structured section, the structured wins.
+
+If recall is empty or doesn't cover the question, call memory_search
+yourself with a more specific query. Knobs worth knowing:
 
   - For PRECISION on SAME-LANGUAGE queries (query and content in the
     same language), pass reranker="cross_encoder" plus min_score=0.5.
     Auto-recall uses RRF (default) because cross_encoder is unreliable
-    on mixed Chinese-query / English-content data — it can score the
-    correct fact 0.0 and an unrelated fact 1.0. Same-language: trust
-    cross_encoder. Cross-language: stay on RRF.
+    on mixed Chinese-query / English-content data.
   - For ASSOCIATION ("everything connected to entity X"), grab the
     entity's source_node_uuid from a fact hit and call again with
-    bfs_origins=[<uuid>], bfs_max_depth=2. Pure graph walk, no
-    semantic guessing.
-  - To search cross-agent (the user's flat namespace, shared across
-    every agent), pass namespaces=["user:me"] explicitly. The
-    auto-recall already covers both scopes for the current turn.
+    bfs_origins=[<uuid>], bfs_max_depth=2.
+  - turn_context auto-recall searches your own namespace + user:me.
+    To search a different namespace explicitly, pass namespaces=[...].
 
 ═══ Mental model ═══
 
@@ -324,80 +360,13 @@ function _trim(text: string, n: number): string {
   return text.slice(0, n - 1).trimEnd() + "…";
 }
 
-function formatHits(hits: SearchHit[]): string {
-  if (hits.length === 0) return "  (no fact hits)";
-  return hits
-    .slice(0, MAX_RECALL_HITS * 2)
-    .map((h, i) => {
-      const raw = h.fact ?? h.name ?? "(no fact)";
-      // Collapse multi-line entity summaries to single line first —
-      // entity-summary hits arrive with embedded \n's that read like
-      // separate facts in the prompt and inflate the count visually.
-      const fact = _trim(raw.replace(/\s+/g, " ").trim(), MAX_HIT_TEXT);
-      const score = typeof h.score === "number" ? ` (score=${h.score.toFixed(2)})` : "";
-      const valid = h.valid_at ? `  valid_at=${h.valid_at}` : "";
-      return `  ${i + 1}. ${fact}${score}${valid}`;
-    })
-    .join("\n");
-}
-
-/** Truncate a built recall block to MAX_RECALL_BLOCK_CHARS, dropping
- *  from the END (lowest-priority content lives there: source episodes
- *  come after fact hits, so this preserves the cited facts). Adds a
- *  visible marker so the model sees the truncation. */
+/** Truncate the assembled context block to MAX_RECALL_BLOCK_CHARS,
+ *  dropping from the END. Recall sits last so the structured pinned
+ *  sections (tasks / focus / preferences) are always preserved. */
 function _capBlock(block: string): string {
   if (block.length <= MAX_RECALL_BLOCK_CHARS) return block;
   return block.slice(0, MAX_RECALL_BLOCK_CHARS - 80).trimEnd() +
-    "\n\n[... recall block truncated to stay under " + MAX_RECALL_BLOCK_CHARS + " chars; call memory_search for more]\n";
-}
-
-/**
- * Fetch raw content for the source episodes of the cited fact hits.
- *
- * Why: Graphiti's entity-summary extraction occasionally flips agency
- * (e.g. "user wants to call me X" → entity summary "user wants to be
- * called X"). Showing the LLM the raw episode text alongside the fact
- * lets it ground-truth check.
- *
- * Why NOT "last N episodes regardless of query": unconditional context
- * leaks every fact into every turn (user asks about scheduling a daily
- * report → smith mentions the user's nickname out of nowhere). By only
- * fetching episodes that fact-search actually cited, the LLM sees raw
- * content ONLY for things relevant to this turn.
- */
-async function fetchSourceEpisodes(
-  t: Temper,
-  hits: SearchHit[],
-  limit: number,
-): Promise<Array<{ ep: EpisodeSummary; content: string }>> {
-  const seen = new Set<string>();
-  for (const h of hits) {
-    for (const id of h.source_episode_ids ?? []) seen.add(id);
-    if (seen.size >= limit) break;
-  }
-  const ids = [...seen].slice(0, limit);
-  return Promise.all(
-    ids.map(async (id) => {
-      try {
-        const detail = await t.getEpisode(id);
-        return { ep: detail as EpisodeSummary, content: detail.content };
-      } catch {
-        return null;
-      }
-    }),
-  ).then((rows) => rows.filter((r): r is { ep: EpisodeSummary; content: string } => r !== null));
-}
-
-function formatEpisodes(items: Array<{ ep: EpisodeSummary; content: string }>): string {
-  if (items.length === 0) return "";
-  return items
-    .map(({ ep, content }, i) => {
-      const when = ep.reference_time ?? ep.created_at;
-      const tags = ep.tags?.length ? ` [${ep.tags.join(", ")}]` : "";
-      const trimmed = content.replace(/\s+/g, " ").trim().slice(0, 240);
-      return `  ${i + 1}. (${when}${tags}) ${trimmed}`;
-    })
-    .join("\n");
+    "\n\n[... context block truncated to stay under " + MAX_RECALL_BLOCK_CHARS + " chars; call memory_search for more]\n";
 }
 
 export function smithPersonalityExtension(pi: PiExtensionAPI): void {
@@ -412,271 +381,188 @@ export function smithPersonalityExtension(pi: PiExtensionAPI): void {
   pi.on(
     "before_agent_start",
     async (event: { prompt: string }): Promise<{ systemPrompt?: string }> => {
-      // Auto-search using the user's message as the query. Best-effort:
-      // a Temper outage shouldn't break the chat — we still ship the
-      // base prompt and let the model answer without memory context.
-      let recallBlock = "";
-      try {
-        const cfg = getConfig();
-        const t = getTemper();
-        const ownScope = `agent:me/${cfg.smithAgentSlug}`;
-
-        // We search BOTH the agent's own scope AND the user's flat
-        // cross-agent namespace (`user:me`). Two reasons:
-        //
-        //   1. Users frequently write to user:me directly via TEMPER's
-        //      API (or via the admin UI) — reminders, preferences,
-        //      structured facts they want every agent to see. If Smith
-        //      ignored user:me, those memories would be invisible.
-        //
-        //   2. user:me also accumulates writes from OTHER agents the
-        //      user has ever run. Some of those are noise from this
-        //      agent's perspective. We mitigate by:
-        //        - searching each scope separately so we can label
-        //          where each hit came from in the prompt;
-        //        - the model gets explicit guidance below that user:me
-        //          hits may include cross-agent context to weigh
-        //          carefully (e.g. another agent's worldview).
-        //
-        // If the noise becomes a problem we can flip user:me back off
-        // via a config flag — but the default is now "show it".
-        // Two precision moves on every search:
-        //
-        //   reranker=cross_encoder — the RRF default uses rank-based
-        //   scoring, which gives every top hit ~the same score even
-        //   when relevance varies wildly. cross_encoder runs an extra
-        //   LLM scoring pass that produces true relevance in [0,1],
-        //   so the threshold filter downstream becomes meaningful.
-        //   Cost: one extra LLM call per search (negligible vs the
-        //   conversation turn itself).
-        //
-        //   asOf = now — excludes facts whose invalid_at <= now,
-        //   meaning retired/corrected facts (like the agency-flipped
-        //   "user wants to be called heizai" we invalidated earlier)
-        //   never resurface. Bi-temporal store, finally used right.
-        //
-        // We over-fetch (limit = MAX_RECALL_HITS * 2) so the post-hoc
-        // score filter still leaves enough rows to be useful when the
-        // long tail is noise.
-        // RRF reranker (Graphiti default) + asOf=now.
-        //
-        // RRF fuses BM25 + cosine ranks per kind — robust across
-        // languages, because it doesn't try to compute a single
-        // semantic similarity number across the query/content
-        // language pair the way cross_encoder does. (See the History
-        // note above the constants for why cross_encoder failed on
-        // the real Chinese↔English data here.)
-        //
-        // asOf=now excludes facts whose invalid_at has passed —
-        // corrections / invalidations from memory_correct_apply
-        // never resurface in recall.
-        const nowIso = new Date().toISOString();
-        const [agentHitsRaw, userHitsRaw] = await Promise.all([
-          t.search({
-            query: event.prompt,
-            limit: MAX_RECALL_HITS,
-            namespaces: [ownScope],
-            asOf: nowIso,
-          }).catch(() => [] as SearchHit[]),
-          t.search({
-            query: event.prompt,
-            limit: MAX_RECALL_HITS,
-            namespaces: ["user:me"],
-            asOf: nowIso,
-          }).catch(() => [] as SearchHit[]),
-        ]);
-
-        // Dedup by fact text. Three reductions:
-        //   1. exact text dedup (a hit returned by both fact + entity
-        //      kinds, or by both namespaces),
-        //   2. entity-hit dedup vs fact-hits: entity summaries are
-        //      built from concatenated edge facts, so an entity hit
-        //      whose summary contains an already-shown fact line is
-        //      pure duplication — drop the line from the entity hit
-        //      (or drop the whole entity hit if every line dups),
-        //   3. drop entity hits that are pure noise after step 2.
-        //
-        // We process agent-scope first so its hits win in cross-scope
-        // dedup (more local = preferred).
-        // Server already dropped sub-threshold hits via Graphiti's
-        // reranker_min_score. Only need cross-scope dedup here — a fact
-        // present in both agent and user scopes should appear once,
-        // under the more-local agent scope.
-        const seen = new Set<string>();
-        const dedup = (hits: SearchHit[]) => {
-          const out: SearchHit[] = [];
-          for (const h of hits) {
-            const key = (h.fact ?? h.name ?? "").trim();
-            if (!key || seen.has(key)) continue;
-            seen.add(key);
-            out.push(h);
-          }
-          return out;
-        };
-        const agentHits = dedup(agentHitsRaw);
-        const userHits = dedup(userHitsRaw);
-
-        // Now reduce entity-kind hits: split their multi-line summary
-        // into lines, drop any line that's already in `seen` from a
-        // fact-kind hit, and drop the entity hit entirely if nothing
-        // useful is left. This is the big saver — entity summaries
-        // routinely duplicate the fact-kind hits we already listed.
-        const factTexts = new Set<string>();
-        for (const h of [...agentHits, ...userHits]) {
-          if (h.kind === "fact") factTexts.add((h.fact ?? h.name ?? "").trim());
-        }
-        const reduceEntity = (hits: SearchHit[]): SearchHit[] => {
-          const out: SearchHit[] = [];
-          for (const h of hits) {
-            if (h.kind !== "entity") { out.push(h); continue; }
-            const lines = (h.fact ?? h.name ?? "")
-              .split(/\r?\n/)
-              .map((l) => l.trim())
-              .filter((l) => l && !factTexts.has(l));
-            if (lines.length === 0) continue;  // entire entity covered by fact hits
-            out.push({ ...h, fact: lines.join("\n") });
-          }
-          return out;
-        };
-        const agentHitsR = reduceEntity(agentHits);
-        const userHitsR = reduceEntity(userHits);
-
-        const totalHits = agentHitsR.length + userHitsR.length;
-        if (totalHits === 0) {
-          // Nothing relevant — DO NOT inject anything. Leakage
-          // prevention: unconditional context (e.g. "last N episodes
-          // in agent: scope") would make smith randomly volunteer
-          // memories on unrelated questions.
-          console.log(`[smith] auto-recall: 0 hits for "${event.prompt.slice(0, 50)}"`);
-        } else {
-          // Pull source episodes ONLY for the cited hits — gives
-          // raw content cross-check without leaking everything else.
-          const allHits = [...agentHitsR, ...userHitsR];
-          const sourceEps = await fetchSourceEpisodes(t, allHits, MAX_SOURCE_EPISODES)
-            .catch(() => [] as Array<{ ep: EpisodeSummary; content: string }>);
-
-          recallBlock =
-            "\n═══ Memory recall (auto-retrieved for this turn) ═══\n\n" +
-            "Relevant FACTS from memory (Graphiti's extraction may\n" +
-            "flip agency or lose nuance — when in doubt, defer to the\n" +
-            "source episodes below):\n";
-          if (agentHitsR.length > 0) {
-            recallBlock +=
-              `\n[scope: ${ownScope}  — Smith's own writes]\n` +
-              formatHits(agentHitsR);
-          }
-          if (userHitsR.length > 0) {
-            recallBlock +=
-              `\n\n[scope: user:me  — user's flat namespace, may include\n` +
-              ` writes from other agents the user runs; weigh accordingly]\n` +
-              formatHits(userHitsR);
-          }
-          if (sourceEps.length > 0) {
-            recallBlock +=
-              "\n\nSource EPISODES for the cited facts (raw content):\n" +
-              formatEpisodes(sourceEps);
-          }
-          recallBlock = _capBlock(recallBlock) + "\n";
-
-          // Log modes (env SMITH_RECALL_LOG):
-          //   <unset> / "quiet"   → one summary line per turn
-          //   "verbose"           → summary + per-hit score and first 80 chars
-          //   "full"              → also dump the whole recall block to stdout
-          //                         (literally what the LLM sees pasted in)
-          //   "dump"              → write the full block to
-          //                         .data/recall/<convId>-<timestamp>.txt
-          //                         so you can diff turns without scrolling.
-          const recallLog = (process.env.SMITH_RECALL_LOG ?? "").trim();
-          if (recallLog === "verbose" || recallLog === "full" || recallLog === "dump") {
-            console.log(
-              `[smith] auto-recall: ${agentHitsR.length} agent + ${userHitsR.length} user:me hits (after dedup) + ${sourceEps.length} source eps · ${recallBlock.length} chars for "${event.prompt.slice(0, 50)}"`,
-            );
-            for (const [i, h] of allHits.entries()) {
-              const s = typeof h.score === "number" ? h.score.toFixed(3) : "—   ";
-              const t = (h.fact ?? h.name ?? "(no fact)").replace(/\s+/g, " ").slice(0, 80);
-              console.log(`  ${i + 1}. [${s}] ${t}`);
-            }
-          } else {
-            console.log(
-              `[smith] auto-recall: ${agentHitsR.length}+${userHitsR.length} hits (rrf), ${sourceEps.length} eps, ${recallBlock.length} chars`,
-            );
-          }
-          if (recallLog === "full") {
-            console.log("─── recall block start ───");
-            console.log(recallBlock);
-            console.log("─── recall block end ───");
-          }
-          if (recallLog === "dump") {
-            try {
-              const { mkdirSync, writeFileSync } = await import("node:fs");
-              const { resolve: resolvePath } = await import("node:path");
-              const dir = resolvePath(process.cwd(), ".data", "recall");
-              mkdirSync(dir, { recursive: true });
-              const ts = new Date().toISOString().replace(/[:.]/g, "-");
-              const file = resolvePath(dir, `${ts}.txt`);
-              writeFileSync(
-                file,
-                `# Query: ${event.prompt}\n# Recall block (${recallBlock.length} chars)\n\n${recallBlock}\n`,
-              );
-              console.log(`[smith] recall block written → ${file}`);
-            } catch (e) {
-              console.warn(`[smith] recall dump failed: ${(e as Error).message}`);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn(`[smith] auto-recall failed: ${(e as Error).message} — proceeding without it`);
-      }
-
-      // Pinned memory_blocks — separate from auto-recall, fetched
-      // every turn. These are the direct user assertions ("call me
-      // X", "I'm working on Y") that Graphiti can't reliably model.
-      // Best-effort: a blocks fetch failure shouldn't kill the chat.
-      let blocksBlock = "";
+      // ONE round-trip to TEMPER per turn — turn_context returns the
+      // pinned bundle (with structured shortcuts for active_tasks /
+      // current_focus / preferences) + graphiti recall against the
+      // user's message. Replaces the prior 2 calls (listMemoryBlocks +
+      // search ×2) and guarantees the always-on state can't be missed.
+      let contextBlock = "";
       try {
         const t = getTemper();
-        const blocks = await t.listMemoryBlocks({ pinned: true, scope: "both" });
-        if (blocks.length > 0) {
-          // Stable sort: priority desc, then scope (own before global),
-          // then key. The server already orders by priority desc / key,
-          // but we re-stabilize after the "both" merge.
-          blocks.sort((a, b) => {
-            if (b.priority !== a.priority) return b.priority - a.priority;
-            if (a.scope !== b.scope) return a.scope === "own" ? -1 : 1;
-            return a.block_key.localeCompare(b.block_key);
-          });
-          const lines: string[] = [
-            "\n═══ Pinned memory (user-asserted preferences, ground truth) ═══\n",
-            "These are direct assertions the user made. Treat as ABSOLUTE —",
-            "the user said exactly this, never paraphrase the meaning away.",
-            "If a pinned block conflicts with an auto-recall hit, the pinned",
-            "block wins (it's an explicit declaration; recall is inferred).\n",
-          ];
-          for (const b of blocks) {
-            const scopeTag = b.scope === "own" ? "" : " [global]";
-            const desc = b.description ? `  — ${b.description}` : "";
-            const value =
-              typeof b.block_value === "string"
-                ? `"${b.block_value}"`
-                : JSON.stringify(b.block_value);
-            lines.push(`  ${b.block_key}${scopeTag} = ${value}${desc}`);
+        const ctx = await t.getTurnContext({
+          query: event.prompt,
+          recallLimit: MAX_RECALL_HITS * 2,
+        });
+
+        contextBlock = renderTurnContext(ctx);
+
+        const recallLog = (process.env.SMITH_RECALL_LOG ?? "").trim();
+        console.log(
+          `[smith] turn_context: ${ctx.active_tasks.length} task(s) · ` +
+          `focus=${ctx.current_focus ? '"' + ctx.current_focus + '"' : "—"} · ` +
+          `prefs=${Object.keys(ctx.preferences).length} · ` +
+          `pinned=${ctx.pinned_blocks.length} · ` +
+          `recall=${ctx.recalled_episodes.length} · ` +
+          `${contextBlock.length} chars`,
+        );
+        if (recallLog === "verbose" || recallLog === "full") {
+          for (const [i, h] of ctx.recalled_episodes.entries()) {
+            const s = typeof h.score === "number" ? h.score.toFixed(3) : "—   ";
+            const txt = h.fact.replace(/\s+/g, " ").slice(0, 80);
+            console.log(`  ${i + 1}. [${s}] ${txt}`);
           }
-          lines.push(
-            "\nUse `remember(key, value, pinned=true)` to add to this list, " +
-            "`update_memory(key, patch)` to modify, `forget(key)` to remove.\n",
-          );
-          blocksBlock = lines.join("\n");
-          console.log(
-            `[smith] pinned-blocks: ${blocks.length} blocks · ${blocksBlock.length} chars`,
-          );
+        }
+        if (recallLog === "full") {
+          console.log("─── context block start ───");
+          console.log(contextBlock);
+          console.log("─── context block end ───");
+        }
+        if (recallLog === "dump") {
+          try {
+            const { mkdirSync, writeFileSync } = await import("node:fs");
+            const { resolve: resolvePath } = await import("node:path");
+            const dir = resolvePath(process.cwd(), ".data", "recall");
+            mkdirSync(dir, { recursive: true });
+            const ts = new Date().toISOString().replace(/[:.]/g, "-");
+            const file = resolvePath(dir, `${ts}.txt`);
+            writeFileSync(
+              file,
+              `# Query: ${event.prompt}\n# Context (${contextBlock.length} chars)\n\n${contextBlock}\n`,
+            );
+            console.log(`[smith] context written → ${file}`);
+          } catch (e) {
+            console.warn(`[smith] context dump failed: ${(e as Error).message}`);
+          }
         }
       } catch (e) {
         console.warn(
-          `[smith] pinned-blocks fetch failed: ${(e as Error).message} — proceeding without them`,
+          `[smith] turn_context failed: ${(e as Error).message} — proceeding without it`,
         );
       }
 
-      return { systemPrompt: SMITH_BASE_PROMPT + blocksBlock + recallBlock };
+      return { systemPrompt: SMITH_BASE_PROMPT + contextBlock };
     },
   );
 }
+
+// ─── turn_context rendering ───────────────────────────────────────────
+//
+// Layout (top-to-bottom = most-load-bearing first):
+//
+//   ═ Active tasks  → "what am I doing now" (structured, never miss)
+//   ═ Current focus → one line
+//   ═ Preferences   → KV list (the user's standing instructions)
+//   ═ Other pinned  → non-canonical pinned blocks (if any)
+//   ═ Memory recall → graphiti hits against this turn's query
+//
+// The structured sections come FIRST so attention-dilution from a long
+// recall tail can't push them out of the model's effective window.
+
+function renderTurnContext(ctx: {
+  active_tasks: TypedTask[];
+  current_focus: string | null;
+  preferences: Record<string, unknown>;
+  pinned_blocks: PinnedBlockWire[];
+  recalled_episodes: RecalledEpisodeWire[];
+  namespaces_searched: string[];
+}): string {
+  const parts: string[] = [];
+
+  // --- Active tasks ----------------------------------------------------
+  if (ctx.active_tasks.length > 0) {
+    parts.push(
+      "\n═══ Active tasks (state.active_tasks) ═══\n",
+      "These are what the user is currently working on. When asked",
+      "'what are my tasks / what am I doing', this list IS the answer —",
+      "do not say you have no record. Reference items by `id` if the",
+      "user wants to update or complete one.\n",
+    );
+    for (const t of ctx.active_tasks) {
+      const notes = t.notes ? `  — ${t.notes}` : "";
+      parts.push(
+        `  [${t.id}] (${t.status}, p=${t.priority}) ${t.title}${notes}`,
+      );
+    }
+    parts.push(
+      "\nTools: `task_add`, `task_update`, `task_complete`, `list_tasks`.\n",
+    );
+  }
+
+  // --- Current focus ---------------------------------------------------
+  if (ctx.current_focus) {
+    parts.push(
+      "\n═══ Current focus (state.current_focus) ═══\n",
+      `  ${ctx.current_focus}`,
+      "\nTool: `set_focus(value)` when the user switches focus.\n",
+    );
+  }
+
+  // --- Preferences -----------------------------------------------------
+  const prefKeys = Object.keys(ctx.preferences);
+  if (prefKeys.length > 0) {
+    parts.push(
+      "\n═══ User preferences (cross-agent, ground truth) ═══\n",
+      "Standing instructions from the user — apply automatically without",
+      "asking again. Use `set_preference(key, value)` to change.\n",
+    );
+    for (const k of prefKeys.sort()) {
+      const v = ctx.preferences[k];
+      const text = typeof v === "string" ? `"${v}"` : JSON.stringify(v);
+      parts.push(`  ${k} = ${text}`);
+    }
+    parts.push("");
+  }
+
+  // --- Other pinned blocks (non-canonical) ----------------------------
+  const canonical = new Set<string>([
+    "state.active_tasks", "state.current_focus",
+    ...prefKeys.map((k) => `preferences.${k}`),
+  ]);
+  const otherPinned = ctx.pinned_blocks.filter((b) => !canonical.has(b.key));
+  if (otherPinned.length > 0) {
+    otherPinned.sort((a, b) => {
+      if (b.priority !== a.priority) return b.priority - a.priority;
+      if (a.scope !== b.scope) return a.scope === "own" ? -1 : 1;
+      return a.key.localeCompare(b.key);
+    });
+    parts.push(
+      "\n═══ Other pinned memory ═══\n",
+      "Additional user-asserted facts. Treat as ground truth.\n",
+    );
+    for (const b of otherPinned) {
+      const scopeTag = b.scope === "own" ? "" : " [global]";
+      const desc = b.description ? `  — ${b.description}` : "";
+      const value =
+        typeof b.value === "string"
+          ? `"${b.value}"`
+          : JSON.stringify(b.value);
+      parts.push(`  ${b.key}${scopeTag} = ${value}${desc}`);
+    }
+    parts.push("");
+  }
+
+  // --- Recall (graphiti hits against this turn's query) ---------------
+  if (ctx.recalled_episodes.length > 0) {
+    parts.push(
+      "\n═══ Memory recall (auto-retrieved for this turn) ═══\n",
+      "Facts from graphiti matching this turn's query. Lower priority",
+      "than the structured sections above — when they conflict, the",
+      "structured state wins (it's the current truth, recall is history).",
+      `Namespaces searched: ${ctx.namespaces_searched.join(", ")}\n`,
+    );
+    const hits = ctx.recalled_episodes.slice(0, MAX_RECALL_HITS * 2);
+    for (const [i, h] of hits.entries()) {
+      const fact = _trim(h.fact.replace(/\s+/g, " ").trim(), MAX_HIT_TEXT);
+      const score = typeof h.score === "number" ? ` (score=${h.score.toFixed(2)})` : "";
+      const ns = h.namespace ? `  [${h.namespace}]` : "";
+      const valid = h.valid_at ? `  valid_at=${h.valid_at}` : "";
+      parts.push(`  ${i + 1}. ${fact}${score}${ns}${valid}`);
+    }
+    parts.push("");
+  }
+
+  if (parts.length === 0) return "";
+  const block = parts.join("\n") + "\n";
+  return _capBlock(block);
+}
+

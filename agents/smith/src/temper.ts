@@ -451,6 +451,124 @@ export class Temper {
     );
   }
 
+  // ─── typed memory API (/v1/memory/tasks, /focus, /preferences, … ) ──
+  //
+  // Thin wrappers around TEMPER's typed endpoints. The whole point is
+  // that TEMPER decides where each kind of memory lands (block vs
+  // graphiti, scope, pinned, priority). This client must NEVER second-
+  // guess that routing — if you find yourself reaching for
+  // upsertMemoryBlock("state.active_tasks", ...) in agent code, that's
+  // the bug we built this layer to prevent. Call addTask() instead.
+
+  async addTask(args: {
+    title: string;
+    status?: "todo" | "doing" | "blocked";
+    priority?: number;
+    notes?: string;
+  }): Promise<TypedTask> {
+    return this.req<TypedTask>("POST", "/v1/memory/tasks", {
+      body: {
+        title: args.title,
+        status: args.status ?? "todo",
+        priority: args.priority ?? 50,
+        notes: args.notes,
+      },
+    });
+  }
+
+  async listTasks(status?: "todo" | "doing" | "blocked"): Promise<TypedTask[]> {
+    const body = await this.req<{ tasks?: TypedTask[] }>(
+      "GET", "/v1/memory/tasks",
+      { params: status ? { status } : undefined },
+    );
+    return body.tasks ?? [];
+  }
+
+  async updateTask(
+    taskId: string,
+    patch: {
+      title?: string;
+      status?: "todo" | "doing" | "blocked";
+      priority?: number;
+      notes?: string;
+    },
+  ): Promise<TypedTask> {
+    return this.req<TypedTask>(
+      "PATCH", `/v1/memory/tasks/${encodeURIComponent(taskId)}`,
+      { body: patch },
+    );
+  }
+
+  async completeTask(
+    taskId: string,
+    summary?: string,
+  ): Promise<TaskCompleteResult> {
+    return this.req<TaskCompleteResult>(
+      "POST", `/v1/memory/tasks/${encodeURIComponent(taskId)}/complete`,
+      { body: { summary } },
+    );
+  }
+
+  async getFocus(): Promise<TypedFocus> {
+    return this.req<TypedFocus>("GET", "/v1/memory/focus");
+  }
+
+  async setFocus(value: string, note?: string): Promise<TypedFocus> {
+    return this.req<TypedFocus>("PUT", "/v1/memory/focus", {
+      body: { value, note },
+    });
+  }
+
+  async listPreferences(): Promise<TypedPreference[]> {
+    const body = await this.req<{ preferences?: TypedPreference[] }>(
+      "GET", "/v1/memory/preferences",
+    );
+    return body.preferences ?? [];
+  }
+
+  async setPreference(
+    key: string, value: unknown, description?: string,
+  ): Promise<TypedPreference> {
+    return this.req<TypedPreference>(
+      "PUT", `/v1/memory/preferences/${encodeURIComponent(key)}`,
+      { body: { value, description } },
+    );
+  }
+
+  async noteEvent(args: {
+    content: string;
+    namespace?: string;
+    referenceTime?: string;
+    tags?: string[];
+    saga?: string;
+  }): Promise<NoteEventResult> {
+    return this.req<NoteEventResult>("POST", "/v1/memory/events", {
+      body: {
+        content: args.content,
+        namespace: args.namespace,
+        reference_time: args.referenceTime,
+        tags: args.tags,
+        saga: args.saga,
+      },
+    });
+  }
+
+  /** One-call read bundle for before_agent_start. Returns pinned blocks
+   *  + structured shortcuts (active_tasks / focus / preferences) +
+   *  graphiti recall against `query`. Replaces three separate calls
+   *  (listMemoryBlocks + search agent + search user:me). */
+  async getTurnContext(args: {
+    query?: string;
+    recallLimit?: number;
+    namespaces?: string[];
+  } = {}): Promise<TurnContext> {
+    const params: Record<string, string | number> = {};
+    if (args.query) params.query = args.query;
+    if (args.recallLimit !== undefined) params.recall_limit = args.recallLimit;
+    if (args.namespaces?.length) params.namespaces = args.namespaces.join(",");
+    return this.req<TurnContext>("GET", "/v1/memory/turn_context", { params });
+  }
+
   async health(): Promise<unknown> {
     return this.req("GET", "/v1/health");
   }
@@ -458,4 +576,66 @@ export class Temper {
   async whoami(): Promise<{ id?: string; email?: string }> {
     return this.req("GET", "/v1/auth/me");
   }
+}
+
+// ─── typed memory wire shapes ──────────────────────────────────────────
+
+export interface TypedTask {
+  id: string;
+  title: string;
+  status: "todo" | "doing" | "blocked" | "done";
+  priority: number;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskCompleteResult {
+  completed: TypedTask;
+  episode_id: string;
+}
+
+export interface TypedFocus {
+  value: string | null;
+  updated_at: string | null;
+  episode_id?: string | null;
+}
+
+export interface TypedPreference {
+  key: string;
+  value: unknown;
+  description: string | null;
+  updated_at: string;
+}
+
+export interface NoteEventResult {
+  episode_id: string;
+  namespace: string;
+  created_at: string;
+}
+
+export interface PinnedBlockWire {
+  key: string;
+  value: unknown;
+  priority: number;
+  description: string | null;
+  scope: "own" | "global";
+}
+
+export interface RecalledEpisodeWire {
+  episode_id: string | null;
+  namespace: string;
+  fact: string;
+  score: number;
+  valid_at: string | null;
+  invalid_at: string | null;
+}
+
+export interface TurnContext {
+  active_tasks: TypedTask[];
+  current_focus: string | null;
+  preferences: Record<string, unknown>;
+  pinned_blocks: PinnedBlockWire[];
+  recalled_episodes: RecalledEpisodeWire[];
+  namespaces_searched: string[];
 }

@@ -27,6 +27,7 @@ import { getConfig, type SmithConfig } from "./config.js";
 import { approvalGateExtension } from "./extensions/approval-gate.js";
 import { compactionPolicyExtension } from "./extensions/compaction-policy.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
+import { typedMemoryExtension } from "./extensions/typed-memory.js";
 import { mcpBridgeExtension } from "./extensions/mcp-bridge.js";
 import { pluginSystemExtension } from "./extensions/plugin-system.js";
 import { smithPersonalityExtension } from "./extensions/smith-personality.js";
@@ -175,7 +176,8 @@ class SmithSessionPool {
         // Once a plugin is added via the registry, drop it from
         // MCP_SERVERS — pi.registerTool throws on duplicate names.
         (pi) => smithPersonalityExtension(pi),
-        (pi) => temperMemoryExtension(pi),
+        (pi) => typedMemoryExtension(pi),       // task_*/set_focus/set_preference/note_event
+        (pi) => temperMemoryExtension(pi),      // memory_search + legacy escape hatches
         (pi) => { void pluginSystemExtension(pi); }, // fire-and-forget
         (pi) => { void mcpBridgeExtension(pi); },    // legacy env path
         (pi) => approvalGateExtension(pi, conversationId),
