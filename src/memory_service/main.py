@@ -142,6 +142,13 @@ def create_app() -> FastAPI:
     async def root() -> RedirectResponse:
         return RedirectResponse(url="/admin")
 
+    # /healthz top-level alias for monitoring probes that default to
+    # the conventional path. Delegates to the /v1/health handler so
+    # the response shape stays identical.
+    @app.get("/healthz", include_in_schema=False, tags=["system"])
+    async def healthz() -> dict[str, object]:
+        return await v1_system.health()
+
     _ = settings  # silence unused — lifespan owns it
     return app
 
