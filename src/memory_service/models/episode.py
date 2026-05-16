@@ -17,6 +17,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import JSON, DateTime, ForeignKey, String
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Mapped, mapped_column
 
 from memory_service.models._base import Base, TimestampMixin
@@ -53,4 +54,14 @@ class EpisodeMetadata(Base, TimestampMixin):
     # talking to FalkorDB.
     graphiti_episode_id: Mapped[str | None] = mapped_column(
         String(64), default=None, index=True
+    )
+    # Documents this episode references via [[wikilink]]. Populated by
+    # the typed memory write paths (note_event, task_*) when their
+    # content includes wikilinks; drives the recall fan-out that
+    # surfaces linked documents alongside recalled episodes.
+    # Stored as ARRAY on Postgres; on sqlite (tests only) we use a
+    # JSON-backed list via the generic JSON column type.
+    linked_document_paths: Mapped[list[str] | None] = mapped_column(
+        JSON().with_variant(ARRAY(String(512)), "postgresql"),
+        default=None,
     )

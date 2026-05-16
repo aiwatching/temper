@@ -1,6 +1,7 @@
 """Re-export all ORM models so Alembic can discover them via metadata."""
 from memory_service.models._base import Base
 from memory_service.models.api_key import APIKey
+from memory_service.models.document import Document, DocumentLink, DocumentRevision
 from memory_service.models.episode import EpisodeMetadata
 from memory_service.models.group import Group, UserGroupMembership
 from memory_service.models.memory_block import GLOBAL_AGENT_SLUG, MemoryBlock
@@ -15,6 +16,9 @@ __all__ = [
     "Group",
     "UserGroupMembership",
     "APIKey",
+    "Document",
+    "DocumentLink",
+    "DocumentRevision",
     "EpisodeMetadata",
     "EntitySchema",
     "MemoryBlock",
