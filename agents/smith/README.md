@@ -23,7 +23,16 @@ the same harness powering openclaw / harness. Smith is a TEMPER
 
 ## First-run
 
-After `pnpm install && pnpm run dev`, open `http://127.0.0.1:18099/setup`
+One command — installs deps, rebuilds native bindings, starts the server:
+
+```bash
+cd agents/smith
+./start.sh -dev          # dev: tsx watch, auto-reload
+./start.sh               # prod: build dist/ then node dist/index.js
+./start.sh -h            # what each flag does
+```
+
+Then open `http://127.0.0.1:18099/setup`
 in a browser. The wizard collects TEMPER + LLM config and writes it
 to `.data/smith.db` (with sensitive values AES-256-GCM-encrypted).
 The master key is auto-generated on first boot at
@@ -56,21 +65,16 @@ Edit any time at `/settings`.
 
 ```bash
 cd agents/smith
-pnpm install
-cp .env.example .env
-# Edit .env. At minimum:
-#   TEMPER_API_KEY=mk_…       (create on http://127.0.0.1:18088/admin/integrate)
-#   LLM_PROVIDER=<provider>   (anthropic | openai | deepseek | google | <custom>)
-#   LLM_API_KEY=<key>
-#   LLM_MODEL=<id>
-# For a corporate OpenAI-compat gateway also set:
-#   LLM_BASE_URL=http://nac-ai.internal.example/v1
-# Optional bearer auth (REQUIRED if SMITH_HOST is not 127.0.0.1):
-#   SMITH_SECRET=<choose-something>
-
-pnpm dev
-# -> http://127.0.0.1:18099
+./start.sh -dev          # installs deps + launches tsx watch
+# -> open http://127.0.0.1:18099/setup for first-run wizard
 ```
+
+`start.sh` checks Node + pnpm versions, installs deps if needed,
+rebuilds the better-sqlite3 native binding, then starts tsx watch
+(dev) or `node dist/index.js` (prod). All configuration is collected
+through the `/setup` wizard — **no `.env` editing required**. If
+you already have a legacy `.env` it's migrated to `.data/smith.db`
+automatically on first boot.
 
 Open the chat UI:
 
