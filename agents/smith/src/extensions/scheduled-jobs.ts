@@ -28,10 +28,13 @@ import { runJobNow } from "../jobs-engine.js";
 type PiExtensionAPI = any;
 
 function _trigger(params: {
-  trigger_kind: "interval" | "once";
+  trigger_kind: "interval" | "once" | "plugin_event";
   every_seconds?: number;
   fire_at?: string;
   jitter_seconds?: number;
+  plugin_slug?: string;
+  event?: string;
+  on_error?: boolean;
 }): Trigger {
   if (params.trigger_kind === "interval") {
     if (!params.every_seconds || params.every_seconds < 60) {
@@ -43,10 +46,24 @@ function _trigger(params: {
       jitter_seconds: params.jitter_seconds,
     };
   }
-  if (!params.fire_at) {
-    throw new Error("once triggers require fire_at (ISO-8601)");
+  if (params.trigger_kind === "once") {
+    if (!params.fire_at) {
+      throw new Error("once triggers require fire_at (ISO-8601)");
+    }
+    return { kind: "once", fire_at: params.fire_at };
   }
-  return { kind: "once", fire_at: params.fire_at };
+  // plugin_event
+  const slug = (params.plugin_slug ?? "").trim();
+  const evt = (params.event ?? "tool_end").trim();
+  if (!slug) {
+    throw new Error("plugin_event triggers require plugin_slug (use '*' for any)");
+  }
+  return {
+    kind: "plugin_event",
+    plugin_slug: slug,
+    event: evt,
+    ...(params.on_error !== undefined ? { on_error: params.on_error } : {}),
+  } as Trigger;
 }
 
 export function scheduledJobsExtension(pi: PiExtensionAPI): void {
@@ -68,8 +85,17 @@ export function scheduledJobsExtension(pi: PiExtensionAPI): void {
       }),
       description: Type.Optional(Type.String()),
       trigger_kind: Type.Union(
-        [Type.Literal("interval"), Type.Literal("once")],
-        { description: "interval = recurring; once = fire then disable." },
+        [
+          Type.Literal("interval"),
+          Type.Literal("once"),
+          Type.Literal("plugin_event"),
+        ],
+        {
+          description:
+            "interval = recurring time-based · " +
+            "once = fire at a specific instant then disable · " +
+            "plugin_event = react to a tool_end event from a plugin",
+        },
       ),
       every_seconds: Type.Optional(
         Type.Integer({
@@ -95,6 +121,30 @@ export function scheduledJobsExtension(pi: PiExtensionAPI): void {
             "fire the job auto-disables.",
         }),
       ),
+      plugin_slug: Type.Optional(
+        Type.String({
+          description:
+            "plugin_event triggers only. Tool name prefix to match " +
+            "(Smith plugins are named '<slug>__<tool>'). Use '*' for " +
+            "any plugin. Examples: 'mantis' / 'gitlab' / '*'.",
+        }),
+      ),
+      event: Type.Optional(
+        Type.String({
+          default: "tool_end",
+          description:
+            "plugin_event triggers only. 'tool_end' fires after any " +
+            "tool from the plugin completes; 'tool_end:<tool_name>' " +
+            "fires after a specific tool (e.g. 'tool_end:list_bugs').",
+        }),
+      ),
+      on_error: Type.Optional(
+        Type.Boolean({
+          description:
+            "plugin_event triggers only. true = only fire when the " +
+            "tool call ended in error (alerting). Default false.",
+        }),
+      ),
       prompt: Type.String({
         minLength: 1,
         description:
@@ -116,10 +166,13 @@ export function scheduledJobsExtension(pi: PiExtensionAPI): void {
       params: {
         name: string;
         description?: string;
-        trigger_kind: "interval" | "once";
+        trigger_kind: "interval" | "once" | "plugin_event";
         every_seconds?: number;
         jitter_seconds?: number;
         fire_at?: string;
+        plugin_slug?: string;
+        event?: string;
+        on_error?: boolean;
         prompt: string;
         conversation_id?: string;
       },
@@ -137,16 +190,26 @@ export function scheduledJobsExtension(pi: PiExtensionAPI): void {
           },
           updatedBy: "tool:schedule_job",
         });
+        let triggerDesc: string;
+        if (trigger.kind === "interval") {
+          triggerDesc = `every ${trigger.every_seconds}s`;
+        } else if (trigger.kind === "once") {
+          triggerDesc = `at ${trigger.fire_at}`;
+        } else if (trigger.kind === "plugin_event") {
+          triggerDesc =
+            `on ${trigger.plugin_slug} ${trigger.event}` +
+            (trigger.on_error ? " (errors only)" : "");
+        } else {
+          // cron — _trigger() doesn't return this today; defensive
+          triggerDesc = JSON.stringify(trigger);
+        }
         return {
           content: [{
             type: "text",
             text:
               `Scheduled ${job.id} '${job.name}'. ` +
-              `Trigger: ${trigger.kind}` +
-              (trigger.kind === "interval"
-                ? ` every ${trigger.every_seconds}s`
-                : ` at ${(trigger as { fire_at: string }).fire_at}`) +
-              `. Next fire: ${job.next_fire_at ?? "(not scheduled)"}.`,
+              `Trigger: ${trigger.kind} ${triggerDesc}. ` +
+              `Next fire: ${job.next_fire_at ?? "(event-driven, no schedule)"}.`,
           }],
           details: { id: job.id, next_fire_at: job.next_fire_at },
         };

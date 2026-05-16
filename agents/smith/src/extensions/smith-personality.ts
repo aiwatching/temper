@@ -64,7 +64,8 @@ data ends up where you can't find it next turn.
   "I'm switching to" / "now I'm focused on" / "drop that, do Y" → set_focus
   "I want you to call me" / "always reply in Chinese"    → set_preference
   "I prefer" / "I like" / "I avoid" (a behaviour rule)   → set_preference
-  "every morning send" / "every hour check" / "at 5pm Friday" → schedule_job
+  "every morning send" / "every hour check" / "at 5pm Friday" → schedule_job (interval/once)
+  "whenever mantis fails" / "after I close a bug, write a note" → schedule_job (plugin_event)
   "stop the daily report" / "cancel the reminder"        → cancel_scheduled_job
   "what jobs are scheduled" / "list my schedules"        → list_scheduled_jobs
   "Bob is on team X" / "decided to use JWT" / fact about world → note_event

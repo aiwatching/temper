@@ -35,8 +35,16 @@ export interface OnceTrigger {
 }
 export interface PluginEventTrigger {
   kind: "plugin_event";
+  /** Tool name prefix this trigger reacts to. "*" matches any. Smith
+   *  convention: plugin tools are named `<slug>__<tool>` so "mantis"
+   *  here matches mantis__list_bugs / mantis__add_comment / etc. */
   plugin_slug: string;
+  /** Stage to react to. Today supported: "tool_end" (matches all tools
+   *  from that plugin) and "tool_end:<tool>" (specific tool). */
   event: string;
+  /** When true, only fire if the tool call ended in error. Useful for
+   *  alerting on failures without firing on every success. */
+  on_error?: boolean;
 }
 export interface CronTrigger {
   kind: "cron";

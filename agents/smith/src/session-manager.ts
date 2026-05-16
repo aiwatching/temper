@@ -26,6 +26,7 @@ import {
 import { getConfig, type SmithConfig } from "./config.js";
 import { approvalGateExtension } from "./extensions/approval-gate.js";
 import { compactionPolicyExtension } from "./extensions/compaction-policy.js";
+import { pluginEventListenerExtension } from "./extensions/plugin-event-listener.js";
 import { scheduledJobsExtension } from "./extensions/scheduled-jobs.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
 import { typedMemoryExtension } from "./extensions/typed-memory.js";
@@ -184,6 +185,7 @@ class SmithSessionPool {
         (pi) => { void mcpBridgeExtension(pi); },    // legacy env path
         (pi) => approvalGateExtension(pi, conversationId),
         (pi) => compactionPolicyExtension(pi, conversationId),
+        (pi) => pluginEventListenerExtension(pi, conversationId),
       ],
     });
     await resourceLoader.reload();
