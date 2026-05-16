@@ -59,6 +59,11 @@ import {
   type Action,
 } from "./db/jobs-repo.js";
 import { runJobNow } from "./jobs-engine.js";
+import {
+  aggregateTaskById,
+  aggregateTasks,
+  type TaskStatus,
+} from "./lib/tasks-aggregator.js";
 
 // ---- inline vendor + UI source ----
 //
@@ -110,6 +115,7 @@ const BRIEFS_JSX = readWeb("briefs.jsx");
 const PLUGINS_JSX = readWeb("plugins.jsx");
 const SETUP_JSX = readWeb("setup.jsx");
 const SETTINGS_JSX = readWeb("settings.jsx");
+const TASKS_JSX = readWeb("tasks.jsx");
 const REACT_JS = readWeb("vendor/react.production.min.js");
 const REACT_DOM_JS = readWeb("vendor/react-dom.production.min.js");
 const BABEL_JS = readWeb("vendor/babel.min.js");
@@ -152,6 +158,7 @@ const BRIEFS_PAGE = renderPage("Smith · Briefs", "BriefApp", BRIEFS_JSX);
 const PLUGINS_PAGE = renderPage("Smith · Plugins", "PluginsApp", PLUGINS_JSX);
 const SETUP_PAGE = renderPage("Smith · Setup", "SetupApp", SETUP_JSX);
 const SETTINGS_PAGE = renderPage("Smith · Settings", "SettingsApp", SETTINGS_JSX);
+const TASKS_PAGE = renderPage("Smith · Tasks", "TasksApp", TASKS_JSX);
 
 export function buildApp(): Hono {
   const app = new Hono();
@@ -198,10 +205,10 @@ export function buildApp(): Hono {
     // secret from the URL hash before any /approve, /deny, etc. fires.
     // /setup is NEVER bearer-gated (the wizard happens before any
     // bearer exists). /settings IS gated (post-install editor).
-    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?|plugins(?:\/.*)?|settings(?:\/.*)?|jobs(?:\/.*)?)$/;
+    const GATED_PATH = /^\/(?:chat|approve|deny|pending(?:\/.*)?|conversations(?:\/.*)?|plugins(?:\/.*)?|settings(?:\/.*)?|jobs(?:\/.*)?|tasks(?:\/.*)?)$/;
     app.use(async (c, next) => {
       if (!GATED_PATH.test(c.req.path)) return next();
-      if (c.req.method === "GET" && (c.req.path === "/chat" || c.req.path === "/plugins" || c.req.path === "/settings")) {
+      if (c.req.method === "GET" && (c.req.path === "/chat" || c.req.path === "/plugins" || c.req.path === "/settings" || c.req.path === "/tasks")) {
         return next();  // GET HTML pages = bootstrap, not API
       }
       const got = c.req.header("authorization") ?? "";
@@ -624,6 +631,7 @@ export function buildApp(): Hono {
   registerPluginRoutes(app);
   registerSetupRoutes(app);
   registerJobsRoutes(app);
+  registerTasksRoutes(app);
 
   return app;
 }
@@ -1169,5 +1177,41 @@ function registerJobsRoutes(app: Hono): void {
     } catch (e) {
       return c.json({ error: (e as Error).message }, 404);
     }
+  });
+}
+
+// --- /tasks routes ---
+//
+// Unified view per docs/design/src/screen-tasks.jsx. Aggregates four
+// sources (approvalStore, conversation_index, jobs, future waiting
+// flag) into a single design-shaped list.
+//
+//   GET /tasks                 HTML page (when Accept: text/html)
+//   GET /tasks                 JSON list (Accept: application/json)
+//                              query: ?status=...&search=...
+//   GET /tasks/:id             single task with detail
+//
+// Action endpoints aren't here — UI delegates to the existing
+// /approve, /deny, /jobs/:id/* endpoints. Keeps this thin.
+function registerTasksRoutes(app: Hono): void {
+  app.get("/tasks", (c) => {
+    const accept = c.req.header("accept") ?? "";
+    if (accept.includes("text/html") && !accept.includes("application/json")) {
+      return c.html(TASKS_PAGE);
+    }
+    const statusRaw = c.req.query("status");
+    const status = statusRaw && statusRaw !== "all"
+      ? (statusRaw as TaskStatus)
+      : undefined;
+    const tasks = aggregateTasks({
+      status,
+      search: c.req.query("search") ?? undefined,
+    });
+    return c.json({ tasks });
+  });
+
+  app.get("/tasks/:id", (c) => {
+    const t = aggregateTaskById(c.req.param("id"));
+    return t ? c.json(t) : c.json({ error: "not found" }, 404);
   });
 }
