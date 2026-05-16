@@ -349,18 +349,33 @@ const ConfirmCard = ({ pending, onApprove, onDeny, state }) => {
 //   { kind:'smith',    text, thinking, toolCalls:[...], pending:{}|null,
 //                      pendingState:'pending'|'approved'|'denied',
 //                      error?, done }
+const MAIN_CONV_ID = "main";
 function newConvId() {
   return "ui-" + Math.random().toString(36).slice(2, 10);
 }
 
-function useChatStream() {
-  const [convId, setConvId] = useState(() => {
-    const saved = sessionStorage.getItem("smith.convId");
-    if (saved) return saved;
-    const id = newConvId();
+function _initialConvId() {
+  // 1. URL hash wins (deep-links from the /tasks page, branch redirects)
+  const m = (location.hash || "").match(/(?:^#|&)conv=([^&]+)/);
+  if (m) {
+    const id = decodeURIComponent(m[1]);
     sessionStorage.setItem("smith.convId", id);
+    // Scrub the hash so a refresh doesn't lock us into a deleted conv.
+    history.replaceState(null, "", location.pathname + location.search);
     return id;
-  });
+  }
+  // 2. Whatever we used last in this browser session
+  const saved = sessionStorage.getItem("smith.convId");
+  if (saved) return saved;
+  // 3. Fresh visit → land on the persistent home conv. Not a "ui-..."
+  //    minted on the fly anymore — the user explicitly clicks "+ new"
+  //    if they want a separate branch.
+  sessionStorage.setItem("smith.convId", MAIN_CONV_ID);
+  return MAIN_CONV_ID;
+}
+
+function useChatStream() {
+  const [convId, setConvId] = useState(_initialConvId);
   const [turns, setTurns] = useState([]);
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -425,11 +440,17 @@ function useChatStream() {
   }, [convId, loadHistory]);
 
   const reset = useCallback(() => {
+    // "+ New" mints a fresh branch (not the main home). User wanting
+    // a clean main conv goes through the picker's "Clear" instead.
     const id = newConvId();
     setConvId(id);
     sessionStorage.setItem("smith.convId", id);
     setTurns([]);
   }, []);
+
+  /** Drop the in-memory transcript without changing convId — used by
+   *  the picker's "Clear" affordance after the server's /clear succeeds. */
+  const clearLocal = useCallback(() => setTurns([]), []);
 
   const send = useCallback(async (text) => {
     if (!text || !text.trim()) return;
@@ -547,7 +568,7 @@ function useChatStream() {
     updateLastSmith({ pendingState: 'denied' });
   }, [updateLastSmith]);
 
-  return { convId, switchTo, reset, turns, send, approve, deny, busy, loadingHistory };
+  return { convId, switchTo, reset, clearLocal, turns, send, approve, deny, busy, loadingHistory };
 }
 
 // ─── conversations + health pollers ───────────────────────────────────────
@@ -589,25 +610,199 @@ function useHealth() {
 }
 
 // ─── conversation picker ──────────────────────────────────────────────────
-const ConvPicker = ({ activeId, conversations, onSwitch, onReset, onDelete }) => {
-  const meEntry = conversations.find((c) => c.id === activeId);
+// Main conv lives at the top with a ⭐ — it's the persistent home, can
+// only be cleared (not deleted). Other convs (branches + ad-hoc new
+// chats) follow, most-recently-used first. Per-row menu surfaces
+// the right destructive action (clear vs delete) based on isMain.
+const ConvPicker = ({ activeId, conversations, onSwitch, onAfterChange }) => {
+  const [open, setOpen] = useState(false);
+  const sorted = [...conversations].sort((a, b) => {
+    if (a.id === MAIN_CONV_ID) return -1;
+    if (b.id === MAIN_CONV_ID) return 1;
+    return b.lastUsedAt.localeCompare(a.lastUsedAt);
+  });
+  const active = conversations.find((c) => c.id === activeId);
+  const label = active?.title || activeId;
+
   return (
-    <div className="row" style={{ gap: 6 }}>
-      <select
-        className="conv-picker"
-        value={activeId}
-        onChange={(e) => onSwitch(e.target.value)}
-        title="切换会话"
-      >
-        <option value={activeId}>{meEntry ? meEntry.title : "(当前 · 未保存)"}</option>
-        {conversations.filter((c) => c.id !== activeId).map((c) => (
-          <option key={c.id} value={c.id}>
-            {c.title} · {c.lastUsedAt.replace("T", " ").slice(0, 16)} · {c.messageCount}t
-          </option>
-        ))}
-      </select>
-      <button className="btn xs subtle" title="删除当前会话" onClick={onDelete}><Icon name="trash" size={12} /></button>
-      <button className="btn xs subtle" title="新会话" onClick={onReset}><Icon name="plus" size={12} /></button>
+    <div style={{ position: 'relative' }}>
+      <button className="btn sm subtle" onClick={() => setOpen(!open)} title="切换会话">
+        {activeId === MAIN_CONV_ID && <span style={{ color: 'var(--accent)' }}>⭐</span>}
+        <span style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <Icon name="chevronDown" size={10} />
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', right: 0, marginTop: 4,
+          background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 8,
+          boxShadow: 'var(--shadow-md)', minWidth: 320, maxWidth: 480,
+          maxHeight: '70vh', overflow: 'auto', zIndex: 50,
+        }}>
+          <div style={{ padding: 8, borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="muted" style={{ fontSize: 11, padding: '0 4px' }}>{sorted.length} 个会话</span>
+            <button className="btn xs" onClick={async () => {
+              setOpen(false);
+              const id = "ui-" + Math.random().toString(36).slice(2, 10);
+              onSwitch(id);
+            }}><Icon name="plus" size={10} /> 新建</button>
+          </div>
+          {sorted.map((c) => (
+            <ConvRow key={c.id} entry={c} active={c.id === activeId}
+              onSwitch={() => { setOpen(false); onSwitch(c.id); }}
+              onAfterChange={() => { onAfterChange && onAfterChange(); }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ConvRow = ({ entry, active, onSwitch, onAfterChange }) => {
+  const [busy, setBusy] = useState(false);
+  const isMain = entry.id === MAIN_CONV_ID;
+  const clear = async () => {
+    const archived = isMain
+      ? confirm(`清空 main 会话?\n\n会归档摘要到 TEMPER,删 .data/smith-sessions/main.jsonl,保留会话槽位。\n\n确定?`)
+      : confirm(`清空 '${entry.title}'?\n\n不会归档(已经是 branch)。删 jsonl + 重置消息数。`);
+    if (!archived) return;
+    setBusy(true);
+    try {
+      const qp = isMain ? "?archive=true" : "?archive=false";
+      await api(`/conversations/${encodeURIComponent(entry.id)}/clear${qp}`, { method: "POST", body: "{}" });
+      onAfterChange && onAfterChange();
+    } catch (e) { alert("清空失败: " + e.message); }
+    setBusy(false);
+  };
+  const del = async () => {
+    if (isMain) return alert("main 不能删,只能清空");
+    if (!confirm(`删除会话 '${entry.title}'?\n\n会清掉 jsonl + 索引条目。TEMPER 长期记忆保留。`)) return;
+    const archive = confirm("先归档一句话摘要到 TEMPER 吗?\n\n确定 = 归档后删 · 取消 = 直接删");
+    setBusy(true);
+    try {
+      await api(`/conversations/${encodeURIComponent(entry.id)}${archive ? "?archive=true" : ""}`, { method: "DELETE" });
+      onAfterChange && onAfterChange();
+    } catch (e) { alert("删除失败: " + e.message); }
+    setBusy(false);
+  };
+  return (
+    <div style={{
+      display: 'grid', gridTemplateColumns: '1fr auto', gap: 6, padding: '8px 12px',
+      borderTop: '1px solid var(--line)',
+      background: active ? 'var(--panel-2)' : 'transparent',
+      opacity: busy ? 0.5 : 1,
+    }}>
+      <button onClick={onSwitch} style={{ textAlign: 'left', background: 'transparent', border: 0, cursor: 'pointer', minWidth: 0 }}>
+        <div className="row" style={{ gap: 6 }}>
+          {isMain && <span style={{ color: 'var(--accent)' }}>⭐</span>}
+          {entry.forkedFrom && <span title="branched" style={{ color: 'var(--purple)' }}>↳</span>}
+          <span style={{ fontSize: 12.5, fontWeight: active ? 600 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.title}</span>
+        </div>
+        <div className="muted mono" style={{ fontSize: 10.5, marginTop: 2 }}>
+          {entry.lastUsedAt?.replace("T", " ").slice(0, 16)} · {entry.messageCount}t
+          {entry.forkedFrom && <> · from {entry.forkedFrom.conv}@{entry.forkedFrom.anchor_turn} ({entry.forkedFrom.range})</>}
+        </div>
+      </button>
+      <div className="row" style={{ gap: 2 }}>
+        <button className="btn xs subtle" disabled={busy} onClick={clear} title="清空(归档 + 删 jsonl + 保留槽位)">
+          <Icon name="refresh" size={10} />
+        </button>
+        {!isMain && (
+          <button className="btn xs subtle" disabled={busy} onClick={del} title="删除整个会话">
+            <Icon name="trash" size={10} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── fork modal ────────────────────────────────────────────────────────────
+// Opens from a smith-reply hover button. Lets the user pick range +
+// optional branch name, then POSTs /conversations/fork and redirects
+// (via onSwitchTo) to the new branch.
+const ForkModal = ({ sourceConv, anchorIndex, anchorPreview, onClose, onSwitchTo, onRefresh }) => {
+  const [range, setRange] = useState('B');
+  const [n, setN] = useState(2);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const body = { source: sourceConv, anchor_turn: anchorIndex, range };
+      if (range === 'C') body.n = Math.max(1, Number(n) || 1);
+      if (name.trim()) body.name = name.trim();
+      const entry = await api('/conversations/fork', {
+        method: 'POST', body: JSON.stringify(body),
+      });
+      onRefresh && onRefresh();
+      onSwitchTo(entry.id);
+      onClose();
+    } catch (e) {
+      alert('fork 失败: ' + e.message);
+    }
+    setBusy(false);
+  };
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(20,20,15,0.45)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 100,
+    }} onClick={onClose}>
+      <div onClick={(e) => e.stopPropagation()} style={{
+        background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10,
+        padding: 20, width: 520, maxWidth: '90vw', boxShadow: 'var(--shadow-lg)',
+      }}>
+        <h3 style={{ marginTop: 0, marginBottom: 6, fontSize: 15 }}>Fork branch from {sourceConv}</h3>
+        <div className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
+          新会话独立于 {sourceConv} — 不会反向影响,也不会自动同步后续更新。
+        </div>
+        {anchorPreview && (
+          <div style={{ padding: 10, background: 'var(--panel-2)', borderRadius: 6, fontSize: 11.5, marginBottom: 14, maxHeight: 100, overflow: 'auto' }}>
+            <div className="muted mono" style={{ fontSize: 10, marginBottom: 4 }}>引用的 reply (#{anchorIndex})</div>
+            <div style={{ whiteSpace: 'pre-wrap' }}>{anchorPreview.slice(0, 300)}{anchorPreview.length > 300 ? '…' : ''}</div>
+          </div>
+        )}
+
+        <div className="sec-label" style={{ marginBottom: 8 }}>注入范围</div>
+        <div className="col" style={{ gap: 6, marginBottom: 14 }}>
+          {[
+            { id: 'A', t: 'A — 仅引用的回复', s: '最少;只在引用本身自洽时用' },
+            { id: 'B', t: 'B — 引用 + 触发它的提问 (默认)', s: '1 round;cheap + 几乎总够' },
+            { id: 'C', t: 'C — 引用前后各 N 轮', s: '上下文最丰富' },
+            { id: 'E', t: 'E — 引用 + LLM 总结 (reserved)', s: '暂未实现,会 fallback 到 B' },
+          ].map(opt => (
+            <label key={opt.id} className="row" style={{ gap: 8, padding: 8, borderRadius: 6, background: range === opt.id ? 'var(--accent-soft)' : 'transparent', cursor: 'pointer', alignItems: 'flex-start' }}>
+              <input type="radio" name="range" checked={range === opt.id} onChange={() => setRange(opt.id)} />
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500 }}>{opt.t}</div>
+                <div className="muted" style={{ fontSize: 11 }}>{opt.s}</div>
+              </div>
+            </label>
+          ))}
+        </div>
+
+        {range === 'C' && (
+          <div className="row" style={{ marginBottom: 14 }}>
+            <span className="muted" style={{ fontSize: 12, minWidth: 80 }}>N (rounds)</span>
+            <input type="number" min={1} max={10} value={n} onChange={(e) => setN(e.target.value)}
+                   style={{ width: 80, fontSize: 12 }} />
+          </div>
+        )}
+
+        <div className="row" style={{ marginBottom: 14 }}>
+          <span className="muted" style={{ fontSize: 12, minWidth: 80 }}>名称 (可选)</span>
+          <input value={name} onChange={(e) => setName(e.target.value)}
+                 placeholder={`Branch from ${sourceConv} @ turn ${anchorIndex}`}
+                 style={{ flex: 1, fontSize: 12 }} />
+        </div>
+
+        <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+          <button className="btn sm subtle" onClick={onClose}>取消</button>
+          <button className="btn sm primary" disabled={busy} onClick={submit}>
+            {busy ? '创建中…' : 'Fork'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -674,9 +869,11 @@ Object.assign(window, {
   // primitives
   Icon, StatusDot, Avatar, Markdown,
   // chat building blocks
-  ToolChip, ConfirmCard, Composer, ConvPicker,
+  ToolChip, ConfirmCard, Composer, ConvPicker, ForkModal,
   // state hooks
   useChatStream, useConversations, useHealth,
   // helpers
   api, authHeaders, promptForSecret, deleteConversation, renderMarkdown,
+  // constants
+  MAIN_CONV_ID,
 });

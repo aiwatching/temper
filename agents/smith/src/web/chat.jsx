@@ -7,17 +7,16 @@ const ChatApp = () => {
   const chat = useChatStream();
   const { list, refresh } = useConversations(chat.convId);
   const { meta, error: healthErr } = useHealth();
+  const [forkSeed, setForkSeed] = React.useState(null); // { anchorIndex, preview }
 
   const logRef = React.useRef(null);
   React.useEffect(() => {
-    // Auto-scroll on new turn / streamed token.
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [chat.turns]);
 
-  const onDeleteConv = async () => {
-    const ok = await deleteConversation(chat.convId);
-    if (ok) { chat.reset(); refresh(); }
-  };
+  const onFork = (i, preview) => setForkSeed({ anchorIndex: i, preview });
+
+  const isMain = chat.convId === MAIN_CONV_ID;
 
   return (
     <AppShell current="chat">
@@ -28,7 +27,9 @@ const ChatApp = () => {
         <div>
           <div className="row" style={{ gap: 6 }}>
             <strong style={{ fontSize: 14 }}>Smith</strong>
-            <span className="muted mono" style={{ fontSize: 10.5 }}>· chat</span>
+            <span className="muted mono" style={{ fontSize: 10.5 }}>
+              · {isMain ? <span style={{ color: 'var(--accent)' }}>⭐ main</span> : chat.convId}
+            </span>
           </div>
         </div>
         <span className="muted" style={{ fontSize: 12 }}>
@@ -37,13 +38,16 @@ const ChatApp = () => {
             : healthErr ? '(/healthz unreachable)' : '…'}
         </span>
         <span style={{ flex: 1 }} />
-        {/* nav rail on the left handles cross-screen navigation now */}
         <ConvPicker
           activeId={chat.convId}
           conversations={list}
           onSwitch={chat.switchTo}
-          onReset={() => { chat.reset(); refresh(); }}
-          onDelete={onDeleteConv}
+          onAfterChange={() => {
+            // After clear/delete, the entry's still here (clear) or
+            // gone (delete on a branch); reload index + history.
+            refresh();
+            chat.switchTo(chat.convId);
+          }}
         />
       </header>
 
@@ -54,14 +58,26 @@ const ChatApp = () => {
           {chat.turns.map((t, i) => {
             if (t.kind === 'user') return <UserBubble key={i} text={t.text} />;
             return (
-              <SmithCard key={i} turn={t}
+              <SmithCard key={i} turn={t} turnIndex={i}
                 onApprove={() => chat.approve(t.pending)}
                 onDeny={() => chat.deny(t.pending)}
+                onFork={() => onFork(i, t.text || '')}
               />
             );
           })}
         </div>
       </main>
+
+      {forkSeed && (
+        <ForkModal
+          sourceConv={chat.convId}
+          anchorIndex={forkSeed.anchorIndex}
+          anchorPreview={forkSeed.preview}
+          onClose={() => setForkSeed(null)}
+          onSwitchTo={(id) => chat.switchTo(id)}
+          onRefresh={refresh}
+        />
+      )}
 
       {/* composer */}
       <footer style={{ padding: '12px 22px 16px', background: 'var(--panel)', borderTop: '1px solid var(--line)' }}>
@@ -87,16 +103,25 @@ const UserBubble = ({ text }) => (
   </div>
 );
 
-const SmithCard = ({ turn, onApprove, onDeny }) => {
+const SmithCard = ({ turn, turnIndex, onApprove, onDeny, onFork }) => {
   // turn: { kind:'smith', text, thinking, toolCalls:[], pending, pendingState, error, done }
   const hasThinking = !!turn.thinking;
   const inFlight = !turn.done && !turn.error;
+  const [hovering, setHovering] = React.useState(false);
   return (
-    <div style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow-sm)' }}>
+    <div
+      onMouseEnter={() => setHovering(true)} onMouseLeave={() => setHovering(false)}
+      style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10, padding: '14px 16px', boxShadow: 'var(--shadow-sm)', position: 'relative' }}>
       <div className="row" style={{ marginBottom: 10 }}>
         <Avatar kind="smith" />
         <strong style={{ fontSize: 12.5 }}>Smith</strong>
         {inFlight && <span className="muted mono" style={{ fontSize: 10.5 }}>· streaming…</span>}
+        <span style={{ flex: 1 }} />
+        {turn.done && !turn.error && hovering && onFork && (
+          <button className="btn xs subtle" onClick={onFork} title={`Fork branch from this reply (turn #${turnIndex})`}>
+            <Icon name="fork" size={11} /> Fork
+          </button>
+        )}
       </div>
       {hasThinking && (
         <details className="thinking" style={{ marginBottom: 10 }} open={!turn.done}>
