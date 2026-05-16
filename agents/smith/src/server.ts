@@ -351,6 +351,24 @@ export function buildApp(): Hono {
     return c.json({ id, messages });
   });
 
+  // Mark / clear the waiting flag from the /tasks UI. The model has its
+  // own set_waiting / clear_waiting tools (see extensions/conv-waiting.ts);
+  // these endpoints let the human override from the Kanban detail panel
+  // (the "检查" button → "clear" if currently waiting, etc).
+  app.post("/conversations/:id/waiting", async (c) => {
+    let body: { external?: string; note?: string } = {};
+    try { body = (await c.req.json()) as typeof body; } catch { /* allow empty */ }
+    const ext = body.external?.trim();
+    if (!ext) return c.json({ error: "external is required" }, 400);
+    const e = conversationIndex.markWaiting(c.req.param("id"), ext, body.note);
+    return e ? c.json(e) : c.json({ error: "conversation not found in index" }, 404);
+  });
+
+  app.delete("/conversations/:id/waiting", (c) => {
+    const e = conversationIndex.clearWaiting(c.req.param("id"));
+    return e ? c.json(e) : c.json({ error: "conversation not found in index" }, 404);
+  });
+
   app.delete("/conversations/:id", async (c) => {
     const id = c.req.param("id");
     const archive = c.req.query("archive") === "true";

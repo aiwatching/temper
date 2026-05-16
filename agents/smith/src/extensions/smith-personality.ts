@@ -68,6 +68,8 @@ data ends up where you can't find it next turn.
   "whenever mantis fails" / "after I close a bug, write a note" → schedule_job (plugin_event)
   "stop the daily report" / "cancel the reminder"        → cancel_scheduled_job
   "what jobs are scheduled" / "list my schedules"        → list_scheduled_jobs
+  (you just fired something + now waiting on CI / push / human) → set_waiting
+  (the thing you were waiting on resolved)               → clear_waiting
   "Bob is on team X" / "decided to use JWT" / fact about world → note_event
   ↑ If the subject is "I/me/the user" AND describes current state
     or preference, it's STATE. If the subject is anyone/anything

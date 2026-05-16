@@ -122,25 +122,41 @@ function convTasks(now: number): UnifiedTask[] {
   const out: UnifiedTask[] = [];
   for (const e of conversationIndex.list()) {
     if (pendingConvIds.has(e.id)) continue;
-    const lastUsedMs = new Date(e.lastUsedAt).getTime();
-    const age = now - lastUsedMs;
-    const isActive = !Number.isNaN(age) && age < ACTIVE_WINDOW_MS;
-    out.push(convToTask(e, isActive, now));
+    out.push(convToTask(e, now));
   }
   return out;
 }
 
-function convToTask(e: IndexEntry, active: boolean, now: number): UnifiedTask {
+function convToTask(e: IndexEntry, now: number): UnifiedTask {
+  // Status precedence: waiting > active/done. An explicit "blocked
+  // on X" beats the time-window heuristic — a conv could be old but
+  // still actively waiting for CI to come back.
+  let status: TaskStatus;
+  let external: string | undefined;
+  if (e.waiting) {
+    status = "waiting";
+    external = e.waiting.external;
+  } else {
+    const lastUsedMs = new Date(e.lastUsedAt).getTime();
+    const age = now - lastUsedMs;
+    status = !Number.isNaN(age) && age < ACTIVE_WINDOW_MS ? "active" : "done";
+  }
+  // For waiting: use `since` as the timestamp so age shows how long
+  // we've been blocked, not just how long since last message.
+  const ts = e.waiting?.since ?? e.lastUsedAt;
   return {
     id: `conv-${e.id}`,
-    status: active ? "active" : "done",
+    status,
     priority: "normal",
     title: e.title,
-    sub: `${e.messageCount} 轮 · ${e.firstMessage.slice(0, 80)}${e.firstMessage.length > 80 ? "…" : ""}`,
+    sub: e.waiting?.note
+      ? `等 ${external} — ${e.waiting.note}`
+      : `${e.messageCount} 轮 · ${e.firstMessage.slice(0, 80)}${e.firstMessage.length > 80 ? "…" : ""}`,
     conv: e.id,
     turns: e.messageCount,
-    ts: e.lastUsedAt,
-    age: humanAge(e.lastUsedAt, now),
+    ts,
+    age: humanAge(ts, now),
+    external,
   };
 }
 
@@ -223,10 +239,7 @@ export function aggregateTaskById(id: string): UnifiedTaskDetail | null {
   if (kind === "conv") {
     const e = conversationIndex.get(tail);
     if (!e) return null;
-    const now = Date.now();
-    const lastUsedMs = new Date(e.lastUsedAt).getTime();
-    const isActive = !Number.isNaN(lastUsedMs) && now - lastUsedMs < ACTIVE_WINDOW_MS;
-    return convToTask(e, isActive, now);
+    return convToTask(e, Date.now());
   }
   if (kind === "job") {
     const j = listJobs().find((x) => x.id === tail);

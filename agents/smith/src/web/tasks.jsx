@@ -274,7 +274,15 @@ const TaskRowActions = ({ task, onAction }) => {
     );
   }
   if (task.status === 'waiting') {
-    return <button className="btn xs subtle" onClick={stop}>检查</button>;
+    return (
+      <Fragment>
+        <a href={'/chat#conv=' + encodeURIComponent(task.conv || '')} className="btn xs subtle" onClick={stop}>检查</a>
+        <button className="btn xs subtle" title="标记为不再等待"
+          onClick={(e) => handle(e, () =>
+            api('/conversations/' + encodeURIComponent(task.conv) + '/waiting', { method: 'DELETE' })
+          )}>解除</button>
+      </Fragment>
+    );
   }
   return null;
 };
@@ -420,6 +428,10 @@ const TaskDetailActions = ({ task, onAction }) => {
         if (!confirm('删除 job ' + task.jobId + '?')) return;
         act(() => api('/jobs/' + encodeURIComponent(task.jobId), { method: 'DELETE' }));
       }} />);
+  }
+  if (task.status === 'waiting' && task.conv) {
+    rows.push(<ActionRow key="clear-wait" icon="check" label="解除等待标记"
+      onClick={() => act(() => api('/conversations/' + encodeURIComponent(task.conv) + '/waiting', { method: 'DELETE' }))} />);
   }
   if (task.conv && (task.status === 'active' || task.status === 'done')) {
     rows.push(<ActionRow key="archive" icon="memory" label="归档到 memory + 删除会话" tone="danger"

@@ -31,6 +31,15 @@ export interface IndexEntry {
   lastUsedAt: string;
   /** Bumped per /chat success. NOT a true message count (counts turns). */
   messageCount: number;
+  /** Set when the agent / user marks this conv as blocked on an external
+   *  system (CI pipeline, push notification, human reply). Aggregator
+   *  promotes status to "waiting" when this is present, overriding the
+   *  active/done window heuristic. Cleared when the blocker resolves. */
+  waiting?: {
+    external: string;   // free text label: "GitLab CI" / "FortiAuthenticator" / "@reviewer"
+    since: string;      // ISO instant the wait started
+    note?: string;      // optional context — what we're waiting for, expected resolution
+  };
 }
 
 class ConversationIndex {
@@ -107,6 +116,45 @@ class ConversationIndex {
     if (!(id in all)) return;
     delete all[id];
     this.writeAll(all);
+  }
+
+  /** Mark a conv as blocked on an external system. Idempotent: re-calling
+   *  with the same args refreshes the note; calling with different args
+   *  overwrites. Returns the updated entry or null if the conv isn't
+   *  tracked yet (shouldn't happen from inside a live session, but a
+   *  guard against drift). */
+  markWaiting(
+    id: string,
+    external: string,
+    note?: string,
+  ): IndexEntry | null {
+    const all = this.readAll();
+    const e = all[id];
+    if (!e) return null;
+    all[id] = {
+      ...e,
+      waiting: {
+        external: external.trim(),
+        since: e.waiting?.since ?? new Date().toISOString(),
+        note: note?.trim() || undefined,
+      },
+    };
+    this.writeAll(all);
+    return all[id];
+  }
+
+  /** Clear the waiting flag — call when the blocker resolves. No-op if
+   *  the conv wasn't waiting in the first place. */
+  clearWaiting(id: string): IndexEntry | null {
+    const all = this.readAll();
+    const e = all[id];
+    if (!e) return null;
+    if (!e.waiting) return e;
+    const { waiting: _w, ...rest } = e;
+    void _w;
+    all[id] = rest;
+    this.writeAll(all);
+    return all[id];
   }
 }
 

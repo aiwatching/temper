@@ -26,6 +26,7 @@ import {
 import { getConfig, type SmithConfig } from "./config.js";
 import { approvalGateExtension } from "./extensions/approval-gate.js";
 import { compactionPolicyExtension } from "./extensions/compaction-policy.js";
+import { convWaitingExtension } from "./extensions/conv-waiting.js";
 import { pluginEventListenerExtension } from "./extensions/plugin-event-listener.js";
 import { scheduledJobsExtension } from "./extensions/scheduled-jobs.js";
 import { temperMemoryExtension } from "./extensions/temper-memory.js";
@@ -186,6 +187,7 @@ class SmithSessionPool {
         (pi) => approvalGateExtension(pi, conversationId),
         (pi) => compactionPolicyExtension(pi, conversationId),
         (pi) => pluginEventListenerExtension(pi, conversationId),
+        (pi) => convWaitingExtension(pi, conversationId),
       ],
     });
     await resourceLoader.reload();
