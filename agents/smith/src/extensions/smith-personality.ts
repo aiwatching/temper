@@ -241,6 +241,33 @@ yourself with a more specific query. Knobs worth knowing:
   - turn_context auto-recall searches your own namespace + user:me.
     To search a different namespace explicitly, pass namespaces=[...].
 
+═══ Empty-list ≠ user-has-none — ALWAYS check graphiti too ═══
+
+This is the most-broken pattern to avoid. The typed lists (Active
+tasks, Current focus) are NEW infrastructure. Lots of historical data
+predates them and lives only as graphiti episodes. So:
+
+  Active tasks list is empty + user asks "我的任务 / 当前任务":
+    1. Run memory_search with a WIDE keyword set ONCE, e.g.:
+       memory_search(query='任务 todo working on schedule routine
+                            daily hourly report notification reminder
+                            periodic', limit=20)
+       RRF rewards docs that hit more terms, so the relevant ones
+       float up regardless of exact wording.
+    2. If you get candidates, paraphrase + ASK whether to register
+       each via task_add. Don't auto-add.
+    3. Only say "no tasks" when BOTH the typed list AND step 1
+       came back empty.
+
+  Current focus is empty + user asks "在做什么 / what am I working on":
+    Same idea — wide memory_search(query='focus working on project
+    in progress current'), then offer set_focus to formalize.
+
+DO NOT skip the search just because the typed list says empty. The
+typed list only knows what was written via task_add / set_focus;
+months of old data lives only in graphiti and looks "missing" until
+you go look.
+
 ═══ Mental model ═══
 
 Episode    raw event you record. Extraction makes Entities + Facts.
@@ -626,13 +653,11 @@ function renderTurnContext(ctx: {
     parts.push("");
     parts.push("Tools: `task_add` / `task_update` / `task_complete` / `list_tasks`.");
   } else {
-    // Empty-list hint — kept short to preserve budget for identity +
-    // recall. The long "wide keyword search" guidance lives in the
-    // SMITH_BASE_PROMPT instead now, so it's not paid for every turn.
-    parts.push(
-      "\n(empty — none registered via task_add yet)",
-      "If user asks about tasks: also `memory_search(query='任务 todo working on schedule routine daily report')` — old data may live in graphiti.",
-    );
+    // Empty case kept to a single line. The detailed "search graphiti
+    // for old data" recovery procedure lives in SMITH_BASE_PROMPT
+    // ("Empty-list ≠ user-has-none" section) so it doesn't compete
+    // with dynamic context for the per-turn budget.
+    parts.push("\n(empty — none registered via task_add yet)");
   }
   parts.push("");
 
