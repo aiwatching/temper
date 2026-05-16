@@ -172,11 +172,23 @@ export function temperMemoryExtension(pi: PiExtensionAPI): void {
         node_labels?: string[];
       },
     ) {
+      // Default scope: Smith's own agent namespace + user:me. If we
+      // pass undefined, TEMPER falls through to readable_namespaces_for
+      // which includes EVERY agent the user has ever used (e.g.
+      // funny-english) — that leaks cross-agent content into Smith's
+      // answers. The tool docstring promised scoped recall; this
+      // enforces it. Override is still available by passing namespaces
+      // explicitly (e.g. ["agent:me/funny-english"] to target one).
+      const cfg = getConfig();
+      const scoped = params.namespaces && params.namespaces.length > 0
+        ? params.namespaces
+        : [`agent:me/${cfg.smithAgentSlug}`, "user:me"];
+
       const hits = await temper.search({
         query: params.query,
         limit: params.limit,
         asOf: params.as_of,
-        namespaces: params.namespaces,
+        namespaces: scoped,
         reranker: params.reranker,
         minScore: params.min_score,
         center: params.center,
