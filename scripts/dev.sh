@@ -66,6 +66,27 @@ trap cleanup EXIT INT TERM
 
 say "Python environment"
 
+# uv may not be on PATH yet (uv installs to ~/.local/bin or
+# ~/.cargo/bin, which non-login shells don't always pick up). Add
+# both before failing with "uv not found".
+if ! command -v uv >/dev/null 2>&1; then
+  export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+fi
+if ! command -v uv >/dev/null 2>&1; then
+  echo
+  echo "  ✗ uv not found in PATH."
+  echo
+  echo "  First-time setup? Run:"
+  echo "      ./install.sh"
+  echo
+  echo "  Already ran install.sh? Add uv to PATH:"
+  echo "      export PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH\""
+  echo "      # then re-run this script. To persist:"
+  echo "      echo 'export PATH=\"\$HOME/.local/bin:\$HOME/.cargo/bin:\$PATH\"' >> ~/.bashrc"
+  echo
+  exit 1
+fi
+
 UV_FLAGS=()
 if ! uv sync --dry-run >/dev/null 2>&1; then
   # Default TLS chain failed — common on corporate networks with a
