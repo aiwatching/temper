@@ -1,10 +1,8 @@
-# Memory Service
+# TEMPER
 
 Multi-tenant central memory layer for AI agents. Self-hosted Zep-style service
-backed by [Graphiti](https://github.com/getzep/graphiti) on FalkorDB.
-
-> **Status:** v0.1 / Phase 1.0–1.1 scaffold. Most endpoints stubbed.
-> See `docs/v.05-pr.md` for the full PRD and roadmap.
+backed by [Graphiti](https://github.com/getzep/graphiti) on FalkorDB +
+Postgres for structured state + documents.
 
 ## Components
 
@@ -16,25 +14,32 @@ backed by [Graphiti](https://github.com/getzep/graphiti) on FalkorDB.
          ▼
 ┌──────────────────┐       ┌──────────────┐
 │ FastAPI app      │──────▶│ PostgreSQL   │ users / api keys / episode meta
-│ (this repo)      │       │              │ + memory_blocks (KV memory)
+│ (this repo)      │       │              │ + memory_blocks   (KV memory)
+│                  │       │              │ + documents       (markdown wiki)
+│                  │       │              │ + scheduled jobs  (per-agent)
 │                  │       └──────────────┘
 │                  │       ┌──────────────┐
 │                  │──────▶│ FalkorDB     │ Graphiti knowledge graph
 └────────┬─────────┘       └──────────────┘
          │
          ▼
-   OpenAI API (entity extraction + embeddings)
+   LLM provider (OpenAI / Anthropic / corp gateway — extraction + embeddings)
 ```
 
-Two memory primitives:
+### Four memory primitives
 
-- **Graph (episodes + entities + facts)** — emergent recall over many
-  episodes, bi-temporal, good for third-party facts. See `docs/api-guide.md`.
-- **Memory blocks (KV)** — structured key/value, for first-person
-  assertions Graphiti is bad at (nicknames, preferences, current state).
-  See `docs/memory-blocks.md`.
+| | What it stores | Use it for |
+|---|---|---|
+| **Episodes** (graphiti) | short structured facts, extracted into entities + edges | "Bob is on the auth team", "we shipped X last sprint" |
+| **Blocks** (KV) | first-person assertions in JSONB | nicknames, preferences, current focus, active tasks |
+| **Documents** (markdown) | long-form addressable content with wikilinks | saved tickets, meeting notes, SOPs, agent-written reports |
+| **Jobs** (scheduled) | recurring or future-triggered LLM prompts | "every morning send standup", "alert on plugin failure" |
 
-A third primitive (Documents / markdown) is deferred — see `docs/vision.md`.
+A **typed memory layer** sits on top: `task_add` / `set_focus` /
+`set_preference` / `note_event` / `note_save` / `schedule_job` etc.
+Agents pick intent by picking the function name; TEMPER decides which
+primitive lands the write. See `docs/agent-integration-prompt.md` for
+the canonical routing contract agents embed in their system prompt.
 
 ## Quick start
 
@@ -78,26 +83,93 @@ cp .env.example .env.prod
 docker compose up --build
 ```
 
+## For agent integrators
+
+If you're plugging an agent into TEMPER, start here:
+
+- **`docs/agent-integration-prompt.md`** — the canonical routing
+  contract. Embed it verbatim in your agent's system prompt.
+- **`docs/api-guide.md`** — REST surface (write, search, blocks,
+  documents, jobs, turn_context).
+- **`docs/memory-blocks.md`** — KV memory design + use cases.
+- **`docs/memory-frameworks-comparison.md`** — why graphiti vs mem0,
+  and when each one's the right primitive.
+- **`examples/english_agent_chat.py`** — single-file working agent
+  using the recall → prompt → reply → remember loop.
+
+A reference agent (Smith) lives at `agents/smith/`. It's optional —
+TEMPER itself stands alone.
+
 ## Layout
 
 ```
-src/memory_service/
-├── main.py            FastAPI entry
-├── config.py          Pydantic Settings
-├── api/v1/            HTTP routes (auth, users, episodes, search, system, ...)
-├── core/              Business logic (auth, permissions, namespaces, memory)
-├── adapters/          External clients (graphiti, falkordb, openai)
-├── models/            SQLAlchemy ORM
-├── schemas/           Pydantic request/response schemas
-├── db/                Engine + Alembic migrations
-└── web/               Admin page (Jinja2 templates + static)
+.
+├── install.sh                  one-command setup (this file does most of the work)
+├── docker-compose.yml          prod-style stack (postgres + falkordb + service)
+├── docker-compose.dev.yml      dev override: exposes DB ports to host
+├── scripts/
+│   ├── dev.sh                  start uvicorn with auto-reload
+│   ├── start_postgres.sh       bring up dev Postgres on localhost:5432
+│   ├── start_falkordb.sh       bring up dev FalkorDB on localhost:6380
+│   └── start_embedding.sh      local embedding backend (ollama)
+│
+├── src/memory_service/
+│   ├── main.py                 FastAPI entry
+│   ├── config.py               Pydantic Settings
+│   ├── api/v1/                 HTTP routes — auth, users, episodes, search,
+│   │                           blocks, documents, typed_memory, system, ...
+│   ├── core/                   Business logic — auth, permissions, namespaces,
+│   │                           memory, blocks, documents, typed_memory
+│   ├── adapters/               External clients (graphiti, falkordb, openai)
+│   ├── models/                 SQLAlchemy ORM — User / Episode / Block /
+│   │                           Document / DocumentLink / DocumentRevision / ...
+│   ├── schemas/                Pydantic request/response shapes
+│   ├── db/                     Engine + Alembic migrations
+│   └── web/                    Admin page (Jinja2 + Alpine.js)
+│
+├── docs/                       all design docs + the integration prompt
+├── examples/                   working sample agents (Python httpx)
+├── agents/
+│   └── smith/                  reference agent — pi-coding-agent + TEMPER client
+└── tests/                      integration + unit
 ```
 
-## Roadmap
+## Troubleshooting
 
-The PRD (`docs/v.05-pr.md`) defines 8 phases (1.0 → 1.8). The repo currently
-covers 1.0–1.1 (skeleton, infra, health endpoint, admin page stub). Subsequent
-phases land in subsequent commits.
+### `self-signed certificate in certificate chain` during install
+
+You're on a TLS-inspecting corporate network (the proxy MITMs HTTPS).
+TEMPER's installer auto-detects and retries with `uv --native-tls`
+which uses the system trust store (your corp CA is usually there).
+For Node-side things (Smith), set:
+
+```bash
+export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem
+```
+
+For Docker pulls, configure Docker Desktop's certificate store
+(macOS keychain integration usually handles it).
+
+### `DatatypeMismatch: incompatible types: uuid and character varying`
+
+You're running an old migration on Postgres. Pull latest commits;
+0012/0013 use `VARCHAR(36)` consistently (matches the rest of the
+schema). Then `uv run alembic upgrade head`.
+
+### Default admin login doesn't work
+
+The Postgres docker volume is fresh — your old SQLite-era users
+didn't migrate. On first boot TEMPER auto-creates
+`admin@example.com / admin` (configurable via
+`DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` in `.env.local`).
+Log in with those, then create your real user via
+`/admin/users` or `POST /v1/auth/register`.
+
+### Reset everything and start over
+
+```bash
+./install.sh --reset      # destructive — wipes the dev DB volume
+```
 
 ## License
 
