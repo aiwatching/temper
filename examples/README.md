@@ -43,9 +43,9 @@ interactive REPL — so you can actually chat with it.
 ```bash
 export MS_BASE_URL=http://localhost:18088
 export MS_API_KEY=mk_yourkeyhere
-export LLM_BASE_URL=http://nac-ai.fortinet-us.com:7001/v1   # forti-k2 gateway
+export LLM_BASE_URL=https://api.openai.com/v1            # or your gateway
 export LLM_API_KEY=sk-yourtokenhere
-export LLM_MODEL=forti-k2
+export LLM_MODEL=gpt-4o-mini
 
 python3 examples/english_agent_chat.py
 ```

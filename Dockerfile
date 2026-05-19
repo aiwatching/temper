@@ -30,8 +30,9 @@ COPY pyproject.toml README.md ./
 COPY src/ src/
 
 # Build arg for corporate networks with TLS-inspecting proxies that
-# break pypi cert verification (e.g. Fortinet). On a normal internet
-# connection, leave this empty — keeps build-time TLS verification on.
+# break pypi cert verification (self-signed CA in the chain). On a
+# normal internet connection, leave this empty — keeps build-time
+# TLS verification on.
 #   docker build --build-arg PIP_TRUSTED_HOSTS=1 -t memory-service .
 ARG PIP_TRUSTED_HOSTS=""
 ENV PIP_TRUSTED_HOSTS=${PIP_TRUSTED_HOSTS}

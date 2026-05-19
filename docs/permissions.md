@@ -25,8 +25,8 @@ allow-list is rejected.
 |---|---|
 | `user:<uuid>` | `user:2a4068c5-6377-4b42-ac85-60e753d473dd` |
 | `user:me` (alias) | resolved to `user:<caller-uuid>` |
-| `group:<slug>` | `group:fortinac-team` |
-| `org:<slug>` | `org:fortinet` |
+| `group:<slug>` | `group:platform-team` |
+| `org:<slug>` | `org:acme` |
 | `public` | `public` |
 
 In Graphiti's internal `group_id`, `:` is encoded as `__` and `-` is

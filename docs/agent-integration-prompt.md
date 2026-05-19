@@ -33,7 +33,7 @@ You do NOT have to remember to search for them — they're always there.
 ### HISTORY — past, queryable, append-only
 
   Events that happened    → `note_event`  ("Bob joined the auth team")
-  Third-party facts       → `note_event`  ("FortiNAC uses Postgres")
+  Third-party facts       → `note_event`  ("Service-X uses Postgres")
   Decisions made          → `note_event`  ("we chose JWT last sprint")
   Random observations     → `note_event`
 

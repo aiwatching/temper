@@ -48,8 +48,9 @@ services:
     build:
       context: .
       args:
-        # On Fortinet's network where pypi cert verification is MITM'd,
-        # set PIP_TRUSTED_HOSTS=1 in .env.prod. Empty everywhere else.
+        # On corporate networks where pypi cert verification is MITM'd
+        # (self-signed CA in the chain), set PIP_TRUSTED_HOSTS=1 in
+        # .env.prod. Empty everywhere else.
         PIP_TRUSTED_HOSTS: "${PIP_TRUSTED_HOSTS:-}"
     image: memory-service:0.1.0
     restart: unless-stopped

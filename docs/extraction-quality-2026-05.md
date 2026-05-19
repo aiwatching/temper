@@ -1,4 +1,4 @@
-# Extraction quality: forti-k2 vs claude-haiku-4-5
+# Extraction quality: qwen-coder vs claude-haiku-4-5
 
 Measured 2026-05-13 against the 8-sentence corpus in
 `scripts/test/extract.py`. Both runs used Ollama (`nomic-embed-text`)
@@ -7,7 +7,7 @@ namespace, episodes cleaned up between runs.
 
 Test harness:
 
-    # forti-k2 (current default)
+    # qwen-coder (current default)
     uvicorn memory_service.main:app ...    # with default .env
     python3 scripts/test/extract.py --json --cleanup > k2.json
 
@@ -21,7 +21,7 @@ Test harness:
 
 ## Headline numbers
 
-|                              | forti-k2 (Qwen) | claude-haiku-4-5 |
+|                              | qwen-coder (Qwen) | claude-haiku-4-5 |
 |------------------------------|----------------:|------------------:|
 | Total entities (8 sentences) |              18 |                13 |
 | **Total facts**              |           **8** |            **15** |
@@ -39,13 +39,13 @@ English." — which surprisingly tripped both.
 **Sentence 6** — "Jerry switched English teachers; the new one is Sarah
 from Toronto":
 
-- forti-k2 (2 facts): `Jerry switched English teachers; the new one is
+- qwen-coder (2 facts): `Jerry switched English teachers; the new one is
   Sarah.`, `Sarah from Toronto.`
 - claude-haiku-4-5 (4 facts): `Jerry's new English teacher is Sarah`,
   `Sarah is from Toronto`, `Jerry switched English teachers; the new
   one is Sarah.`, `Sarah lives in Toronto`
 
-forti-k2 missed the core fact that English-learning recall needs —
+qwen-coder missed the core fact that English-learning recall needs —
 "Jerry's new teacher is Sarah." Claude got it cleanly.
 
 ## Where Claude annoys
@@ -82,7 +82,7 @@ For **relation quality**, Claude is clearly better — it caught the
 "who is whose teacher" relation that k2 missed, which is the exact
 kind of fact `/v1/search` recall depends on.
 
-For **operational fit on the Fortinet network**, forti-k2 stays:
+For **operational fit on the corporate network**, qwen-coder stays:
 
 - 1.7x faster end-to-end
 - no external egress (gateway is on-prem)
@@ -94,7 +94,7 @@ Concrete tradeoff guidance:
   → swap to claude-haiku-4-5 (or better, claude-sonnet-4-6 with a real
   `sk-ant-api03-...` key once you've got one).
 - If you're storing high-volume agent logs where most episodes never
-  get queried → stay with forti-k2; the 1.7x speed advantage adds up,
+  get queried → stay with qwen-coder; the 1.7x speed advantage adds up,
   and the dedup catches up.
 
 ## Caveats
@@ -106,7 +106,7 @@ Concrete tradeoff guidance:
   is rate-limited to claude-haiku-4-5. Opus/Sonnet returned 429.
   A real API key (`sk-ant-api03-…`) on Anthropic Direct would unlock
   the higher tiers.
-- forti-k2 occasionally drops the closing punctuation in extracted
+- qwen-coder occasionally drops the closing punctuation in extracted
   facts; Claude is more consistent on formatting.
 
 ## Rerunning

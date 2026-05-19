@@ -138,18 +138,18 @@ async def test_focus_set_get(client, mock_graphiti) -> None:  # type: ignore[no-
     # Set focus → episode written
     r1 = await client.put(
         "/v1/memory/focus",
-        json={"value": "fortinet-auth-rewrite", "note": "kicked off this morning"},
+        json={"value": "auth-rewrite", "note": "kicked off this morning"},
         headers=h,
     )
     assert r1.status_code == 200, r1.text
-    assert r1.json()["value"] == "fortinet-auth-rewrite"
+    assert r1.json()["value"] == "auth-rewrite"
     assert r1.json()["episode_id"]
     assert mock_graphiti.add_episode.await_count == 1
 
     # Same value again → no new episode (no-op set)
     r2 = await client.put(
         "/v1/memory/focus",
-        json={"value": "fortinet-auth-rewrite"},
+        json={"value": "auth-rewrite"},
         headers=h,
     )
     assert r2.status_code == 200
@@ -157,7 +157,7 @@ async def test_focus_set_get(client, mock_graphiti) -> None:  # type: ignore[no-
 
     # GET
     rg = await client.get("/v1/memory/focus", headers=h)
-    assert rg.json()["value"] == "fortinet-auth-rewrite"
+    assert rg.json()["value"] == "auth-rewrite"
 
 
 @pytest.mark.asyncio

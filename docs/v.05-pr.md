@@ -106,15 +106,15 @@ class User:
 
 # 组(扁平,不嵌套)
 class Group:
-    id: str              # 例:"fortinac-team"
-    name: str            # 显示名:"FortiNAC Team"
+    id: str              # 例:"platform-team"
+    name: str            # 显示名:"Platform Team"
     org_id: str          # 所属组织
     created_at: datetime
 
 # 组织
 class Organization:
-    id: str              # 例:"fortinet"
-    name: str            # "Fortinet Inc."
+    id: str              # 例:"acme"
+    name: str            # "Acme Inc."
     created_at: datetime
 
 # 用户组成员关系
@@ -141,8 +141,8 @@ class APIKey:
 | 类型 | 格式 | 例子 | 谁能写 | 谁能读 |
 |------|------|------|--------|--------|
 | 个人 | `user:{user_id}` | `user:jerry` | 用户本人 | 用户本人 |
-| 组 | `group:{group_id}` | `group:fortinac-team` | 组成员 | 组成员 |
-| 组织 | `org:{org_id}` | `org:fortinet` | 组织 admin | 组织所有成员 |
+| 组 | `group:{group_id}` | `group:platform-team` | 组成员 | 组成员 |
+| 组织 | `org:{org_id}` | `org:acme` | 组织 admin | 组织所有成员 |
 | 公开 | `public` | `public` | 超级 admin | 所有认证用户 |
 
 **关键设计**:

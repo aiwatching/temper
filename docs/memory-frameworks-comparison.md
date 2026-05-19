@@ -31,7 +31,7 @@ user. Concretely it needs to answer:
 | "What's the status of bug 12483"           | Project state with bi-temporal updates |
 | "Who reports to David"                     | Person → REPORTS_TO → Person, graph walk |
 | "When did Bob switch from team A to B"     | Bi-temporal: A.invalid_at = T, B.valid_at = T |
-| "Show me everything about FortiNAC project"| Entity-centric BFS, multiple hops |
+| "Show me everything about Project-X"       | Entity-centric BFS, multiple hops |
 | "What was true about X last quarter"       | as_of = <past date>, return facts valid then |
 
 This is **all entity-relation reasoning over time**. None of it is

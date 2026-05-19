@@ -1,19 +1,19 @@
-"""Interactive English-learning agent backed by Memory Service + forti-k2.
+"""Interactive English-learning agent backed by Memory Service.
 
 This is the live counterpart to `english_agent_minimal.py`:
 
   - Same memory pattern (recall → prompt → reply → remember).
   - But `call_my_llm()` is real: it hits any OpenAI-compatible chat
-    endpoint (the nac-ai gateway hosts forti-k2 there) so you can
+    endpoint (local Ollama, a corp gateway, OpenAI proper) so you can
     actually have a conversation.
 
 Run as a REPL:
 
     export MS_BASE_URL=http://localhost:18088
     export MS_API_KEY=mk_yourkeyhere
-    export LLM_BASE_URL=http://nac-ai.fortinet-us.com:7001/v1
+    export LLM_BASE_URL=https://api.openai.com/v1   # or your gateway
     export LLM_API_KEY=sk-...
-    export LLM_MODEL=forti-k2
+    export LLM_MODEL=gpt-4o-mini
 
     python3 examples/english_agent_chat.py
 
@@ -38,7 +38,7 @@ MS_API_KEY = os.environ.get("MS_API_KEY") or sys.exit("MS_API_KEY env var requir
 
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://localhost:11434/v1").rstrip("/")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
-LLM_MODEL = os.environ.get("LLM_MODEL", "forti-k2")
+LLM_MODEL = os.environ.get("LLM_MODEL", "gpt-4o-mini")
 
 AGENT_NAME = os.environ.get("AGENT_NAME", "english-agent")
 
@@ -101,9 +101,9 @@ def recall(query: str, *, limit: int = 5) -> list[dict]:
 
 
 def call_llm(messages: list[dict]) -> str:
-    """OpenAI-compatible chat completion. Works against nac-ai's
-    `/v1/chat/completions` for forti-k2; against vanilla OpenAI; against
-    Ollama; against any other OpenAI-shaped endpoint.
+    """OpenAI-compatible chat completion. Works against vanilla OpenAI,
+    any OpenAI-shaped corporate gateway, Ollama, or anything else that
+    speaks /v1/chat/completions.
     """
     r = _llm.post(
         "/chat/completions",
