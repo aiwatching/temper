@@ -53,33 +53,33 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # ---- 1. venv + deps ------------------------------------------------------
+#
+# uv-driven now: no system python3 / pip dance, no manual .venv create.
+# `uv sync` creates .venv on first run, picks an interpreter from uv's
+# managed pool (matching pyproject.toml's requires-python), installs
+# pinned deps from uv.lock. Subsequent runs are no-ops when nothing
+# changed.
+#
+# Run install.sh once (or any time pyproject.toml / uv.lock changes);
+# dev.sh just calls `uv sync` here to be defensive in case someone
+# launched dev.sh on a fresh checkout without running install.sh first.
 
 say "Python environment"
 
-if [[ ! -d .venv ]]; then
-  say "creating .venv"
-  python3 -m venv .venv
-  ok ".venv created"
+UV_FLAGS=()
+if ! uv sync --dry-run >/dev/null 2>&1; then
+  # Default TLS chain failed — common on corporate networks with a
+  # self-signed CA in the chain. --native-tls uses the system trust
+  # store, which usually has the corp CA imported already.
+  UV_FLAGS+=(--native-tls)
 fi
+uv sync "${UV_FLAGS[@]}" --quiet
+ok "deps in sync (.venv via uv)"
 
-# shellcheck disable=SC1091
-source .venv/bin/activate
-
-# Reinstall deps only when pyproject.toml changed since last successful install.
-STAMP=.venv/.deps-installed
-NEED_INSTALL=0
-if [[ ! -f "$STAMP" ]]; then NEED_INSTALL=1
-elif [[ pyproject.toml -nt "$STAMP" ]]; then NEED_INSTALL=1
-fi
-if [[ "$NEED_INSTALL" = "1" ]]; then
-  say "installing dependencies (this may take a minute)"
-  pip install --quiet --upgrade pip
-  pip install --quiet -e ".[dev]"
-  pip install --quiet "graphiti-core[anthropic]"
-  touch "$STAMP"
-  ok "deps installed"
-else
-  ok "deps already installed (pyproject.toml unchanged)"
+# graphiti's anthropic extra isn't part of the pinned set; install on
+# demand so the LLM_PROVIDER=anthropic path works without surprises.
+if ! uv run python -c 'import anthropic' >/dev/null 2>&1; then
+  uv pip install "${UV_FLAGS[@]}" --quiet "graphiti-core[anthropic]"
 fi
 
 # ---- 2. embedding backend ------------------------------------------------
@@ -160,6 +160,6 @@ echo
 # defaults to the cwd which now includes agents/smith/ — Smith file changes
 # would otherwise trigger a Temper restart. Templates and static assets are
 # served fresh from disk each request, so they don't need uvicorn reloads.
-exec uvicorn memory_service.main:app --reload \
+exec uv run "${UV_FLAGS[@]}" uvicorn memory_service.main:app --reload \
   --reload-dir src/memory_service \
   --host "$HOST" --port "$PORT"

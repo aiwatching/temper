@@ -6,12 +6,24 @@
 #   * "reset to clean state" on an existing machine (safe to re-run)
 #
 # What it does:
-#   1. Detect platform + check required tools (python3, docker, uv)
+#   1. Detect platform + check / install required tools
+#       - uv (auto-installs via official script if missing)
+#       - Python ≥ 3.11 via uv's managed pool (NOT system python3)
+#       - docker (errors if missing — Docker Desktop / docker-ce
+#         needs a manual install on most platforms)
 #   2. Set up .venv via uv sync (creates if missing, syncs deps)
 #   3. Write .env.local with sensible defaults if missing
 #   4. Boot Postgres + FalkorDB containers (docker compose)
 #   5. Run alembic upgrade head against the dev Postgres
 #   6. Print next steps (start command, admin creds, key URLs)
+#
+# System python3 is NOT used — uv ships portable Python interpreters
+# under ~/.local/share/uv/python/. So Ubuntu 22.04 (python3.10 default)
+# / older RHEL / minimal containers all just work, no need to mess
+# with deadsnakes PPA or update-alternatives.
+#
+# Override which Python version uv installs:
+#   PYTHON_VERSION=3.13 ./install.sh
 #
 # Re-running is idempotent. Skips bits already done.
 #
@@ -65,18 +77,10 @@ case "$PLATFORM" in
   *)       warn "untested platform $PLATFORM — proceeding anyway" ;;
 esac
 
-# python3 (3.11+ for TEMPER)
-if ! command -v python3 >/dev/null; then
-  die "python3 not found. Install Python 3.11+ first."
-fi
-PY_VER="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-PY_MAJ="${PY_VER%.*}"; PY_MIN="${PY_VER#*.}"
-if (( PY_MAJ < 3 )) || (( PY_MAJ == 3 && PY_MIN < 11 )); then
-  die "Python 3.11+ required, got $PY_VER"
-fi
-ok "Python $PY_VER"
-
-# uv (manages the venv + deps)
+# uv (manages BOTH the Python interpreter AND deps — no system
+# python3 needed). uv ships portable Python builds and stores them
+# under ~/.local/share/uv/python/, so we don't touch system Python
+# (Ubuntu's apt-installed python3 stays whatever version it is).
 if ! command -v uv >/dev/null; then
   warn "uv not found — installing via official script"
   curl -fsSL https://astral.sh/uv/install.sh | sh
@@ -85,6 +89,17 @@ if ! command -v uv >/dev/null; then
   command -v uv >/dev/null || die "uv install failed — install manually: https://docs.astral.sh/uv/"
 fi
 ok "uv $(uv --version | awk '{print $2}')"
+
+# Ensure uv has a Python ≥ 3.11 available. pyproject.toml's
+# requires-python = ">=3.11" lets `uv sync` pick anything compatible
+# from the managed pool. `uv python install` is idempotent — no-op
+# when something compatible is already present.
+PYTHON_VERSION="${PYTHON_VERSION:-3.12}"
+if ! uv python find ">=3.11" >/dev/null 2>&1; then
+  warn "no Python ≥ 3.11 available to uv — installing $PYTHON_VERSION"
+  uv python install "$PYTHON_VERSION"
+fi
+ok "Python via uv: $(uv python find '>=3.11')"
 
 # docker (only if we'll bring up the DB containers)
 if [[ "$SKIP_DOCKER" = 0 ]]; then
