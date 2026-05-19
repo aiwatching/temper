@@ -38,34 +38,44 @@ A third primitive (Documents / markdown) is deferred — see `docs/vision.md`.
 
 ## Quick start
 
-### One-shot (recommended for local dev)
+### Fresh machine — one command does everything
 
 ```bash
-cp .env.example .env
-# Edit .env: put your LLM provider keys and SECRET_KEY
-scripts/dev.sh
+./install.sh        # detect platform, install uv if needed, sync deps,
+                    # write .env.local, boot Postgres + FalkorDB, run
+                    # migrations.
+scripts/dev.sh      # launch uvicorn with auto-reload.
 ```
 
-`scripts/dev.sh` is idempotent — it creates `.venv` if missing, installs
-deps only when `pyproject.toml` changes, brings up the local embedding
-backend via `scripts/start_embedding.sh`, and starts uvicorn with an
-auto-managed SQLite dev DB. Re-run as often as you want.
+The installer is idempotent — safe to re-run after pulling new
+commits to pick up dep / migration changes.
 
-Once started, the browser opens automatically at `http://localhost:18088/admin`.
+Useful flags:
+  - `./install.sh --reset` — wipe the dev DB volume and start over
+  - `./install.sh --no-docker` — skip the DB setup if you have your
+    own Postgres + FalkorDB to point at via `DATABASE_URL`
 
-### With Docker Compose (full stack including Postgres + FalkorDB)
+Default admin (first boot only): `admin@example.com / admin`.
+Change it via `/admin/me` after first login.
+
+### Manual / advanced
+
+If you'd rather drive each step yourself:
 
 ```bash
-cp .env.example .env
+uv sync                                  # python deps
+scripts/start_postgres.sh                # dev Postgres on :5432
+scripts/start_falkordb.sh                # dev FalkorDB on :6380
+uv run alembic upgrade head              # schema
+scripts/dev.sh                           # serve
+```
+
+### Full container stack (closer to prod)
+
+```bash
+cp .env.example .env.prod
+# edit POSTGRES_PASSWORD + SECRET_KEY + LLM keys in .env.prod
 docker compose up --build
-```
-
-### Postgres parity for dev
-
-```bash
-docker compose up -d db
-DATABASE_URL="postgresql+asyncpg://memory:memory@localhost:5432/memory_service" \
-  scripts/dev.sh
 ```
 
 ## Layout
