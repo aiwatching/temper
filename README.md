@@ -43,25 +43,52 @@ the canonical routing contract agents embed in their system prompt.
 
 ## Quick start
 
-### Fresh machine — one command does everything
+### Fresh machine — three scripts
 
 ```bash
-./install.sh        # detect platform, install uv if needed, sync deps,
-                    # write .env.local, boot Postgres + FalkorDB, run
-                    # migrations.
-scripts/dev.sh      # launch uvicorn with auto-reload.
+./install.sh        # one-time setup: uv + Python + deps + .env +
+                    # Postgres + FalkorDB + migrations.
+./start.sh          # start TEMPER in the background (default).
+                    # Stop: ./start.sh stop
+                    # Logs: ./start.sh logs
+./update.sh         # pull + reinstall + restart (run after `git pull`).
 ```
 
-The installer is idempotent — safe to re-run after pulling new
-commits to pick up dep / migration changes.
+All three are idempotent — safe to re-run.
 
-Useful flags:
-  - `./install.sh --reset` — wipe the dev DB volume and start over
-  - `./install.sh --no-docker` — skip the DB setup if you have your
-    own Postgres + FalkorDB to point at via `DATABASE_URL`
+`./start.sh` subcommands:
+
+  - `start` (default) — background, PID in `.data/temper.pid`,
+    log at `.data/logs/temper.log` (auto-rotates at 50 MB,
+    keeps last 5)
+  - `stop` — graceful SIGTERM, falls back to SIGKILL after 10s
+  - `restart` — stop + start
+  - `status` — running? PID + start time + log size
+  - `logs [-n 500] [--no-follow]` — tail (and follow) the log
+  - `start --fg` — foreground (Ctrl-C to stop, for debugging)
+
+For foreground muscle-memory, `scripts/dev.sh` is a thin wrapper
+that does `./start.sh start --fg`.
+
+`./install.sh` flags:
+  - `--reset` — wipe the dev DB volume and start over
+  - `--no-docker` — skip DB setup (BYO Postgres via `DATABASE_URL`)
 
 Default admin (first boot only): `admin@example.com / admin`.
 Change it via `/admin/me` after first login.
+
+### Updating
+
+```bash
+./update.sh
+```
+
+`git pull --ff-only` + `./install.sh` (picks up new migrations / deps)
++ `./start.sh restart` (only if the service was already running).
+
+Flags:
+  - `--no-restart` — pull + install but don't bounce the service
+  - `--no-pull` — install + restart only (skip git pull)
 
 ### Manual / advanced
 
@@ -72,7 +99,7 @@ uv sync                                  # python deps
 scripts/start_postgres.sh                # dev Postgres on :5432
 scripts/start_falkordb.sh                # dev FalkorDB on :6380
 uv run alembic upgrade head              # schema
-scripts/dev.sh                           # serve
+./start.sh                               # serve
 ```
 
 ### Full container stack (closer to prod)
