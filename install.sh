@@ -185,8 +185,58 @@ fi
 
 # ---- 4. databases --------------------------------------------------
 if [[ "$SKIP_DOCKER" = 1 ]]; then
-  step "Skipping docker (--no-docker)"
-  warn "make sure DATABASE_URL points at a reachable Postgres before running scripts/dev.sh"
+  # BYO-database mode. Used on prod boxes where Postgres + FalkorDB
+  # are installed natively (or live on separate hosts / managed
+  # services). We don't bring up containers; we DO verify reachability
+  # and run migrations against the operator-configured DB.
+  step "BYO database mode (--no-docker)"
+
+  # Pull DATABASE_URL + FALKORDB_* from .env if not set in shell.
+  if [[ -f .env ]]; then
+    set -a; . ./.env 2>/dev/null || true; set +a
+  fi
+
+  if [[ -z "${DATABASE_URL:-}" ]]; then
+    die "DATABASE_URL is required in --no-docker mode. Set it in .env or export it. See docs/deploy-no-docker.md."
+  fi
+  if [[ -z "${FALKORDB_HOST:-}" ]]; then
+    warn "FALKORDB_HOST not set — defaulting to 'localhost'. Edit .env if FalkorDB is on another host."
+    export FALKORDB_HOST="localhost"
+  fi
+  if [[ -z "${FALKORDB_PORT:-}" ]]; then
+    export FALKORDB_PORT="6379"   # native default (6380 is our docker convention)
+  fi
+
+  # Pre-flight reachability checks. Surface failures before alembic
+  # bombs with a less obvious psycopg2 stack trace.
+  step "Verifying Postgres reachability"
+  PG_HOST="$(echo "$DATABASE_URL" | sed -E 's#.*@([^:/]+).*#\1#')"
+  PG_PORT="$(echo "$DATABASE_URL" | sed -E 's#.*:([0-9]+)/.*#\1#')"
+  if command -v pg_isready >/dev/null 2>&1; then
+    if pg_isready -h "$PG_HOST" -p "$PG_PORT" -q >/dev/null 2>&1; then
+      ok "Postgres reachable at $PG_HOST:$PG_PORT"
+    else
+      die "can't reach Postgres at $PG_HOST:$PG_PORT. Check DATABASE_URL + that the server is running."
+    fi
+  else
+    warn "pg_isready missing — skipping pre-flight (alembic will surface real errors)"
+  fi
+
+  step "Verifying FalkorDB reachability"
+  if command -v redis-cli >/dev/null 2>&1; then
+    if redis-cli -h "$FALKORDB_HOST" -p "$FALKORDB_PORT" PING 2>/dev/null | grep -q PONG; then
+      ok "FalkorDB reachable at $FALKORDB_HOST:$FALKORDB_PORT"
+    else
+      warn "FalkorDB at $FALKORDB_HOST:$FALKORDB_PORT not responding to PING — runtime queries will fail. See docs/deploy-no-docker.md."
+    fi
+  else
+    warn "redis-cli missing — skipping pre-flight (apt install redis-tools to enable)"
+  fi
+
+  step "Running migrations"
+  uv run "${UV_FLAGS[@]}" alembic upgrade head
+  ok "schema up to date"
+
 else
   if [[ "$RESET" = 1 ]]; then
     step "Resetting dev Postgres volume"

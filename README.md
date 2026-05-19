@@ -72,7 +72,10 @@ that does `./start.sh start --fg`.
 
 `./install.sh` flags:
   - `--reset` — wipe the dev DB volume and start over
-  - `--no-docker` — skip DB setup (BYO Postgres via `DATABASE_URL`)
+  - `--no-docker` — skip docker compose; verifies BYO Postgres +
+    FalkorDB reachability then runs migrations.
+    See **`docs/deploy-no-docker.md`** for prod deployment (native
+    Postgres + FalkorDB + systemd + nginx + backups).
 
 Default admin (first boot only): `admin@example.com / admin`.
 Change it via `/admin/me` after first login.
