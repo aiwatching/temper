@@ -26,6 +26,13 @@ htmlcov/
 .vscode/
 .DS_Store
 
+# Local-only agent / tool config — may contain credentials.
+CLAUDE.md
+.mcp.json
+
+# Local design assets (HTML/JSX prototypes, not source of truth).
+agents/smith/docs/design/
+
 # Local data and dumps
 data/
 *.db
