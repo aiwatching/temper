@@ -207,7 +207,8 @@ else
 
   step "Starting FalkorDB"
   scripts/start_falkordb.sh
-  ok "FalkorDB at localhost:6380"
+  FALKOR_HOST_PORT="$(cat .data/falkordb-port 2>/dev/null || echo 6380)"
+  ok "FalkorDB at localhost:$FALKOR_HOST_PORT"
 
   step "Running migrations"
   export POSTGRES_USER="${POSTGRES_USER:-memory}"
@@ -217,13 +218,19 @@ else
   uv run "${UV_FLAGS[@]}" alembic upgrade head
   ok "schema up to date"
 
-  # If .env's DATABASE_URL still points at 5432 but we landed on a
-  # different port, rewrite the line so uvicorn picks the right one.
-  if [[ -f .env ]] && [[ "$PG_HOST_PORT" != "5432" ]]; then
-    if grep -q "^DATABASE_URL=postgresql.*localhost:5432/" .env; then
+  # Patch .env so uvicorn picks the actually-chosen ports next boot.
+  # We only touch lines that still hold the default values — never
+  # overwrite an operator's custom setting.
+  if [[ -f .env ]]; then
+    if [[ "$PG_HOST_PORT" != "5432" ]] && grep -q "^DATABASE_URL=postgresql.*localhost:5432/" .env; then
       sed -i.bak -E "s#(^DATABASE_URL=postgresql.*localhost:)5432(/.*)#\\1${PG_HOST_PORT}\\2#" .env
       rm -f .env.bak
-      ok ".env DATABASE_URL updated to use port $PG_HOST_PORT"
+      ok ".env DATABASE_URL updated to port $PG_HOST_PORT"
+    fi
+    if [[ "$FALKOR_HOST_PORT" != "6380" ]] && grep -q "^FALKORDB_PORT=6380$" .env; then
+      sed -i.bak -E "s/^FALKORDB_PORT=6380$/FALKORDB_PORT=${FALKOR_HOST_PORT}/" .env
+      rm -f .env.bak
+      ok ".env FALKORDB_PORT updated to $FALKOR_HOST_PORT"
     fi
   fi
 fi

@@ -69,6 +69,14 @@ PG_HOST_PORT="$(cat .data/postgres-port 2>/dev/null || echo 5432)"
 DEFAULT_DB="postgresql+asyncpg://${PG_USER}:${PG_PASS}@localhost:${PG_HOST_PORT}/${PG_DB}"
 export DATABASE_URL="${DATABASE_URL:-$DEFAULT_DB}"
 
+# Same pattern for FalkorDB — start_falkordb.sh writes the chosen
+# host port to .data/falkordb-port. If config.py / .env's
+# FALKORDB_PORT is still the default 6380 but our actual port
+# differs, override at the env layer (env wins in pydantic-settings).
+if [[ -f .data/falkordb-port ]]; then
+  export FALKORDB_PORT="${FALKORDB_PORT:-$(cat .data/falkordb-port)}"
+fi
+
 # ---- log rotation ---------------------------------------------
 #
 # Called once before each foreground/background start. If the log
