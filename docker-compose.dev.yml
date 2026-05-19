@@ -1,21 +1,22 @@
 # Dev override: expose Postgres + FalkorDB on localhost so the
-# host-side uvicorn (`scripts/dev.sh`) can reach them.
+# host-side uvicorn (`./start.sh`) can reach them.
 #
-# Prod (docker-compose.yml alone) keeps Postgres internal-only —
-# this file is opt-in for local dev work.
+# Host port is picked dynamically by scripts/start_postgres.sh /
+# scripts/start_falkordb.sh — they auto-bump to the next free port
+# when the default is taken (system Postgres or another project's
+# docker), and write the chosen value to `.data/postgres-port` /
+# `.data/falkordb-port` so the rest of the toolchain (start.sh /
+# install.sh) builds the right DATABASE_URL.
 #
-# Usage:
-#   POSTGRES_PASSWORD=memory docker compose -f docker-compose.yml \
-#       -f docker-compose.dev.yml up -d postgres falkordb
-#
-# Or just use scripts/start_postgres.sh which wraps the above.
+# Prod (docker-compose.yml alone) keeps both services internal-only.
+# This file is opt-in for local dev work.
 
 services:
   postgres:
     ports:
-      - "127.0.0.1:5432:5432"
-    # Dev password — overrides the .env.prod requirement so you don't
-    # need that file just to run uvicorn locally.
+      - "127.0.0.1:${HOST_POSTGRES_PORT:-5432}:5432"
+    # Dev creds — match what start_postgres.sh exports + the
+    # DATABASE_URL the host-side toolchain constructs.
     environment:
       POSTGRES_USER: memory
       POSTGRES_PASSWORD: memory
@@ -23,4 +24,4 @@ services:
 
   falkordb:
     ports:
-      - "127.0.0.1:6380:6379"
+      - "127.0.0.1:${HOST_FALKORDB_PORT:-6380}:6379"

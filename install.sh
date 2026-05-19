@@ -202,7 +202,8 @@ else
 
   step "Starting Postgres"
   scripts/start_postgres.sh
-  ok "Postgres at localhost:5432"
+  PG_HOST_PORT="$(cat .data/postgres-port 2>/dev/null || echo 5432)"
+  ok "Postgres at localhost:$PG_HOST_PORT"
 
   step "Starting FalkorDB"
   scripts/start_falkordb.sh
@@ -212,9 +213,19 @@ else
   export POSTGRES_USER="${POSTGRES_USER:-memory}"
   export POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-memory}"
   export POSTGRES_DB="${POSTGRES_DB:-memory_service}"
-  export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}}"
+  export DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:${PG_HOST_PORT}/${POSTGRES_DB}}"
   uv run "${UV_FLAGS[@]}" alembic upgrade head
   ok "schema up to date"
+
+  # If .env's DATABASE_URL still points at 5432 but we landed on a
+  # different port, rewrite the line so uvicorn picks the right one.
+  if [[ -f .env ]] && [[ "$PG_HOST_PORT" != "5432" ]]; then
+    if grep -q "^DATABASE_URL=postgresql.*localhost:5432/" .env; then
+      sed -i.bak -E "s#(^DATABASE_URL=postgresql.*localhost:)5432(/.*)#\\1${PG_HOST_PORT}\\2#" .env
+      rm -f .env.bak
+      ok ".env DATABASE_URL updated to use port $PG_HOST_PORT"
+    fi
+  fi
 fi
 
 # ---- 5. next steps -------------------------------------------------

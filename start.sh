@@ -58,12 +58,15 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 command -v uv >/dev/null 2>&1 || die "uv not found. Run ./install.sh first."
 
-# Build DATABASE_URL the same way install.sh did so a re-clone +
-# start without re-export still works.
+# Build DATABASE_URL the same way install.sh did. Honor the host
+# port that start_postgres.sh wrote to .data/postgres-port — that's
+# where the dev Postgres actually ended up after possible
+# port-collision auto-bump.
 PG_USER="${POSTGRES_USER:-memory}"
 PG_PASS="${POSTGRES_PASSWORD:-memory}"
 PG_DB="${POSTGRES_DB:-memory_service}"
-DEFAULT_DB="postgresql+asyncpg://${PG_USER}:${PG_PASS}@localhost:5432/${PG_DB}"
+PG_HOST_PORT="$(cat .data/postgres-port 2>/dev/null || echo 5432)"
+DEFAULT_DB="postgresql+asyncpg://${PG_USER}:${PG_PASS}@localhost:${PG_HOST_PORT}/${PG_DB}"
 export DATABASE_URL="${DATABASE_URL:-$DEFAULT_DB}"
 
 # ---- log rotation ---------------------------------------------
