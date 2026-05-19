@@ -142,44 +142,45 @@ if ! uv run python -c 'import anthropic' >/dev/null 2>&1; then
 fi
 ok "graphiti[anthropic] available"
 
-# ---- 3. .env.local --------------------------------------------------
+# ---- 3. .env --------------------------------------------------
 step "Configuring environment"
 
-if [[ ! -f .env.local ]] && [[ ! -f .env ]]; then
-  cat > .env.local <<'EOF'
-# TEMPER local dev settings. Override via shell env to layer on top.
+# config.py reads `.env`. Copy from the canonical .env.example
+# (which the team keeps in sync with config.py — all keys, all
+# provider hints, all defaults). Then layer dev-friendly overrides
+# on top so first boot just works.
+if [[ ! -f .env ]]; then
+  if [[ ! -f .env.example ]]; then
+    die ".env.example missing — can't bootstrap .env. Pull latest from main?"
+  fi
+  cp .env.example .env
 
-# DB — the dev scripts default to docker-compose Postgres. Set
-# DATABASE_URL only if you want to point at your own Postgres.
-# DATABASE_URL=postgresql+asyncpg://memory:memory@localhost:5432/memory_service
+  # Append dev overrides: random SECRET_KEY (otherwise JWT signing
+  # uses the placeholder), permissive defaults that match a single-
+  # user laptop install.
+  RANDOM_SECRET="$(uv run python -c 'import secrets; print(secrets.token_urlsafe(48))' 2>/dev/null || head -c 48 /dev/urandom | base64)"
+  cat >> .env <<EOF
 
-# Embedding backend — fastembed (default) runs locally, no API key needed.
-EMBEDDING_PROVIDER=fastembed
+# ───────────────────────────────────────────────────────────────
+# Appended by install.sh for local dev (2026-05-17). Safe to edit.
+# ───────────────────────────────────────────────────────────────
 
-# LLM provider — used by graphiti for extraction. Pick one:
-#   openai   needs OPENAI_API_KEY
-#   anthropic needs ANTHROPIC_API_KEY
-#   gemini   needs GEMINI_API_KEY
-#   custom   needs LLM_API_BASE + LLM_API_KEY (OpenAI-compat endpoint)
-LLM_PROVIDER=openai
-# OPENAI_API_KEY=sk-...
+# Strong key generated at install time — DO NOT commit this file.
+SECRET_KEY=${RANDOM_SECRET}
+
+# Self-registration on for solo dev; off in prod.
+ALLOW_SELF_REGISTRATION=true
 
 # Default admin auto-created on first boot if users table is empty.
-# Change after first login.
+# Change password via /admin/me after first login.
 CREATE_DEFAULT_ADMIN=true
 DEFAULT_ADMIN_EMAIL=admin@example.com
 DEFAULT_ADMIN_PASSWORD=admin
-
-# Logging
-LOG_LEVEL=INFO
-
-# Allow self-registration for local dev (lets you create extra users
-# via POST /v1/auth/register without admin). Off in prod.
-ALLOW_SELF_REGISTRATION=true
 EOF
-  ok ".env.local written with defaults — edit if you want different LLM provider / admin creds"
+  ok ".env written from .env.example + dev overrides"
+  warn "edit LLM_PROVIDER / LLM_API_KEY in .env before agent integration tests"
 else
-  ok ".env / .env.local already present"
+  ok ".env already present (not overwriting)"
 fi
 
 # ---- 4. databases --------------------------------------------------
