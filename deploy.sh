@@ -14,12 +14,21 @@
 #
 # Usage:
 #   ./deploy.sh              up (first run does cp .env.example + edit prompt)
-#   ./deploy.sh restart      docker compose restart memory-service
+#   ./deploy.sh restart      recreate memory-service container with current .env
+#                            (picks up any .env changes — see note below)
 #   ./deploy.sh stop         docker compose down (keeps volumes)
 #   ./deploy.sh reset        docker compose down -v  (WIPES DATA)
 #   ./deploy.sh logs         docker compose logs -f memory-service
 #   ./deploy.sh status       container + health summary
-#   ./deploy.sh update       git pull + rebuild + restart
+#   ./deploy.sh update       git pull + rebuild image + restart
+#
+# Note on `restart` vs plain `docker compose restart`:
+#   compose's built-in `restart` only restarts PID 1 inside the
+#   existing container — it does NOT re-read .env (the container's
+#   env was frozen at create-time). `./deploy.sh restart` instead
+#   does `up -d --force-recreate --no-deps --no-build memory-service`,
+#   which destroys + recreates the container with current .env values.
+#   So editing .env then `./deploy.sh restart` does what you want.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -213,8 +222,15 @@ cmd_up() {
 
 cmd_restart() {
   require_docker
-  ok "restarting memory-service"
-  "${COMPOSE[@]}" restart memory-service
+  # --force-recreate destroys the container and creates a new one,
+  # which means the new container reads the CURRENT .env. (Plain
+  # `compose restart` only kicks PID 1 inside the existing container
+  # — env was frozen at create-time.) --no-deps skips bouncing
+  # postgres / falkordb / ollama just to apply a memory-service env
+  # change. --no-build skips the image rebuild — that's what
+  # `./deploy.sh update` is for after `git pull`.
+  ok "recreating memory-service container with current .env"
+  "${COMPOSE[@]}" up -d --force-recreate --no-deps --no-build memory-service
 }
 
 cmd_stop() {
