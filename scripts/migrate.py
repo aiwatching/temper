@@ -44,10 +44,15 @@ def _request(
 ) -> Any:
     """One-shot JSON request. 600s default timeout covers slow imports
     (each episode is a sync graphiti add_episode + LLM call)."""
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/json",
-    }
+    # TEMPER accepts auth in two shapes (see api/deps.py):
+    #   X-API-Key: mk_...                (long-lived API key)
+    #   Authorization: Bearer <jwt>      (session token from /v1/auth/login)
+    # API keys start with `mk_`; anything else we assume is a JWT.
+    headers = {"Accept": "application/json"}
+    if token.startswith("mk_"):
+        headers["X-API-Key"] = token
+    else:
+        headers["Authorization"] = f"Bearer {token}"
     data: bytes | None = None
     if body is not None:
         data = json.dumps(body).encode("utf-8")
