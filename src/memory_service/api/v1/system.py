@@ -76,8 +76,8 @@ async def health(
         # Replace the cached "ok" with a real-world probe result so
         # the response top-level reflects reality. We keep the cached
         # detail under `cached_detail` for comparison.
-        llm_live = await _probe_llm(settings.resolved_llm)
-        emb_live = await _probe_embedder(settings.resolved_embedder)
+        llm_live = await _probe_llm(settings.resolved_llm())
+        emb_live = await _probe_embedder(settings.resolved_embedder())
         llm_block = {
             "provider": llm_live["provider"],
             "ok": llm_live["ok"],
