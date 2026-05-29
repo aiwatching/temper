@@ -20,6 +20,7 @@ from memory_service.api.v1 import episodes as v1_episodes
 from memory_service.api.v1 import graph as v1_graph
 from memory_service.api.v1 import graph_items as v1_graph_items
 from memory_service.api.v1 import groups as v1_groups
+from memory_service.api.v1 import memory_export as v1_memory_export
 from memory_service.api.v1 import namespaces as v1_namespaces
 from memory_service.api.v1 import orgs as v1_orgs
 from memory_service.api.v1 import sagas as v1_sagas
@@ -134,6 +135,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_blocks.router, prefix="/v1")
     app.include_router(v1_documents.router, prefix="/v1")
     app.include_router(v1_typed_memory.router, prefix="/v1")
+    app.include_router(v1_memory_export.router, prefix="/v1")
 
     # Admin page + static
     app.include_router(admin_router)
