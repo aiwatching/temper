@@ -16,9 +16,9 @@ same.
 
 ```bash
 git clone <repo> memory-service && cd memory-service
-cp .env.prod.example .env.prod
-$EDITOR .env.prod   # fill in the REQUIRED section
-docker compose --env-file .env.prod up -d --build
+cp .env.example .env
+$EDITOR .env   # fill in the REQUIRED section
+docker compose up -d --build
 curl http://localhost:18088/v1/health
 ```
 
@@ -34,7 +34,7 @@ shows what it tried.
 
 ## Required env vars
 
-All of these must be set in `.env.prod`. The container refuses to
+All of these must be set in `.env`. The container refuses to
 boot otherwise.
 
 | Var | What |
@@ -89,8 +89,8 @@ sudo nginx -t && sudo systemctl reload nginx
 
 ```bash
 git pull
-docker compose --env-file .env.prod build memory-service
-docker compose --env-file .env.prod up -d memory-service
+docker compose build memory-service
+docker compose up -d memory-service
 ```
 
 The container entrypoint runs `alembic upgrade head` on every boot.
@@ -104,12 +104,12 @@ Two stateful volumes:
 
 ```bash
 # Postgres dump
-docker compose --env-file .env.prod exec postgres pg_dump -U memory memory_service \
+docker compose exec postgres pg_dump -U memory memory_service \
   | gzip > /backups/ms-$(date +%F).sql.gz
 
 # FalkorDB snapshot — BGSAVE writes to /var/lib/falkordb/data inside the
 # container; the named volume `falkordb_data` is where it lands.
-docker compose --env-file .env.prod exec falkordb redis-cli BGSAVE
+docker compose exec falkordb redis-cli BGSAVE
 # Then cp the volume contents off the host:
 docker run --rm \
   -v temper_falkordb_data:/data -v /backups:/out \
@@ -127,7 +127,7 @@ let FalkorDB pick up the dump at startup.
   and any extraction errors. With `LOG_FORMAT=json` pipe through `jq`.
 - **Wipe everything** (DON'T do this on prod data):
   ```bash
-  docker compose --env-file .env.prod down -v
+  docker compose down -v
   ```
 - **Service stops responding** but health was green → check
   `docker stats` for memory. The Graphiti + FalkorDB combo can grow

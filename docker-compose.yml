@@ -5,7 +5,7 @@
 # Browser UI on 3000 is bound to 127.0.0.1 for human inspection but
 # not exposed publicly).
 #
-#   cp .env.prod.example .env.prod
+#   cp .env.example .env
 #   <fill in secrets>
 #   docker compose up -d
 #   curl http://localhost:18088/v1/health
@@ -19,7 +19,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-memory}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env.prod}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-memory_service}
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -50,7 +50,7 @@ services:
       args:
         # On corporate networks where pypi cert verification is MITM'd
         # (self-signed CA in the chain), set PIP_TRUSTED_HOSTS=1 in
-        # .env.prod. Empty everywhere else.
+        # .env. Empty everywhere else.
         PIP_TRUSTED_HOSTS: "${PIP_TRUSTED_HOSTS:-}"
     image: memory-service:0.1.0
     restart: unless-stopped
@@ -60,9 +60,9 @@ services:
       falkordb:
         condition: service_healthy
     env_file:
-      - .env.prod
+      - .env
     environment:
-      # These four override .env.prod because the compose network names
+      # These four override .env because the compose network names
       # ("postgres", "falkordb") are different from what you'd type on the
       # host (localhost:5432, localhost:6380).
       DATABASE_URL: "postgresql+asyncpg://${POSTGRES_USER:-memory}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-memory_service}"
@@ -71,7 +71,7 @@ services:
       FALKORDB_BROWSER_PORT: "0"
     ports:
       # Default: only the local host can reach the API. Set MS_BIND=0.0.0.0
-      # in .env.prod if you really want it open (and put nginx in front).
+      # in .env if you really want it open (and put nginx in front).
       - "${MS_BIND:-127.0.0.1}:${MS_PORT:-18088}:18088"
 
 volumes:

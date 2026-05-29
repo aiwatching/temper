@@ -43,7 +43,27 @@ the canonical routing contract agents embed in their system prompt.
 
 ## Quick start
 
-### Fresh machine — three scripts
+### Remote server (docker-only, zero native deps)
+
+If all you have is a fresh box with Docker installed and you don't want
+to install Python / Postgres / FalkorDB on it:
+
+```bash
+git clone <repo> temper && cd temper
+./deploy.sh                  # first run: writes .env, prompts you to fill keys
+vi .env                      # set LLM_API_KEY + EMBEDDING_API_KEY + POSTGRES_PASSWORD
+./deploy.sh                  # second run: docker compose up -d --build
+```
+
+`deploy.sh` subcommands: `up` (default) / `restart` / `stop` /
+`logs` / `status` / `update` / `reset` (wipes volumes).
+
+Bootstrap defaults are production-ish: `APP_ENV=production`,
+`LOG_FORMAT=json`, `MS_BIND=0.0.0.0` (so the host's external IP works),
+`ALLOW_SELF_REGISTRATION=false`. Change `DEFAULT_ADMIN_PASSWORD` before
+exposing the port.
+
+### Fresh machine — three scripts (local dev)
 
 ```bash
 ./install.sh        # one-time setup: uv + Python + deps + .env +
@@ -108,8 +128,8 @@ uv run alembic upgrade head              # schema
 ### Full container stack (closer to prod)
 
 ```bash
-cp .env.example .env.prod
-# edit POSTGRES_PASSWORD + SECRET_KEY + LLM keys in .env.prod
+cp .env.example .env
+# edit POSTGRES_PASSWORD + SECRET_KEY + LLM keys in .env
 docker compose up --build
 ```
 
@@ -191,7 +211,7 @@ schema). Then `uv run alembic upgrade head`.
 The Postgres docker volume is fresh — your old SQLite-era users
 didn't migrate. On first boot TEMPER auto-creates
 `admin@example.com / admin` (configurable via
-`DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` in `.env.local`).
+`DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` in `.env`).
 Log in with those, then create your real user via
 `/admin/users` or `POST /v1/auth/register`.
 

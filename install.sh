@@ -12,7 +12,7 @@
 #       - docker (errors if missing — Docker Desktop / docker-ce
 #         needs a manual install on most platforms)
 #   2. Set up .venv via uv sync (creates if missing, syncs deps)
-#   3. Write .env.local with sensible defaults if missing
+#   3. Write .env with sensible defaults if missing
 #   4. Boot Postgres + FalkorDB containers (docker compose)
 #   5. Run alembic upgrade head against the dev Postgres
 #   6. Print next steps (start command, admin creds, key URLs)
@@ -302,7 +302,7 @@ cat <<EOF
     ${C_YELLOW}change immediately via /admin/me${C_RST}
 
   Common next steps:
-    ${C_BOLD}vi .env.local${C_RST}              edit LLM provider / API keys
+    ${C_BOLD}vi .env${C_RST}                    edit LLM provider / API keys
     ${C_BOLD}scripts/dev.sh${C_RST}             launch with auto-reload
     ${C_BOLD}./install.sh --reset${C_RST}       wipe + start over (destructive)
     ${C_BOLD}./install.sh --no-docker${C_RST}   skip DB setup (BYO Postgres)
