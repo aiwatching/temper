@@ -38,11 +38,23 @@ require_docker() {
   command -v docker >/dev/null 2>&1 || die "docker not found. Install Docker first: https://docs.docker.com/engine/install/"
   docker info >/dev/null 2>&1 || die "docker daemon not reachable. Is the Docker service running? (sudo systemctl start docker / open Docker Desktop)"
   if docker compose version >/dev/null 2>&1; then
-    COMPOSE=(docker compose)
+    COMPOSE_BASE=(docker compose)
   elif command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE=(docker-compose)
+    COMPOSE_BASE=(docker-compose)
   else
     die "docker compose v2 not available. Upgrade Docker Engine (>= 24) or install the compose plugin."
+  fi
+
+  # GPU overlay: include the nvidia override iff the host has
+  # nvidia-smi. The overlay is a no-op without nvidia-container-toolkit
+  # but compose will then refuse to schedule the device reservation —
+  # so only opt in when we know it'll work.
+  COMPOSE=("${COMPOSE_BASE[@]}" -f docker-compose.yml)
+  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+    COMPOSE+=(-f docker-compose.gpu.yml)
+    GPU_DETECTED=1
+  else
+    GPU_DETECTED=0
   fi
 }
 
@@ -94,6 +106,10 @@ bootstrap_env() {
 
   # macOS sed and GNU sed disagree on -i; use the BSD-portable
   # `-i.bak` + rm pattern.
+  #
+  # Embedding bootstrap: point at the bundled ollama service. The
+  # ollama-pull sidecar auto-downloads bge-m3 on first `up`, so this
+  # works without any LLM provider config.
   sed -i.bak \
     -e "s|^SECRET_KEY=.*|SECRET_KEY=${secret}|" \
     -e "s|^APP_ENV=.*|APP_ENV=production|" \
@@ -101,6 +117,10 @@ bootstrap_env() {
     -e "s|^MS_BIND=.*|MS_BIND=0.0.0.0|" \
     -e "s|^FALKORDB_PORT=.*|FALKORDB_PORT=6379|" \
     -e "s|^ALLOW_SELF_REGISTRATION=.*|ALLOW_SELF_REGISTRATION=false|" \
+    -e "s|^EMBEDDING_PROVIDER=.*|EMBEDDING_PROVIDER=ollama|" \
+    -e "s|^EMBEDDING_BASE_URL=.*|EMBEDDING_BASE_URL=http://ollama:11434/v1|" \
+    -e "s|^EMBEDDING_MODEL=.*|EMBEDDING_MODEL=bge-m3|" \
+    -e "s|^EMBEDDING_DIMENSIONS=.*|EMBEDDING_DIMENSIONS=1024|" \
     .env
   rm -f .env.bak
 }
@@ -112,18 +132,26 @@ cmd_up() {
     ok "first run — bootstrapping .env from .env.example"
     bootstrap_env
     info "generated SECRET_KEY, set APP_ENV=production, MS_BIND=0.0.0.0"
+    info "embedding pre-wired to bundled ollama service (bge-m3, 1024-dim)"
+    if (( GPU_DETECTED )); then
+      info "nvidia GPU detected — docker-compose.gpu.yml will be included"
+    else
+      warn "no nvidia-smi on host — ollama will run on CPU (bge-m3 ~200-400ms/req)"
+    fi
     echo
-    warn "Edit .env to fill in your LLM + embedding keys, then re-run ./deploy.sh:"
+    warn "Edit .env to fill in your LLM key, then re-run ./deploy.sh:"
     echo "    ${C_BOLD}vi .env${C_RST}"
     echo
-    echo "  Required fields:"
+    echo "  Required:"
     echo "    LLM_PROVIDER, LLM_API_KEY (+ BASE_URL/MODEL if non-openai)"
-    echo "    EMBEDDING_PROVIDER, EMBEDDING_API_KEY"
-    echo "    POSTGRES_PASSWORD  (set to a strong value — the volume is created with this)"
+    echo "    POSTGRES_PASSWORD  (set to a strong value — postgres volume is created with this)"
     echo
-    echo "  Optional but recommended:"
-    echo "    DEFAULT_ADMIN_PASSWORD  (default 'admin' — CHANGE THIS for any reachable deploy)"
+    echo "  Recommended:"
+    echo "    DEFAULT_ADMIN_PASSWORD  (default 'admin' — CHANGE for any reachable deploy)"
     echo "    CORS_ALLOW_ORIGINS      (your frontend origin if any)"
+    echo
+    echo "  Embedding is bundled — no API key needed. To use a different model:"
+    echo "    EMBEDDING_MODEL=...     (also adjust EMBEDDING_DIMENSIONS to match)"
     return 0
   fi
 

@@ -42,7 +42,45 @@ services:
       retries: 5
     ports:
       # Browser UI; loopback-only so it isn't exposed beyond this host.
-      - "127.0.0.1:3000:3000"
+      # 13000 instead of 3000 to dodge the common port-3000 clash
+      # (next.js / grafana / random dev servers).
+      - "127.0.0.1:13000:3000"
+
+  ollama:
+    # Bundled embedding backend. GPU passthrough lives in
+    # docker-compose.gpu.yml — deploy.sh auto-includes it when
+    # `nvidia-smi` is present on the host.
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  ollama-pull:
+    # One-shot sidecar: pulls EMBED_MODEL into the ollama volume once
+    # the daemon is healthy, then exits. Re-running compose `up` is a
+    # no-op — `ollama pull` is idempotent (skips if already cached).
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      EMBED_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        echo "[ollama-pull] ensuring $$EMBED_MODEL is present..."
+        ollama pull "$$EMBED_MODEL"
+        echo "[ollama-pull] done. Available models:"
+        ollama list
+    restart: "no"
 
   memory-service:
     build:
@@ -77,3 +115,4 @@ services:
 volumes:
   postgres_data:
   falkordb_data:
+  ollama_data:

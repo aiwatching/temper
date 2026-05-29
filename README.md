@@ -46,17 +46,32 @@ the canonical routing contract agents embed in their system prompt.
 ### Remote server (docker-only, zero native deps)
 
 If all you have is a fresh box with Docker installed and you don't want
-to install Python / Postgres / FalkorDB on it:
+to install Python / Postgres / FalkorDB / ollama on it:
 
 ```bash
 git clone <repo> temper && cd temper
 ./deploy.sh                  # first run: writes .env, prompts you to fill keys
-vi .env                      # set LLM_API_KEY + EMBEDDING_API_KEY + POSTGRES_PASSWORD
+vi .env                      # set LLM_API_KEY + POSTGRES_PASSWORD
 ./deploy.sh                  # second run: docker compose up -d --build
 ```
 
 `deploy.sh` subcommands: `up` (default) / `restart` / `stop` /
 `logs` / `status` / `update` / `reset` (wipes volumes).
+
+What's bundled:
+
+  - Postgres 16, FalkorDB, memory-service — same compose stack as before
+  - **Ollama** — runs the embedding model in-container. The
+    `ollama-pull` sidecar auto-downloads `bge-m3` (1024-dim,
+    multilingual) on first boot. No EMBEDDING_API_KEY needed.
+  - **GPU passthrough** — `deploy.sh` checks for `nvidia-smi` on the
+    host; if present, layers in `docker-compose.gpu.yml` so ollama
+    uses the GPU. Without it, ollama still works on CPU (slower).
+    Requires nvidia-container-toolkit on the host.
+
+To use a different embedding model: change `EMBEDDING_MODEL` in `.env`
+(plus matching `EMBEDDING_DIMENSIONS`) and `./deploy.sh restart`. The
+sidecar will pull the new model.
 
 Bootstrap defaults are production-ish: `APP_ENV=production`,
 `LOG_FORMAT=json`, `MS_BIND=0.0.0.0` (so the host's external IP works),

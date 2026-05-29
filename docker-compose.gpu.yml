@@ -1,0 +1,25 @@
+# Overlay that adds nvidia GPU passthrough to the bundled ollama
+# service. Used only when deploy.sh detects `nvidia-smi` on the host
+# (i.e. the box has an nvidia driver + nvidia-container-toolkit
+# installed).
+#
+# Manually:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Requires:
+#   - nvidia driver (`nvidia-smi` works on host)
+#   - nvidia-container-toolkit (`docker run --rm --gpus all nvidia/cuda:12-base nvidia-smi` works)
+#
+# If you skip this overlay, ollama still runs — just on CPU. bge-m3
+# (567M) on CPU is roughly ~200-400ms per embedding; on a modern GPU
+# it's an order of magnitude faster.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
