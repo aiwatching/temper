@@ -379,12 +379,22 @@
       },
       openEdit(u) {
         this.editTarget = u;
+        // Email + display_name are <input>s — they pick up the model
+        // value synchronously, no timing issue.
         this.editForm = {
           email: u.email || "",
           display_name: u.display_name || "",
-          org_slug: u.org_slug || "",
+          // Defer org_slug to $nextTick: the <select> renders BEFORE
+          // its <option> list (x-for inside a <template>) finishes
+          // populating, so a synchronous assignment misses every real
+          // option and falls back to the placeholder. Setting "" first
+          // then the real value after the DOM tick fixes it.
+          org_slug: "",
         };
         this.error = null;
+        this.$nextTick(() => {
+          this.editForm.org_slug = u.org_slug || "";
+        });
       },
       cancelEdit() {
         this.editTarget = null;
