@@ -62,6 +62,7 @@
           </td>
           <td x-text="window.ms.fmtDate(u.created_at)"></td>
           <td>
+            <button class="secondary" @click="openEdit(u)">Edit</button>
             <template x-if="u.has_pending_invite">
               <button class="secondary" @click="resend(u)">Resend invite</button>
             </template>
@@ -160,6 +161,32 @@
     </div>
   </template>
 
+  <!-- Edit user modal -->
+  <template x-if="editTarget">
+    <div class="card" style="margin-top:16px; border:2px solid var(--accent)">
+      <h3>Edit <code x-text="editTarget.email"></code></h3>
+      <p style="color:var(--muted); font-size:12px">
+        Email + username are immutable here — delete + recreate if you
+        need to change them. To move the user between orgs/groups, use
+        <a href="/admin/groups">Groups</a>. Password changes go through
+        <strong>Reset password</strong>.
+      </p>
+      <form @submit.prevent="saveEdit()" class="stacked" style="max-width:none">
+        <div class="filter-grid">
+          <div>
+            <label>display name</label>
+            <input type="text" x-model="editForm.display_name" placeholder="—">
+          </div>
+        </div>
+        <div>
+          <button type="submit" :disabled="editing"
+                  x-text="editing ? 'Saving…' : 'Save'"></button>
+          <button type="button" class="secondary" @click="cancelEdit()">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
   <!-- Reset password modal -->
   <template x-if="resetTarget">
     <div class="card" style="margin-top:16px; border:2px solid var(--bad)">
@@ -250,6 +277,7 @@
       lastCredentials: null,
       resetTarget: null, resetMode: "link", resetPwd: "", resetting: false,
       resetResult: null,
+      editTarget: null, editForm: {display_name: ""}, editing: false,
       async load() {
         window.ms.requireAuth();
         this.loading = true; this.error = null;
@@ -300,6 +328,40 @@
             expires_at: r.invite.expires_at,
           };
         } catch (e) { this.error = e.message; }
+      },
+      openEdit(u) {
+        this.editTarget = u;
+        this.editForm = { display_name: u.display_name || "" };
+        this.error = null;
+      },
+      cancelEdit() {
+        this.editTarget = null;
+        this.editForm = { display_name: "" };
+      },
+      async saveEdit() {
+        const u = this.editTarget;
+        // Only include keys whose value actually changed — keeps the
+        // PATCH minimal and avoids re-sending fields the actor may
+        // not be authorized to touch (e.g. non-super_admin patching
+        // their own row shouldn't be sending is_super_admin/org_slug).
+        const body = {};
+        const newName = (this.editForm.display_name || "").trim();
+        const curName = (u.display_name || "").trim();
+        if (newName !== curName) body.display_name = newName;
+        if (Object.keys(body).length === 0) {
+          this.cancelEdit();
+          return;
+        }
+        this.editing = true; this.error = null;
+        try {
+          await window.ms.json(`/v1/users/by-id/${u.id}`, {
+            method: "PATCH",
+            body: JSON.stringify(body),
+          });
+          this.cancelEdit();
+          await this.load();
+        } catch (e) { this.error = e.message; }
+        finally { this.editing = false; }
       },
       openReset(u) {
         this.resetTarget = u;
