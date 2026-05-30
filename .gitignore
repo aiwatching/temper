@@ -43,3 +43,8 @@ logs/
 *.swp
 *.swo
 .*.sw?
+
+# Memory export bundles from scripts/migrate.py — contain real
+# user data (blocks / documents / episode text). Never commit.
+*.bundle.json
+ming.json
