@@ -21,6 +21,11 @@
 #   ./deploy.sh logs         docker compose logs -f memory-service
 #   ./deploy.sh status       container + health summary
 #   ./deploy.sh update       git pull + rebuild image + restart
+#   ./deploy.sh fix-dns      Linux-only: configure docker daemon to use
+#                            the host's upstream DNS resolvers. Run if
+#                            containers can't reach internal corp
+#                            domains that the host resolves fine
+#                            (typical with systemd-resolved hosts).
 #
 # Note on `restart` vs plain `docker compose restart`:
 #   compose's built-in `restart` only restarts PID 1 inside the
@@ -173,6 +178,16 @@ cmd_up() {
     warn "LLM_API_KEY is empty. graphiti extraction will fail on every write until you set it."
   fi
 
+  # Passive DNS warning. Detect-only — fixing it (restarting docker)
+  # is intrusive, so we point at the opt-in command instead of doing
+  # it silently.
+  if dns_needs_fix; then
+    warn "host uses systemd-resolved + docker daemon has no DNS override."
+    warn "Containers may fail to resolve internal corp domains."
+    warn "Run './deploy.sh fix-dns' to auto-configure docker to use the host's upstream DNS."
+    echo
+  fi
+
   ok "building + starting docker stack"
   "${COMPOSE[@]}" up -d --build
 
@@ -268,6 +283,126 @@ cmd_update() {
   "${COMPOSE[@]}" up -d memory-service
 }
 
+# Detect: host uses systemd-resolved (resolv.conf points at 127.0.0.53)
+# AND docker daemon.json doesn't yet have a `dns` override.
+#
+# This is the combo that produces "Name or service not known" inside
+# containers when the host can resolve internal corp domains fine —
+# docker sees 127.0.0.53 in /etc/resolv.conf, decides the loopback stub
+# can't possibly be reached from inside a container (it can't), and
+# silently substitutes 8.8.8.8. Public DNS → can't resolve `*.corp.internal`.
+#
+# Returns 0 (true) if the issue is likely present. Linux-only check;
+# Docker Desktop on Mac/Windows handles DNS via its own VM and doesn't
+# hit this.
+dns_needs_fix() {
+  [[ "$(uname)" == "Linux" ]] || return 1
+  [[ -f /etc/resolv.conf ]] || return 1
+  grep -qE '^\s*nameserver\s+127\.0\.0\.53' /etc/resolv.conf || return 1
+  # If daemon.json already sets `dns`, assume the operator knows what
+  # they're doing — don't pester.
+  if [[ -f /etc/docker/daemon.json ]] && grep -q '"dns"' /etc/docker/daemon.json; then
+    return 1
+  fi
+  return 0
+}
+
+cmd_fix_dns() {
+  require_docker
+
+  if [[ "$(uname)" != "Linux" ]]; then
+    die "fix-dns is Linux-only. Docker Desktop (Mac/Windows) handles container DNS through its VM and doesn't hit this issue."
+  fi
+
+  # Pull the real upstream resolvers — what systemd-resolved is
+  # actually forwarding to. resolvectl is the canonical source.
+  # /run/systemd/resolve/resolv.conf is the same data in resolv.conf
+  # shape and is the fallback.
+  local upstream=""
+  if command -v resolvectl >/dev/null 2>&1; then
+    upstream=$(resolvectl status 2>/dev/null \
+      | awk -F: '/^[[:space:]]+DNS Servers:/ {print $2; exit}' \
+      | xargs -n1 2>/dev/null | grep -E '^[0-9a-f.:]+$' | tr '\n' ' ')
+  fi
+  if [[ -z "$upstream" ]] && [[ -f /run/systemd/resolve/resolv.conf ]]; then
+    upstream=$(awk '/^nameserver/ {print $2}' /run/systemd/resolve/resolv.conf | tr '\n' ' ')
+  fi
+  upstream=$(echo "$upstream" | xargs)   # trim
+
+  if [[ -z "$upstream" ]]; then
+    die "couldn't auto-detect upstream DNS. Find it with 'resolvectl status' and edit /etc/docker/daemon.json manually."
+  fi
+
+  info "detected upstream DNS: $upstream"
+
+  # Build the daemon.json content. If a file already exists, merge our
+  # dns key in via python so we don't trash unrelated settings (e.g.
+  # registry mirrors, log opts, etc.). Public 8.8.8.8 is appended so
+  # `docker pull <public-image>` still works when behind the internal
+  # resolver.
+  local new_json
+  if command -v python3 >/dev/null 2>&1; then
+    new_json=$(python3 - "$upstream" <<'PY'
+import json, os, sys
+upstream = sys.argv[1].split()
+path = "/etc/docker/daemon.json"
+cfg = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f: cfg = json.load(f)
+    except Exception:
+        cfg = {}
+dns = upstream + ["8.8.8.8"]
+seen = set(); cfg["dns"] = [x for x in dns if not (x in seen or seen.add(x))]
+print(json.dumps(cfg, indent=2))
+PY
+)
+  else
+    # Fallback for python-less systems: only write if file is absent;
+    # refuse to silently nuke an existing config we can't parse.
+    if [[ -f /etc/docker/daemon.json ]]; then
+      die "/etc/docker/daemon.json already exists and python3 is missing. Either install python3 or merge the 'dns' key by hand."
+    fi
+    local dns_csv
+    dns_csv=$(printf '"%s",' $upstream)
+    new_json=$(printf '{\n  "dns": [%s"8.8.8.8"]\n}\n' "$dns_csv")
+  fi
+
+  echo
+  echo "  Will write /etc/docker/daemon.json:"
+  echo "$new_json" | sed 's/^/    /'
+  echo
+  warn "Applying this will restart Docker — ALL containers on this host"
+  warn "(not just TEMPER's) will see a brief downtime while they recreate."
+  printf "  Proceed? (type 'yes' to continue): "
+  read -r confirm
+  [[ "$confirm" == "yes" ]] || die "aborted"
+
+  # Backup the old config so reverting is just `mv .bak daemon.json + restart docker`.
+  if [[ -f /etc/docker/daemon.json ]]; then
+    local stamp; stamp=$(date +%Y%m%d-%H%M%S)
+    sudo cp /etc/docker/daemon.json "/etc/docker/daemon.json.bak.${stamp}"
+    ok "backed up old config to /etc/docker/daemon.json.bak.${stamp}"
+  fi
+
+  sudo mkdir -p /etc/docker
+  echo "$new_json" | sudo tee /etc/docker/daemon.json >/dev/null
+  ok "wrote /etc/docker/daemon.json"
+
+  ok "restarting docker daemon"
+  sudo systemctl restart docker
+  sleep 3
+
+  ok "bringing TEMPER stack back up"
+  "${COMPOSE[@]}" up -d
+
+  echo
+  ok "fix-dns done."
+  echo "  Verify with:"
+  echo "    curl -s 'http://localhost:${MS_PORT:-18088}/v1/health?deep=true' | python3 -m json.tool"
+  echo "  The llm/embedder blocks should show 'ok: true' with real probe details."
+}
+
 sub="${1:-up}"
 shift || true
 case "$sub" in
@@ -278,10 +413,11 @@ case "$sub" in
   logs)         cmd_logs ;;
   status|ps)    cmd_status ;;
   update)       cmd_update ;;
+  fix-dns)      cmd_fix_dns ;;
   -h|--help|help)
     sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
-    die "unknown subcommand: $sub  (try: up / restart / stop / reset / logs / status / update)"
+    die "unknown subcommand: $sub  (try: up / restart / stop / reset / logs / status / update / fix-dns)"
     ;;
 esac
