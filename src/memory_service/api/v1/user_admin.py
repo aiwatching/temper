@@ -258,6 +258,30 @@ async def update_user(
     if not (self_edit or admin_edit):
         raise HTTPException(status_code=403, detail="Not allowed")
 
+    if payload.email is not None:
+        # Email is the login identity — only an admin should be able
+        # to change someone's. Self-edits go through a different flow
+        # (with re-auth) so we don't expose that here.
+        if not admin_edit:
+            raise HTTPException(
+                status_code=403,
+                detail="Only admins can change a user's email",
+            )
+        new_email = payload.email.strip().lower()
+        if new_email != (u.email or "").lower():
+            # Uniqueness — the DB has a UNIQUE constraint, but checking
+            # first lets us return a clean 409 instead of an opaque IntegrityError.
+            from sqlalchemy import select
+            existing = await db.execute(
+                select(User).where(User.email == new_email, User.id != u.id)
+            )
+            if existing.scalar_one_or_none() is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Another user already uses {new_email!r}",
+                )
+            u.email = new_email
+
     if payload.display_name is not None:
         u.display_name = payload.display_name
 

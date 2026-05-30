@@ -74,6 +74,7 @@ class UserListResponse(BaseModel):
 
 class UpdateUserRequest(BaseModel):
     """All fields optional — admin patches what changed."""
+    email: EmailStr | None = None        # admin only; uniqueness checked server-side
     display_name: str | None = None
     is_active: bool | None = None
     is_super_admin: bool | None = None   # super_admin only

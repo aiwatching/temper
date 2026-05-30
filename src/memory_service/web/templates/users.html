@@ -166,17 +166,39 @@
     <div class="card" style="margin-top:16px; border:2px solid var(--accent)">
       <h3>Edit <code x-text="editTarget.email"></code></h3>
       <p style="color:var(--muted); font-size:12px">
-        Email + username are immutable here — delete + recreate if you
-        need to change them. To move the user between orgs/groups, use
-        <a href="/admin/groups">Groups</a>. Password changes go through
-        <strong>Reset password</strong>.
+        Username is immutable — delete + recreate to change it. Password
+        changes go through <strong>Reset password</strong>. Group
+        membership lives on <a href="/admin/groups">Groups</a>.
       </p>
       <form @submit.prevent="saveEdit()" class="stacked" style="max-width:none">
         <div class="filter-grid">
           <div>
+            <label>email</label>
+            <input type="email" x-model="editForm.email" required>
+            <small style="color:var(--muted); font-size:11px">
+              Login identity. Existing JWT sessions stay valid; user
+              logs in with the new email next time.
+            </small>
+          </div>
+          <div>
             <label>display name</label>
             <input type="text" x-model="editForm.display_name" placeholder="—">
           </div>
+          <template x-if="isSuperAdmin">
+            <div style="grid-column: 1 / -1">
+              <label>org</label>
+              <select x-model="editForm.org_slug">
+                <option value="">— no org —</option>
+                <template x-for="o in orgChoices" :key="o.slug">
+                  <option :value="o.slug" x-text="o.slug + ' (' + (o.name || '') + ')'"></option>
+                </template>
+              </select>
+              <small style="color:var(--muted); font-size:11px">
+                Super_admin only. Moving a user between orgs affects what
+                groups + namespaces they can see.
+              </small>
+            </div>
+          </template>
         </div>
         <div>
           <button type="submit" :disabled="editing"
@@ -277,7 +299,10 @@
       lastCredentials: null,
       resetTarget: null, resetMode: "link", resetPwd: "", resetting: false,
       resetResult: null,
-      editTarget: null, editForm: {display_name: ""}, editing: false,
+      editTarget: null,
+      editForm: {email: "", display_name: "", org_slug: ""},
+      editing: false,
+      orgChoices: [],
       async load() {
         window.ms.requireAuth();
         this.loading = true; this.error = null;
@@ -293,6 +318,12 @@
             const gs = await window.ms.json("/v1/groups");
             this.groupChoices = Array.isArray(gs) ? gs : (gs.groups || []);
           } catch (_) { this.groupChoices = []; }
+          // Orgs power the edit modal's dropdown. super_admin only sees
+          // them; the endpoint 403s for non-admins, which is fine.
+          try {
+            const os = await window.ms.json("/v1/orgs");
+            this.orgChoices = Array.isArray(os) ? os : (os.orgs || []);
+          } catch (_) { this.orgChoices = []; }
         } catch (e) { this.error = e.message; }
         finally { this.loading = false; }
       },
@@ -331,23 +362,40 @@
       },
       openEdit(u) {
         this.editTarget = u;
-        this.editForm = { display_name: u.display_name || "" };
+        this.editForm = {
+          email: u.email || "",
+          display_name: u.display_name || "",
+          org_slug: u.org_slug || "",
+        };
         this.error = null;
       },
       cancelEdit() {
         this.editTarget = null;
-        this.editForm = { display_name: "" };
+        this.editForm = {email: "", display_name: "", org_slug: ""};
       },
       async saveEdit() {
         const u = this.editTarget;
         // Only include keys whose value actually changed — keeps the
         // PATCH minimal and avoids re-sending fields the actor may
         // not be authorized to touch (e.g. non-super_admin patching
-        // their own row shouldn't be sending is_super_admin/org_slug).
+        // their own row shouldn't be sending org_slug).
         const body = {};
+        const newEmail = (this.editForm.email || "").trim().toLowerCase();
+        const curEmail = (u.email || "").toLowerCase();
+        if (newEmail && newEmail !== curEmail) body.email = newEmail;
+
         const newName = (this.editForm.display_name || "").trim();
         const curName = (u.display_name || "").trim();
         if (newName !== curName) body.display_name = newName;
+
+        // org_slug: "" is a real value meaning "remove from org",
+        // so we compare strictly. Only super_admin sees the dropdown
+        // in the first place, but we still avoid sending the field
+        // when it didn't change.
+        const newOrg = this.editForm.org_slug || "";
+        const curOrg = u.org_slug || "";
+        if (this.isSuperAdmin && newOrg !== curOrg) body.org_slug = newOrg;
+
         if (Object.keys(body).length === 0) {
           this.cancelEdit();
           return;
