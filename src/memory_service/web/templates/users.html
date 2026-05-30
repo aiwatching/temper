@@ -62,33 +62,50 @@
           </td>
           <td x-text="window.ms.fmtDate(u.created_at)"></td>
           <td>
-            <button class="secondary" @click="openEdit(u)">Edit</button>
-            <template x-if="u.has_pending_invite">
-              <button class="secondary" @click="resend(u)">Resend invite</button>
-            </template>
-            <template x-if="me?.id !== u.id && u.has_password">
-              <button class="secondary" @click="openReset(u)">Reset password</button>
-            </template>
-            <template x-if="me?.id !== u.id && u.is_active && !u.is_protected">
-              <button class="secondary" @click="setActive(u, false)">Disable</button>
-            </template>
-            <template x-if="me?.id !== u.id && !u.is_active">
-              <button class="secondary" @click="setActive(u, true)">Enable</button>
-            </template>
-            <!-- Role toggle: super_admin is the only privileged role now. -->
-            <template x-if="canPromoteSuper(u)">
-              <button class="secondary" @click="setSuper(u, true)">Make super_admin</button>
-            </template>
-            <template x-if="canDemoteSuper(u) && !u.is_protected">
-              <button class="danger" @click="setSuper(u, false)">Demote super_admin</button>
-            </template>
-            <template x-if="isSuperAdmin && me?.id !== u.id && !u.is_protected">
-              <button class="danger" @click="remove(u)">Delete</button>
-            </template>
-            <template x-if="u.is_protected">
-              <span style="color:var(--muted); font-size:11px; margin-left:6px"
-                    title="The default admin account is protected from delete / demote / disable.">🔒 protected</span>
-            </template>
+            <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center">
+              <!-- Primary action: edit profile fields. -->
+              <button class="secondary" @click="openEdit(u)">Edit</button>
+
+              <!-- Account state group. -->
+              <template x-if="u.has_pending_invite">
+                <button class="secondary" @click="resend(u)">Resend invite</button>
+              </template>
+              <template x-if="me?.id !== u.id && u.has_password">
+                <button class="secondary" @click="openReset(u)">Reset password</button>
+              </template>
+              <template x-if="me?.id !== u.id && u.is_active && !u.is_protected">
+                <button class="secondary" @click="setActive(u, false)">Disable</button>
+              </template>
+              <template x-if="me?.id !== u.id && !u.is_active">
+                <button class="secondary" @click="setActive(u, true)">Enable</button>
+              </template>
+
+              <!-- Role toggle: super_admin is the only privileged role. -->
+              <template x-if="canPromoteSuper(u)">
+                <button class="secondary" @click="setSuper(u, true)">Make super_admin</button>
+              </template>
+              <template x-if="canDemoteSuper(u) && !u.is_protected">
+                <button class="danger" @click="setSuper(u, false)">Demote super_admin</button>
+              </template>
+
+              <!-- Danger group, visually separated and always last. -->
+              <template x-if="isSuperAdmin && me?.id !== u.id && !u.is_protected">
+                <span style="display:inline-block; width:1px; height:18px; background:var(--border); margin:0 2px"></span>
+              </template>
+              <template x-if="isSuperAdmin && me?.id !== u.id && !u.is_protected">
+                <button class="danger" @click="remove(u)">Delete</button>
+              </template>
+
+              <!-- Protected indicator: replaces the would-be danger buttons. -->
+              <template x-if="u.is_protected">
+                <span style="color:var(--muted); font-size:11px"
+                      title="The default admin account is protected from delete / demote / disable.">🔒 protected</span>
+              </template>
+              <template x-if="me?.id === u.id">
+                <span style="color:var(--muted); font-size:11px"
+                      title="You can't delete or disable your own account here. Sign in as another super_admin to do that.">— self</span>
+              </template>
+            </div>
           </td>
         </tr>
       </template>
