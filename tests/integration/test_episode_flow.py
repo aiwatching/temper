@@ -118,10 +118,20 @@ async def test_create_episode_into_other_users_namespace_forbidden(  # type: ign
 async def test_list_episodes_after_write(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
     token = await _register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
-    await client.post("/v1/episodes", json={"content": "fact 1"}, headers=headers)
+    # Contents must clear the quality floor (episode_min_content_chars)
+    # and differ from each other (write-dedup window).
+    await client.post(
+        "/v1/episodes",
+        json={"content": "Jerry's English teacher is Sarah."},
+        headers=headers,
+    )
     # Different episode UUID so unique-PK doesn't trip
     mock_graphiti.add_episode.return_value = _fake_add_episode_result("ep-uuid-2")
-    await client.post("/v1/episodes", json={"content": "fact 2"}, headers=headers)
+    await client.post(
+        "/v1/episodes",
+        json={"content": "Sarah teaches English at Toronto High."},
+        headers=headers,
+    )
 
     r = await client.get("/v1/episodes?limit=20", headers=headers)
     assert r.status_code == 200
@@ -129,6 +139,48 @@ async def test_list_episodes_after_write(client, mock_graphiti) -> None:  # type
     assert len(items) == 2
     ids = {it["episode_id"] for it in items}
     assert ids == {"ep-uuid-1", "ep-uuid-2"}
+
+
+@pytest.mark.asyncio
+async def test_short_content_skipped_not_written(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
+    """Default policy=skip: sub-floor content is acknowledged (200) but
+    neither extracted nor stored."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    r = await client.post("/v1/episodes", json={"content": "→ ok: {"}, headers=headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["skipped"] is True
+    assert body["episode_id"] == ""
+    assert "quality floor" in body["skip_reason"] or "empty" in body["skip_reason"]
+    assert mock_graphiti.add_episode.await_count == 0
+
+    r = await client.get("/v1/episodes?limit=20", headers=headers)
+    assert r.json()["episodes"] == []
+
+
+@pytest.mark.asyncio
+async def test_duplicate_content_deduped(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
+    """Same content twice within the dedup window → second write returns
+    the FIRST episode's id with skipped=true, no second extraction."""
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    content = {"content": "Jerry's English teacher is Sarah."}
+
+    r1 = await client.post("/v1/episodes", json=content, headers=headers)
+    assert r1.status_code == 201
+    assert r1.json()["skipped"] is False
+
+    r2 = await client.post("/v1/episodes", json=content, headers=headers)
+    assert r2.status_code == 200, r2.text
+    body = r2.json()
+    assert body["skipped"] is True
+    assert body["episode_id"] == r1.json()["episode_id"]
+    assert "duplicate" in body["skip_reason"]
+    assert mock_graphiti.add_episode.await_count == 1  # only the first
+
+    r = await client.get("/v1/episodes?limit=20", headers=headers)
+    assert len(r.json()["episodes"]) == 1
 
 
 @pytest.mark.asyncio

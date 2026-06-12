@@ -24,6 +24,16 @@ class StatsResponse(BaseModel):
     episodes_total: int
     episodes_pending: int
     episodes_failed: int
+    # Extraction ran fine but produced 0 entities AND 0 facts — the
+    # episode is invisible to graph search. A high ratio against
+    # episodes_with_yield_data means the writer is submitting content
+    # the LLM can't extract from (fragments, empty summaries) or the
+    # extraction model is underperforming. Only counts episodes
+    # written after migration 0014 (older rows didn't record yield).
+    episodes_zero_yield: int
+    # Denominator for the ratio above: episodes that recorded yield
+    # counts at all (post-0014, sync or finished-async writes).
+    episodes_with_yield_data: int
     schemas_count: int
     users_count: int | None  # super_admin only
     orgs_count: int | None
@@ -43,6 +53,21 @@ async def stats(user: CurrentUser, db: DBDep) -> StatsResponse:
     ep_stmt = ep_stmt.group_by(EpisodeMetadata.extraction_status)
     ep_counts: dict[str, int] = dict((await db.execute(ep_stmt)).all())
 
+    # Extraction-yield visibility. Both counts restricted to rows that
+    # actually recorded yield (post-0014) so the ratio is meaningful.
+    yield_base = select(func.count(EpisodeMetadata.id)).where(
+        EpisodeMetadata.extracted_entities_count.is_not(None),
+    )
+    zero_yield_stmt = yield_base.where(
+        EpisodeMetadata.extracted_entities_count == 0,
+        EpisodeMetadata.extracted_facts_count == 0,
+    )
+    if not user.is_super_admin:
+        yield_base = yield_base.where(EpisodeMetadata.namespace.in_(readable_raw))
+        zero_yield_stmt = zero_yield_stmt.where(
+            EpisodeMetadata.namespace.in_(readable_raw)
+        )
+
     schema_stmt = select(func.count(EntitySchema.id))
     if not user.is_super_admin:
         schema_stmt = schema_stmt.where(EntitySchema.namespace.in_(readable_raw))
@@ -57,6 +82,8 @@ async def stats(user: CurrentUser, db: DBDep) -> StatsResponse:
         episodes_total=sum(ep_counts.values()),
         episodes_pending=ep_counts.get("pending", 0),
         episodes_failed=ep_counts.get("failed", 0),
+        episodes_zero_yield=(await db.execute(zero_yield_stmt)).scalar_one(),
+        episodes_with_yield_data=(await db.execute(yield_base)).scalar_one(),
         schemas_count=(await db.execute(schema_stmt)).scalar_one(),
         users_count=None,
         orgs_count=None,

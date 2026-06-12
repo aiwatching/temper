@@ -76,9 +76,14 @@ async def create_episode(
     except memory.MemoryError as exc:
         raise _to_http(exc) from exc
 
-    response.status_code = (
-        status.HTTP_202_ACCEPTED if async_extract else status.HTTP_201_CREATED
-    )
+    if result.skipped:
+        # Acknowledged-but-not-written (quality floor / dedup). 200,
+        # not 201 — nothing new was created.
+        response.status_code = status.HTTP_200_OK
+    else:
+        response.status_code = (
+            status.HTTP_202_ACCEPTED if async_extract else status.HTTP_201_CREATED
+        )
 
     return CreateEpisodeResponse(
         episode_id=result.episode_id,
@@ -96,6 +101,8 @@ async def create_episode(
             for f in result.extracted_facts
         ],
         created_at=result.created_at,
+        skipped=result.skipped,
+        skip_reason=result.skip_reason,
     )
 
 
@@ -139,6 +146,7 @@ async def create_episodes_bulk(
         namespace=result.namespace,
         total_entities=result.total_entities,
         total_facts=result.total_facts,
+        skipped_count=result.skipped_count,
     )
 
 

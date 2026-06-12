@@ -108,6 +108,27 @@ class Settings(BaseSettings):
     # diversity-biased rather than relevance-biased.
     search_reranker: Literal["rrf", "cross_encoder", "mmr"] = "rrf"
 
+    # --- Episode write guards ---
+    # Content quality floor for POST /v1/episodes (+ bulk). Writers in
+    # the wild submit empty / truncated fragments ("→ ok: {") that cost
+    # an LLM extraction round-trip and land as zero-yield noise in the
+    # graph. Policy on content shorter than episode_min_content_chars:
+    #   skip    (default) acknowledge the request (2xx) but don't write
+    #           or extract — response carries skipped=true + reason.
+    #           Invisible to legacy writers that ignore unknown fields.
+    #   reject  422 with a descriptive error. Use once writers handle
+    #           errors properly — makes the problem visible at source.
+    #   off     no guard; behave exactly as before 0014.
+    episode_min_content_policy: Literal["skip", "reject", "off"] = "skip"
+    episode_min_content_chars: int = 20
+
+    # Write-dedup window. A write whose content sha256 matches an
+    # episode in the same namespace within this many hours is
+    # acknowledged (2xx, returns the EXISTING episode_id, skipped=true)
+    # without re-running extraction. Catches retry storms and
+    # double-submitting writers. 0 disables.
+    episode_dedup_window_hours: int = 24
+
     # --- LLM (for entity / relation extraction) ---
     llm_provider: LLMProvider = "openai"
     # If left empty, falls back to LLM_DEFAULTS[provider]

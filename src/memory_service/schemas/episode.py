@@ -47,6 +47,12 @@ class CreateEpisodeResponse(BaseModel):
     extracted_entities: list[EntityOut]
     extracted_facts: list[FactOut]
     created_at: datetime
+    # True when the server acknowledged but didn't extract: content
+    # below the quality floor (episode_id == "") or a dedup hit
+    # (episode_id == the existing episode's id). skip_reason explains
+    # which. Legacy writers that ignore unknown fields are unaffected.
+    skipped: bool = False
+    skip_reason: str | None = None
 
 
 class BulkEpisodeItem(BaseModel):
@@ -74,6 +80,9 @@ class BulkEpisodesResponse(BaseModel):
     namespace: str
     total_entities: int
     total_facts: int
+    # Items dropped by the quality floor / dedup window; episode_ids
+    # excludes them.
+    skipped_count: int = 0
 
 
 class EpisodeStatusResponse(BaseModel):

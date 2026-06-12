@@ -65,3 +65,14 @@ class EpisodeMetadata(Base, TimestampMixin):
         JSON().with_variant(ARRAY(String(512)), "postgresql"),
         default=None,
     )
+    # SHA-256 of the submitted content — powers the write-dedup guard
+    # (same namespace + same hash within the window → acknowledged but
+    # not re-extracted). NULL on pre-0014 rows; they never dedup-match.
+    content_sha256: Mapped[str | None] = mapped_column(
+        String(64), default=None,
+    )
+    # Extraction yield recorded at write time so stats can report
+    # zero-yield episodes without querying the graph. NULL = unknown
+    # (pre-0014 row, or async extraction not finished yet).
+    extracted_entities_count: Mapped[int | None] = mapped_column(default=None)
+    extracted_facts_count: Mapped[int | None] = mapped_column(default=None)

@@ -6,9 +6,10 @@ adapter layer below only sees Graphiti-shaped data.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -50,6 +51,13 @@ class BackendUnavailableError(MemoryError):
 
 class InvalidRequestError(MemoryError):
     http_status = 400
+
+
+class ContentRejectedError(MemoryError):
+    """Raised in `reject` mode when episode content fails the quality
+    floor (too short / empty). 422 so callers can tell a policy
+    rejection apart from a malformed request."""
+    http_status = 422
 
 
 class NamespaceSleepingError(MemoryError):
@@ -96,6 +104,12 @@ class WriteResult:
     extracted_entities: list[ExtractedEntity]
     extracted_facts: list[ExtractedFact]
     created_at: datetime
+    # True when the write was acknowledged but nothing was extracted /
+    # stored: content below the quality floor (episode_id == "") or a
+    # dedup hit (episode_id == the EXISTING episode's id). skip_reason
+    # says which.
+    skipped: bool = False
+    skip_reason: str | None = None
 
 
 @dataclass
@@ -229,6 +243,79 @@ def _write_denied_hint(user: User, ns) -> str:  # type: ignore[no-untyped-def]
 # ---------- public ops ----------
 
 
+def _content_hash(content: str) -> str:
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def _check_content_floor(content: str) -> str | None:
+    """Quality floor for episode content. Returns a human-readable
+    reason when the content fails, None when it passes.
+
+    Behavior on failure depends on settings.episode_min_content_policy
+    (the caller dispatches): `skip` acknowledges without writing,
+    `reject` raises ContentRejectedError, `off` never calls this.
+    """
+    from memory_service.config import get_settings
+
+    settings = get_settings()
+    if settings.episode_min_content_policy == "off":
+        return None
+    stripped = content.strip()
+    if not stripped:
+        return "content is empty"
+    if len(stripped) < settings.episode_min_content_chars:
+        return (
+            f"content is {len(stripped)} chars, below the "
+            f"{settings.episode_min_content_chars}-char quality floor "
+            "(EPISODE_MIN_CONTENT_CHARS)"
+        )
+    return None
+
+
+def _apply_content_policy(reason: str, ns_raw: str) -> WriteResult:
+    """Dispatch a floor failure per the configured policy. Returns the
+    skip-shaped WriteResult for `skip`; raises for `reject`."""
+    from memory_service.config import get_settings
+
+    if get_settings().episode_min_content_policy == "reject":
+        raise ContentRejectedError(f"episode rejected: {reason}")
+    _logger.info("episode skipped (%s) in %s", reason, ns_raw)
+    return WriteResult(
+        episode_id="",
+        namespace=ns_raw,
+        extracted_entities=[],
+        extracted_facts=[],
+        created_at=datetime.now(UTC),
+        skipped=True,
+        skip_reason=reason,
+    )
+
+
+async def _find_recent_duplicate(
+    db: AsyncSession, ns_raw: str, content_hash: str,
+) -> EpisodeMetadata | None:
+    """Dedup lookup: an episode in the same namespace with the same
+    content hash inside the configured window. Returns the newest
+    match, or None when dedup is disabled / no hit."""
+    from memory_service.config import get_settings
+
+    window_hours = get_settings().episode_dedup_window_hours
+    if window_hours <= 0:
+        return None
+    cutoff = datetime.now(UTC) - timedelta(hours=window_hours)
+    stmt = (
+        select(EpisodeMetadata)
+        .where(
+            EpisodeMetadata.namespace == ns_raw,
+            EpisodeMetadata.content_sha256 == content_hash,
+            EpisodeMetadata.created_at >= cutoff,
+        )
+        .order_by(EpisodeMetadata.created_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
 async def add_episode(
     user: User,
     agent_name: str,
@@ -253,6 +340,34 @@ async def add_episode(
     from memory_service.core.consolidation import assert_namespace_unlocked
     assert_namespace_unlocked(ns)
 
+    # Quality floor — catch empty / fragment writes before they cost an
+    # LLM round-trip and land as zero-yield graph noise.
+    floor_reason = _check_content_floor(req.content)
+    if floor_reason is not None:
+        return _apply_content_policy(floor_reason, ns.raw)
+
+    # Write-dedup: identical content in the same namespace within the
+    # window → acknowledge with the EXISTING episode's id, skip
+    # re-extraction. Catches retry storms / double-submitting writers.
+    content_hash = _content_hash(req.content)
+    dup = await _find_recent_duplicate(db, ns.raw, content_hash)
+    if dup is not None:
+        _logger.info(
+            "episode dedup hit in %s — reusing %s", ns.raw, dup.id,
+        )
+        return WriteResult(
+            episode_id=dup.id,
+            namespace=ns.raw,
+            extracted_entities=[],
+            extracted_facts=[],
+            created_at=dup.created_at,
+            skipped=True,
+            skip_reason=(
+                "duplicate of an episode written "
+                f"{dup.created_at.isoformat()} (same content hash)"
+            ),
+        )
+
     client = _require_client()
     reference_time = req.reference_time or datetime.now(UTC)
 
@@ -270,6 +385,7 @@ async def add_episode(
             reference_time=reference_time,
             entity_types=entity_types or None,
             db=db,
+            content_hash=content_hash,
         )
 
     try:
@@ -299,6 +415,9 @@ async def add_episode(
         reference_time=reference_time,
         extraction_status="done",
         graphiti_episode_id=result.episode.uuid,
+        content_sha256=content_hash,
+        extracted_entities_count=len(result.nodes),
+        extracted_facts_count=len(result.edges),
     )
     db.add(meta)
     await db.commit()
@@ -332,7 +451,8 @@ async def add_episode(
 
 async def _add_episode_async(
     *,
-    user, agent_name, req, ns, client, reference_time, entity_types, db
+    user, agent_name, req, ns, client, reference_time, entity_types, db,
+    content_hash=None,
 ):  # type: ignore[no-untyped-def]
     """Synchronous setup + fire-and-forget Graphiti call.
 
@@ -358,6 +478,7 @@ async def _add_episode_async(
         tags=req.tags or [],
         reference_time=reference_time,
         extraction_status="pending",
+        content_sha256=content_hash,
     )
     db.add(meta)
     await db.commit()
@@ -386,6 +507,8 @@ async def _add_episode_async(
                 if row is not None:
                     row.extraction_status = "done"
                     row.graphiti_episode_id = result.episode.uuid
+                    row.extracted_entities_count = len(result.nodes)
+                    row.extracted_facts_count = len(result.edges)
                     await fresh_db.commit()
             except Exception as exc:
                 _logger.exception(
@@ -426,6 +549,9 @@ class BulkWriteResult:
     namespace: str
     total_entities: int
     total_facts: int
+    # Items dropped by the quality floor or the dedup window. The
+    # written episode_ids list excludes them.
+    skipped_count: int = 0
 
 
 async def add_episodes_bulk(
@@ -457,10 +583,50 @@ async def add_episodes_bulk(
     client = _require_client()
     from graphiti_core.utils.bulk_utils import RawEpisode
 
+    # Same quality floor + dedup as single writes, applied per item.
+    # In `reject` mode the first offending item fails the whole batch
+    # (with its index) — half-applied bulks are harder to reason about
+    # than a clean 422. In `skip` mode bad items are dropped and
+    # counted; the rest of the batch proceeds.
+    kept: list[tuple[BulkWriteItem, str]] = []  # (item, content_hash)
+    skipped_count = 0
+    seen_hashes: set[str] = set()
+    for idx, item in enumerate(items):
+        floor_reason = _check_content_floor(item.content)
+        if floor_reason is not None:
+            from memory_service.config import get_settings
+
+            if get_settings().episode_min_content_policy == "reject":
+                raise ContentRejectedError(
+                    f"items[{idx}] rejected: {floor_reason}"
+                )
+            skipped_count += 1
+            continue
+        item_hash = _content_hash(item.content)
+        # Dedup against both the DB window and earlier items in this
+        # same batch (a batch repeating one line 50x should write once).
+        if item_hash in seen_hashes:
+            skipped_count += 1
+            continue
+        if await _find_recent_duplicate(db, ns.raw, item_hash) is not None:
+            skipped_count += 1
+            continue
+        seen_hashes.add(item_hash)
+        kept.append((item, item_hash))
+
+    if not kept:
+        return BulkWriteResult(
+            episode_ids=[],
+            namespace=ns.raw,
+            total_entities=0,
+            total_facts=0,
+            skipped_count=skipped_count,
+        )
+
     now = datetime.now(UTC)
     raws: list[RawEpisode] = []
     metadatas: list[EpisodeMetadata] = []
-    for item in items:
+    for item, _ in kept:
         ref_t = item.reference_time or now
         raws.append(
             RawEpisode(
@@ -487,7 +653,7 @@ async def add_episodes_bulk(
         raise BackendUnavailableError(f"bulk write failed: {exc}") from exc
 
     episode_ids: list[str] = []
-    for episodic_node, item in zip(result.episodes, items):
+    for episodic_node, (item, item_hash) in zip(result.episodes, kept):
         episode_ids.append(episodic_node.uuid)
         metadatas.append(
             EpisodeMetadata(
@@ -498,6 +664,10 @@ async def add_episodes_bulk(
                 source_type=item.source_type,
                 tags=item.tags or [],
                 reference_time=item.reference_time or now,
+                content_sha256=item_hash,
+                # Per-item yield can't be attributed in bulk —
+                # extraction dedups entities across the whole batch.
+                # NULL = unknown, deliberately.
             )
         )
     db.add_all(metadatas)
@@ -508,6 +678,7 @@ async def add_episodes_bulk(
         namespace=ns.raw,
         total_entities=len(result.nodes),
         total_facts=len(result.edges),
+        skipped_count=skipped_count,
     )
 
 

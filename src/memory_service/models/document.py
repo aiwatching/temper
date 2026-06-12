@@ -30,6 +30,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -44,9 +45,14 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from memory_service.models._base import Base, TimestampMixin, UUIDPKMixin
 
-# Documents is Postgres-only by design (GIN, tsvector FTS, JSONB,
-# ARRAY containment). Run TEMPER against Postgres; SQLite paths are
-# not supported.
+# Documents is Postgres-FIRST by design (GIN, tsvector FTS, JSONB,
+# ARRAY containment) — run TEMPER against Postgres. The dialect
+# variants below exist ONLY so `Base.metadata.create_all` works on
+# sqlite for the in-memory test bootstrap; document FTS / tag
+# containment queries are not supported there.
+JSONBVariant = JSON().with_variant(JSONB(), "postgresql")
+TagsVariant = JSON().with_variant(ARRAY(String(64)), "postgresql")
+TSVVariant = Text().with_variant(TSVECTOR(), "postgresql")
 
 
 class Document(Base, UUIDPKMixin, TimestampMixin):
@@ -82,14 +88,14 @@ class Document(Base, UUIDPKMixin, TimestampMixin):
 
     # Auxiliary. GIN-indexable.
     frontmatter: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, default=dict,
+        JSONBVariant, default_factory=dict,
     )
     tags: Mapped[list[str]] = mapped_column(
-        ARRAY(String(64)), default=list,
+        TagsVariant, default_factory=list,
     )
 
     # Maintained by trg_documents_tsv_refresh.
-    content_tsv: Mapped[Any] = mapped_column(TSVECTOR, default="")
+    content_tsv: Mapped[Any] = mapped_column(TSVVariant, default="")
     # Reserved — embedding pipeline lands in N2. BYTEA for now (we'll
     # switch to pgvector's VECTOR type when the extension is required).
     embedding: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
@@ -147,7 +153,7 @@ class DocumentRevision(Base, UUIDPKMixin):
     content: Mapped[str] = mapped_column(Text)
     # Defaulted fields below — dataclass ordering rule.
     frontmatter: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB, default=None,
+        JSONBVariant, default=None,
     )
     revised_at: Mapped[datetime | None] = mapped_column(default=None)
     revised_by: Mapped[str | None] = mapped_column(String(128), default=None)
