@@ -21,16 +21,21 @@ Targets the four pollution patterns found in production (2026-06):
                           to run on the server (docker compose exec).
 
 Default is DRY-RUN: scan + report + write the graph script, mutate
-nothing. Re-run with --apply to execute steps 1-3.
+nothing. Re-run with --apply --i-have-a-backup to execute.
 
-Orphan episodes (graph node exists but has zero MENTIONS edges) are
-reported but only deleted with --orphans: their content is real, they
-are just invisible to graph search. Decide after reading the report.
+SAFETY (learned the hard way — a prior version deleted 1138 episodes):
+deletion targets are chosen by POSITIVE confirmation only. An episode
+is deleted only if we read its content and it matched a junk pattern,
+or /status authoritatively reported extraction_status == "failed".
+Anything unreadable, pending, or that errored during the scan is NEVER
+deleted. Orphan episodes (zero MENTIONS) are report-only — they should
+be re-extracted, not deleted. --apply refuses to run without
+--i-have-a-backup (run ./deploy.sh backup on the server first).
 
 Usage:
-  ./scripts/cleanup_memory.py --base http://host:18088 --token mk_...           # dry-run
-  ./scripts/cleanup_memory.py --base ... --token ... --apply                    # execute
-  ./scripts/cleanup_memory.py --base ... --token ... --apply --orphans          # + orphans
+  ./scripts/cleanup_memory.py --base http://host:18088 --token mk_...                       # dry-run
+  ./scripts/cleanup_memory.py --base ... --token ... --apply --i-have-a-backup              # execute
+  ./scripts/cleanup_memory.py --base ... --token ... --apply --i-have-a-backup --failed     # + failed rows
 """
 from __future__ import annotations
 
@@ -59,10 +64,27 @@ def make_client(base: str, token: str):
         if body is not None:
             data = json.dumps(body).encode()
             headers["Content-Type"] = "application/json"
-        req = urllib.request.Request(base + path, data=data, method=method, headers=headers)
-        with urllib.request.urlopen(req, timeout=60) as r:
-            raw = r.read()
-            return json.loads(raw) if raw.strip() else None
+        # The target server may be under live agent write load — 5xx
+        # and timeouts are transient there. Retry with backoff before
+        # giving up; 4xx are real answers and surface immediately.
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            req = urllib.request.Request(
+                base + path, data=data, method=method, headers=headers,
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    raw = r.read()
+                    return json.loads(raw) if raw.strip() else None
+            except urllib.error.HTTPError as e:
+                if e.code < 500:
+                    raise
+                last_exc = e
+            except (TimeoutError, OSError) as e:
+                last_exc = e
+            import time
+            time.sleep(2 * (attempt + 1))
+        raise last_exc  # type: ignore[misc]
 
     return request
 
@@ -121,8 +143,31 @@ def graphiti_group_id(raw_ns: str) -> str:
 # ---------------------------------------------------------------- steps
 
 
-def scan_episodes(req, namespace: str) -> dict:
-    print("→ 扫描 episodes(逐条拉内容,1000+ 条需要几分钟)...", file=sys.stderr)
+def scan_episodes(req, namespace: str, throttle_ms: int = 0) -> dict:
+    """Classify every episode by POSITIVE signals only.
+
+    SAFETY INVARIANT (the rule a prior version violated and deleted
+    1138 episodes): an episode is only ever put in a *deletable* bucket
+    when we have positively confirmed it belongs there —
+
+      junk     : we read its content and it matched a junk pattern.
+      failed   : /status SQL authoritatively reported extraction_status
+                 == "failed".
+
+    Anything we could not read, or that is "pending", or whose status
+    request errored, goes to a NON-deletable bucket. We NEVER infer
+    "delete this" from absence (e.g. "no graph node found") — async
+    writes legitimately have metadata.id != graph uuid, so absence
+    proves nothing.
+
+    Two requests per episode: /status (cheap, SQL-only, authoritative)
+    then /{id} detail only for `done` episodes (the FalkorDB read for
+    content). `throttle_ms` inserts a pause between episodes to spare
+    FalkorDB's single worker when the live agent is writing.
+    """
+    import time
+
+    print("→ 扫描 episodes(逐条 /status,done 的再读内容)...", file=sys.stderr)
     ns_q = urllib.parse.quote(namespace)
     episodes: list[dict] = []
     cursor = None
@@ -137,40 +182,64 @@ def scan_episodes(req, namespace: str) -> dict:
         if not cursor or not batch:
             break
 
-    junk: list[dict] = []          # {id, reason, preview}
-    unreadable: list[str] = []     # failed/pending — content is None
+    junk: list[dict] = []          # deletable: positively-read junk content
+    failed: list[str] = []         # deletable: status == "failed"
+    pending: list[str] = []        # NOT deletable: still extracting
+    scan_errors: list[str] = []    # NOT deletable: request failed
     ok = 0
     for i, e in enumerate(episodes):
         if i and i % 200 == 0:
             print(f"   ... {i}/{len(episodes)}", file=sys.stderr)
+        eid = e["episode_id"]
         try:
-            detail = req("GET", f"/v1/episodes/{e['episode_id']}")
-        except Exception as exc:
-            unreadable.append(e["episode_id"])
+            st = req("GET", f"/v1/episodes/{eid}/status")
+        except Exception:
+            scan_errors.append(eid)
             continue
-        content = detail.get("content")
-        reason = episode_is_junk(content)
-        if content is None:
-            unreadable.append(e["episode_id"])
-        elif reason:
+        status = st.get("extraction_status")
+        if status == "failed":
+            failed.append(eid)
+            continue
+        if status == "pending":
+            pending.append(eid)
+            continue
+        # status == "done" — read content to test for junk.
+        try:
+            detail = req("GET", f"/v1/episodes/{eid}")
+        except Exception:
+            scan_errors.append(eid)
+            continue
+        reason = episode_is_junk(detail.get("content"))
+        if reason:
             junk.append({
-                "id": e["episode_id"],
+                "id": eid,
                 "reason": reason,
-                "preview": (content or "").strip()[:80],
+                "preview": (detail.get("content") or "").strip()[:80],
             })
         else:
             ok += 1
-    return {"total": len(episodes), "ok": ok, "junk": junk, "unreadable": unreadable}
+        if throttle_ms:
+            time.sleep(throttle_ms / 1000)
+
+    return {"total": len(episodes), "ok": ok, "junk": junk,
+            "failed": failed, "pending": pending, "scan_errors": scan_errors}
 
 
 def scan_orphans(req, namespace: str) -> list[str]:
-    """Graph episodes with no MENTIONS edge. Returns graphiti uuids
-    (== metadata ids for sync writes)."""
-    d = req("POST", "/v1/graph/cypher", {
-        "namespace": namespace,
-        "query": "MATCH (ep:Episodic) WHERE NOT (ep)-[:MENTIONS]->() RETURN ep.uuid AS u",
-    })
-    return [r["u"] for r in d.get("rows", [])]
+    """Report-only: count graph episodic nodes with no MENTIONS edge.
+
+    Returns graph uuids — NOT used for deletion (they aren't metadata
+    ids, and orphans should be re-extracted, not deleted). Purely
+    informational so the report can show coverage."""
+    try:
+        d = req("POST", "/v1/graph/cypher", {
+            "namespace": namespace,
+            "query": "MATCH (ep:Episodic) WHERE NOT (ep)-[:MENTIONS]->() RETURN count(ep) AS c",
+        })
+        rows = d.get("rows", [])
+        return rows[0]["c"] if rows else 0
+    except Exception:
+        return -1  # couldn't measure
 
 
 def scan_blocks(req) -> dict:
@@ -217,6 +286,7 @@ def chat_blocks_to_documents(req, chat_blocks: list[dict], apply: bool) -> list[
         by_chat[m.group(1)].append({"ts": int(m.group(2)), "block": b})
 
     paths = []
+    failed: list[str] = []
     for chat_id, segs in sorted(by_chat.items()):
         segs.sort(key=lambda s: s["ts"])
         parts = [f"# Chat {chat_id} — session summaries\n"]
@@ -225,15 +295,32 @@ def chat_blocks_to_documents(req, chat_blocks: list[dict], apply: bool) -> list[
             text = val.get("text") if isinstance(val, dict) else str(val)
             parts.append(f"\n## segment @{s['ts']}\n\n{text}\n")
         path = f"chats/{chat_id}.md"
-        paths.append(path)
         if apply:
-            req("PUT", f"/v1/documents/{path}", {
-                "title": f"Chat {chat_id} summaries",
-                "content": "".join(parts),
-                "source": "cleanup-migration",
-                "tags": ["chat-summary", "migrated"],
-            })
-    return paths
+            # Per-chat failures must not abort the whole run — retry
+            # once (transient 5xx happens when the live agent is
+            # writing concurrently), then record and move on. Blocks
+            # belonging to failed chats are NOT deleted by the caller.
+            ok = False
+            for _attempt in range(2):
+                try:
+                    req("PUT", f"/v1/documents/{path}", {
+                        "title": f"Chat {chat_id} summaries",
+                        "content": "".join(parts),
+                        "source": "cleanup-migration",
+                        "tags": ["chat-summary", "migrated"],
+                    })
+                    ok = True
+                    break
+                except Exception as exc:
+                    last_err = exc
+            if not ok:
+                print(f"  ! chat {chat_id}: {last_err}")
+                failed.append(chat_id)
+                continue
+        paths.append(path)
+    if failed:
+        print(f"  ! {len(failed)} chat(s) failed to migrate — their blocks are kept")
+    return paths, failed
 
 
 def write_graph_script(namespace: str, junk_entities: list[dict], out_path: str) -> None:
@@ -279,15 +366,30 @@ def main() -> None:
     ap.add_argument("--namespace", default=None,
                     help="Target namespace. Default: the token's own agent namespace (resolved via /v1/namespaces).")
     ap.add_argument("--apply", action="store_true", help="Execute deletions/migration (default: dry-run)")
-    ap.add_argument("--orphans", action="store_true",
-                    help="ALSO delete orphan episodes (graph node with no MENTIONS). Off by default.")
     ap.add_argument("--failed", action="store_true",
-                    help="ALSO delete unreadable episodes (extraction failed/pending — "
-                         "postgres metadata only, content was never stored). Off by default.")
+                    help="ALSO delete episodes whose extraction_status is "
+                         "authoritatively 'failed' (no graph data was ever "
+                         "produced). Positively confirmed via /status; never "
+                         "inferred. Off by default.")
+    ap.add_argument("--throttle-ms", type=int, default=0,
+                    help="Pause between per-episode reads to spare FalkorDB's "
+                         "single worker when the live agent is writing. e.g. 50")
+    ap.add_argument("--i-have-a-backup", action="store_true",
+                    help="Required with --apply: confirms you ran "
+                         "'./deploy.sh backup' on the server first. There is no "
+                         "undo for deletions.")
     ap.add_argument("--graph-script", default=".data/cleanup-graph.sh",
                     help="Output path for the server-side junk-entity removal script "
                          "(default under .data/ — runtime artifacts dir, gitignored)")
     args = ap.parse_args()
+
+    if args.apply and not args.i_have_a_backup:
+        sys.exit(
+            "REFUSING to --apply without --i-have-a-backup.\n"
+            "Deletions are irreversible and this service has no automatic\n"
+            "snapshots. On the server run:  ./deploy.sh backup\n"
+            "then re-run with --apply --i-have-a-backup."
+        )
 
     req = make_client(args.base, args.token)
 
@@ -302,24 +404,27 @@ def main() -> None:
     print(f"mode:      {'APPLY' if args.apply else 'DRY-RUN'}\n")
 
     # ---- scan ----
-    ep = scan_episodes(req, ns)
-    orphans = scan_orphans(req, ns)
+    ep = scan_episodes(req, ns, throttle_ms=args.throttle_ms)
     junk_ids = {j["id"] for j in ep["junk"]}
-    orphan_only = [u for u in orphans if u not in junk_ids]
+    orphan_count = scan_orphans(req, ns)
     bl = scan_blocks(req)
     en = scan_entities(req, ns)
 
     # ---- report ----
     print("== EPISODES ==")
-    print(f"  total {ep['total']} | clean {ep['ok']} | junk {len(ep['junk'])} | unreadable(failed/pending) {len(ep['unreadable'])}")
+    print(f"  total {ep['total']} | clean {ep['ok']} | junk {len(ep['junk'])} (deletable)")
     for j in ep["junk"][:10]:
         print(f"    [{j['reason']}] {j['preview']!r}")
     if len(ep["junk"]) > 10:
         print(f"    ... and {len(ep['junk']) - 10} more")
-    print(f"  orphans (in graph, zero MENTIONS, excl. junk): {len(orphan_only)}"
-          + ("  → WILL DELETE (--orphans)" if args.orphans else "  → kept (pass --orphans to delete)"))
-    print(f"  unreadable (failed/pending, content never stored): {len(ep['unreadable'])}"
+    print(f"  failed (status=failed, no graph data): {len(ep['failed'])}"
           + ("  → WILL DELETE (--failed)" if args.failed else "  → kept (pass --failed to delete)"))
+    print(f"  pending (still extracting): {len(ep['pending'])}  → NEVER deleted")
+    if ep["scan_errors"]:
+        print(f"  scan errors (read failed — NEVER deleted, re-run to retry): {len(ep['scan_errors'])}")
+    if orphan_count >= 0:
+        print(f"  orphans (in graph, zero MENTIONS): {orphan_count}  → report only "
+              "(re-extract candidates, never auto-deleted)")
 
     print("\n== BLOCKS ==")
     print(f"  total {bl['total']} | fact:* {len(bl['fact'])} (delete) | chat:*:summary {len(bl['chat'])} (migrate→documents) | other {bl['other_count']} (kept)")
@@ -341,8 +446,10 @@ def main() -> None:
     # ---- apply ----
     print("\n== APPLYING ==")
     deleted_eps = 0
-    targets = list(junk_ids) + (orphan_only if args.orphans else []) \
-        + (ep["unreadable"] if args.failed else [])
+    # ONLY positively-classified deletables. junk = read-confirmed junk
+    # content; failed = /status-confirmed extraction failure. Never
+    # orphans, never pending, never scan-errors.
+    targets = list(junk_ids) + (ep["failed"] if args.failed else [])
     for i, eid in enumerate(targets):
         try:
             req("DELETE", f"/v1/episodes/{eid}")
@@ -353,17 +460,23 @@ def main() -> None:
             print(f"  ... episodes {i}/{len(targets)}")
     print(f"  episodes deleted: {deleted_eps}/{len(targets)}")
 
-    paths = chat_blocks_to_documents(req, bl["chat"], apply=True)
+    paths, failed_chats = chat_blocks_to_documents(req, bl["chat"], apply=True)
     print(f"  chat summaries migrated into {len(paths)} documents")
 
+    # Don't delete summary blocks for chats whose document failed to
+    # write — that would destroy the only copy.
+    deletable_chat = [
+        b for b in bl["chat"]
+        if not any(b["block_key"].startswith(f"chat:{cid}:") for cid in failed_chats)
+    ]
     deleted_blocks = 0
-    for b in bl["fact"] + bl["chat"]:
+    for b in bl["fact"] + deletable_chat:
         try:
             req("DELETE", f"/v1/memory/blocks/{urllib.parse.quote(b['block_key'], safe='')}")
             deleted_blocks += 1
         except Exception as exc:
             print(f"  ! block {b['block_key']}: {exc}")
-    print(f"  blocks deleted: {deleted_blocks}/{len(bl['fact']) + len(bl['chat'])}")
+    print(f"  blocks deleted: {deleted_blocks}/{len(bl['fact']) + len(deletable_chat)}")
 
     print("\n完成。下一步: 把 graph 手术脚本拷到服务器执行,然后跑")
     print("  curl -X POST .../v1/admin/communities/build   # 重建社区聚类")
