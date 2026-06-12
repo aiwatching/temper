@@ -68,11 +68,34 @@
         this.building = true; this.error = null; this.msg = null;
         const params = this.ns ? `?namespace=${encodeURIComponent(this.ns)}` : "";
         try {
-          const out = await window.ms.json(`/v1/admin/communities/build${params}`, { method: "POST" });
-          this.msg = `Created ${out.communities_created} communities, ${out.community_edges_created} edges in ${out.namespace}.`;
-          await this.load();
+          // The build runs in the background (202) so it can't wedge the
+          // service. Kick it off, then poll the status endpoint.
+          const start = await window.ms.json(`/v1/admin/communities/build${params}`, { method: "POST" });
+          this.msg = "Build started — running in the background. Polling…";
+          await this.pollUntilDone(start.namespace);
         } catch (e) { this.error = e.message; }
         finally { this.building = false; }
+      },
+      async pollUntilDone(ns) {
+        const params = ns ? `?namespace=${encodeURIComponent(ns)}` : "";
+        for (let i = 0; i < 600; i++) {            // up to ~30 min @ 3s
+          await new Promise(r => setTimeout(r, 3000));
+          let s;
+          try {
+            s = await window.ms.json(`/v1/admin/communities/build/status${params}`);
+          } catch (e) { this.error = e.message; return; }
+          if (s.status === "done") {
+            this.msg = `Created ${s.communities_created} communities, ${s.community_edges_created} edges in ${s.namespace}.`;
+            await this.load();
+            return;
+          }
+          if (s.status === "failed") {
+            this.error = "Build failed: " + (s.error || "unknown");
+            return;
+          }
+          this.msg = "Building in the background… (safe to leave this page)";
+        }
+        this.msg = "Build is still running — check back later.";
       },
     };
   }

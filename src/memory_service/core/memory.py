@@ -53,6 +53,13 @@ class InvalidRequestError(MemoryError):
     http_status = 400
 
 
+class ConflictError(MemoryError):
+    """A long-running job is already in progress for this resource —
+    e.g. a second community build on a namespace that's still building.
+    Maps to HTTP 409."""
+    http_status = 409
+
+
 class ContentRejectedError(MemoryError):
     """Raised in `reject` mode when episode content fails the quality
     floor (too short / empty). 422 so callers can tell a policy
@@ -1279,24 +1286,43 @@ async def reindex_embeddings(
     }
 
 
-async def build_communities(
-    user: User, raw_namespace: str | None, db: AsyncSession
-) -> dict[str, Any]:
-    """Run Graphiti's clustering pass on a namespace, creating Community
-    nodes that summarize related-entity neighborhoods.
+# ---------- community build: background job + single-flight lock ----------
+#
+# Community building runs Graphiti's clustering + an LLM summary per
+# community. It hammers FalkorDB's single worker for the whole run, so
+# (a) only one build per namespace may run at a time — a second request
+# gets 409 instead of piling a second heavy load onto the same worker
+# (which is how the service wedged), and (b) it runs in a background
+# task so the HTTP request returns immediately and the API stays
+# responsive (health, blocks, documents, auth are all Postgres and keep
+# working while the graph build proceeds).
+#
+# {namespace_raw: {status, started_at, finished_at, result, error, deadline}}
+_community_jobs: dict[str, dict[str, Any]] = {}
+# A build that runs longer than this is treated as dead and a new one
+# may start. Generous — LLM-per-community on a big namespace is slow.
+_COMMUNITY_JOB_TTL_SECONDS = 30 * 60
 
-    Requires write permission on the target namespace (Communities mutate
-    the graph). Returns the count of created nodes + edges; the actual
-    nodes show up under `kind="Community"` in subsequent /v1/graph and
-    /v1/search calls.
-    """
-    try:
-        ns = resolve(raw_namespace, user)
-    except NamespaceError as exc:
-        raise InvalidRequestError(str(exc)) from exc
-    if not await can_write(user, ns, db):
-        raise PermissionDeniedError(_write_denied_hint(user, ns))
 
+def _community_job_live(ns_raw: str) -> dict[str, Any] | None:
+    """Return the in-flight job for a namespace, or None. Expired
+    `running` jobs are reaped so a stuck build doesn't lock forever."""
+    import time as _time
+
+    job = _community_jobs.get(ns_raw)
+    if job is None:
+        return None
+    if job["status"] == "running" and _time.monotonic() > job["deadline"]:
+        _logger.warning("community build for %s exceeded TTL — reaped", ns_raw)
+        job["status"] = "failed"
+        job["error"] = "build exceeded time limit and was abandoned"
+        return None
+    return job
+
+
+async def _do_build_communities(ns: Namespace) -> dict[str, Any]:
+    """The actual Graphiti clustering call. No perm check (the caller
+    did it). Returns the created counts."""
     client = _require_client()
     encoded = ns.as_graphiti_group_id()
     # Graphiti's handle_multiple_group_ids decorator only clones the driver
@@ -1304,19 +1330,114 @@ async def build_communities(
     # self.driver (pinned to `default_db`, empty). Pass the cloned driver
     # explicitly so we hit the right per-namespace graph.
     driver = _driver_for_namespace(client, ns)
-    try:
-        nodes, edges = await client.build_communities(
-            group_ids=[encoded], driver=driver
-        )
-    except Exception as exc:
-        _logger.exception("build_communities failed for %s", ns.raw)
-        raise BackendUnavailableError(f"build_communities failed: {exc}") from exc
-
+    nodes, edges = await client.build_communities(
+        group_ids=[encoded], driver=driver
+    )
     return {
         "namespace": ns.raw,
         "communities_created": len(nodes),
         "community_edges_created": len(edges),
     }
+
+
+async def start_community_build(
+    user: User, raw_namespace: str | None, db: AsyncSession
+) -> dict[str, Any]:
+    """Kick off a community build in the background.
+
+    Perm check + single-flight lock happen synchronously so the caller
+    gets 403 / 409 immediately. The heavy Graphiti work runs in a
+    detached task; poll `community_build_status` for the result.
+    """
+    import asyncio
+    import time as _time
+
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_write(user, ns, db):
+        raise PermissionDeniedError(_write_denied_hint(user, ns))
+
+    live = _community_job_live(ns.raw)
+    if live is not None and live["status"] == "running":
+        raise ConflictError(
+            f"A community build for {ns.raw!r} is already running "
+            f"(started {live['started_at']}). Wait for it to finish — "
+            "running two at once overloads the graph worker."
+        )
+
+    # Make sure Graphiti is actually up before we report "running".
+    _require_client()
+
+    started_iso = datetime.now(UTC).isoformat()
+    _community_jobs[ns.raw] = {
+        "status": "running",
+        "started_at": started_iso,
+        "finished_at": None,
+        "result": None,
+        "error": None,
+        "deadline": _time.monotonic() + _COMMUNITY_JOB_TTL_SECONDS,
+    }
+
+    async def _run() -> None:
+        try:
+            result = await _do_build_communities(ns)
+            job = _community_jobs.get(ns.raw)
+            if job is not None:
+                job["status"] = "done"
+                job["result"] = result
+                job["finished_at"] = datetime.now(UTC).isoformat()
+            _logger.info(
+                "community build done for %s: %d communities, %d edges",
+                ns.raw, result["communities_created"],
+                result["community_edges_created"],
+            )
+        except Exception as exc:
+            _logger.exception("community build failed for %s", ns.raw)
+            job = _community_jobs.get(ns.raw)
+            if job is not None:
+                job["status"] = "failed"
+                job["error"] = str(exc)[:500]
+                job["finished_at"] = datetime.now(UTC).isoformat()
+
+    asyncio.create_task(_run())
+
+    return {
+        "namespace": ns.raw,
+        "status": "running",
+        "started_at": started_iso,
+    }
+
+
+async def community_build_status(
+    user: User, raw_namespace: str | None, db: AsyncSession
+) -> dict[str, Any]:
+    """Poll the latest community build for a namespace. `status` is
+    idle | running | done | failed; counts are present when done."""
+    try:
+        ns = resolve(raw_namespace, user)
+    except NamespaceError as exc:
+        raise InvalidRequestError(str(exc)) from exc
+    if not await can_read(user, ns, db):
+        raise PermissionDeniedError(
+            f"User '{user.email}' has no read access to namespace '{ns.raw}'"
+        )
+
+    job = _community_job_live(ns.raw) or _community_jobs.get(ns.raw)
+    if job is None:
+        return {"namespace": ns.raw, "status": "idle"}
+    out: dict[str, Any] = {
+        "namespace": ns.raw,
+        "status": job["status"],
+        "started_at": job["started_at"],
+        "finished_at": job["finished_at"],
+        "error": job["error"],
+    }
+    if job["result"]:
+        out["communities_created"] = job["result"]["communities_created"]
+        out["community_edges_created"] = job["result"]["community_edges_created"]
+    return out
 
 
 async def run_cypher(

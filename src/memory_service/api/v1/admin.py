@@ -23,10 +23,16 @@ from memory_service.schemas.admin_import import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-class BuildCommunitiesResponse(BaseModel):
+class CommunityBuildStatus(BaseModel):
     namespace: str
-    communities_created: int
-    community_edges_created: int
+    # idle (never run) | running | done | failed
+    status: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    error: str | None = None
+    # Present once status == done.
+    communities_created: int | None = None
+    community_edges_created: int | None = None
 
 
 class ReindexEmbeddingsResponse(BaseModel):
@@ -128,7 +134,11 @@ async def resummarize_entity(
     return ResummarizeEntityResponse(**result)
 
 
-@router.post("/communities/build", response_model=BuildCommunitiesResponse)
+@router.post(
+    "/communities/build",
+    response_model=CommunityBuildStatus,
+    status_code=202,
+)
 async def build_communities(
     user: CurrentUser,
     db: DBDep,
@@ -139,16 +149,39 @@ async def build_communities(
             "user:<id>. Requires write permission on the namespace."
         ),
     ] = None,
-) -> BuildCommunitiesResponse:
-    """Run Graphiti's clustering on a namespace's entities, producing
+) -> CommunityBuildStatus:
+    """Start Graphiti's clustering on a namespace's entities, producing
     Community nodes + edges that summarize related neighborhoods.
 
+    Runs in the BACKGROUND and returns 202 immediately — the build
+    hammers FalkorDB's single worker for minutes, so blocking the
+    request (and piling on concurrent builds) is what wedged the
+    service before. Poll GET /v1/admin/communities/build/status to see
+    when it finishes. A second build on a namespace that's already
+    building gets 409.
+
     Idempotent-ish: re-running re-evaluates clusters from the current
-    graph state. Existing Communities aren't automatically pruned —
-    they stay until explicitly removed.
+    graph state. Existing Communities aren't auto-pruned.
     """
     try:
-        result = await memory.build_communities(user, namespace, db)
+        result = await memory.start_community_build(user, namespace, db)
     except memory.MemoryError as exc:
         raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
-    return BuildCommunitiesResponse(**result)
+    return CommunityBuildStatus(**result)
+
+
+@router.get("/communities/build/status", response_model=CommunityBuildStatus)
+async def build_communities_status(
+    user: CurrentUser,
+    db: DBDep,
+    namespace: Annotated[
+        str | None,
+        Query(description="Namespace to check. Defaults to caller's own user:<id>."),
+    ] = None,
+) -> CommunityBuildStatus:
+    """Poll the latest community build for a namespace."""
+    try:
+        result = await memory.community_build_status(user, namespace, db)
+    except memory.MemoryError as exc:
+        raise HTTPException(status_code=exc.http_status, detail=str(exc)) from exc
+    return CommunityBuildStatus(**result)
