@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -30,10 +30,12 @@ def graphiti_up():
     """Make _require_client() pass + the inner build a fast no-op."""
     from memory_service.core import memory
 
+    # _do_build_communities is sync now (it's handed to asyncio.to_thread),
+    # so a plain MagicMock returning the dict is what the thread invokes.
     with patch.object(memory, "get_graphiti", return_value=SimpleNamespace()), \
          patch.object(
              memory, "_do_build_communities",
-             AsyncMock(return_value={
+             MagicMock(return_value={
                  "namespace": "x",
                  "communities_created": 3,
                  "community_edges_created": 5,

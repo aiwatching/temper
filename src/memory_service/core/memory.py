@@ -1320,24 +1320,57 @@ def _community_job_live(ns_raw: str) -> dict[str, Any] | None:
     return job
 
 
-async def _do_build_communities(ns: Namespace) -> dict[str, Any]:
-    """The actual Graphiti clustering call. No perm check (the caller
-    did it). Returns the created counts."""
-    client = _require_client()
+async def _build_communities_in_fresh_client(ns: Namespace) -> dict[str, Any]:
+    """Run the clustering against a FRESHLY built Graphiti client.
+
+    Must only be called inside a worker thread's own event loop (see
+    `_do_build_communities`). The shared singleton client is bound to
+    the main event loop and can't be driven from another loop; a
+    throwaway client built here is bound to THIS loop, so its FalkorDB
+    driver calls are safe.
+    """
+    from memory_service.adapters.graphiti_client import _build_graphiti
+    from memory_service.config import get_settings
+
+    client, status = _build_graphiti(get_settings())
+    if client is None:
+        raise BackendUnavailableError(
+            f"Graphiti unavailable for community build: {status.detail}"
+        )
     encoded = ns.as_graphiti_group_id()
-    # Graphiti's handle_multiple_group_ids decorator only clones the driver
-    # when len(group_ids) > 1; with a single id it falls through to
-    # self.driver (pinned to `default_db`, empty). Pass the cloned driver
-    # explicitly so we hit the right per-namespace graph.
     driver = _driver_for_namespace(client, ns)
-    nodes, edges = await client.build_communities(
-        group_ids=[encoded], driver=driver
-    )
+    try:
+        nodes, edges = await client.build_communities(
+            group_ids=[encoded], driver=driver
+        )
+    finally:
+        # Close the throwaway driver so we don't leak a connection per
+        # build. Best-effort — not all driver versions expose close().
+        close = getattr(getattr(client, "driver", None), "close", None)
+        if close is not None:
+            try:
+                res = close()
+                if res is not None:
+                    await res
+            except Exception:  # noqa: BLE001
+                pass
     return {
         "namespace": ns.raw,
         "communities_created": len(nodes),
         "community_edges_created": len(edges),
     }
+
+
+def _do_build_communities(ns: Namespace) -> dict[str, Any]:
+    """Synchronous entry point meant to be handed to a worker thread via
+    asyncio.to_thread. Spins up its OWN event loop (asyncio.run) so the
+    CPU-heavy clustering + the build's FalkorDB calls run entirely off
+    the main event loop — otherwise the build blocks every other request
+    (even pure-Postgres ones), which wedged the whole service.
+    """
+    import asyncio as _asyncio
+
+    return _asyncio.run(_build_communities_in_fresh_client(ns))
 
 
 async def start_community_build(
@@ -1367,7 +1400,8 @@ async def start_community_build(
             "running two at once overloads the graph worker."
         )
 
-    # Make sure Graphiti is actually up before we report "running".
+    # Make sure Graphiti is configured before we report "running" (the
+    # actual build builds its own client inside the worker thread).
     _require_client()
 
     started_iso = datetime.now(UTC).isoformat()
@@ -1382,7 +1416,9 @@ async def start_community_build(
 
     async def _run() -> None:
         try:
-            result = await _do_build_communities(ns)
+            # Offload to a worker thread (own event loop + fresh client)
+            # so the CPU-heavy clustering never blocks the main loop.
+            result = await asyncio.to_thread(_do_build_communities, ns)
             job = _community_jobs.get(ns.raw)
             if job is not None:
                 job["status"] = "done"
