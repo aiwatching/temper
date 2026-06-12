@@ -126,12 +126,13 @@
               <label>agent slug</label>
               <div>
                 <input type="text" x-model="newKey.agent_slug" placeholder="english-coach"
-                       pattern="[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?"
                        @input="newKey._slugTouched = true"
                        style="padding:4px 6px; border:1px solid var(--border); border-radius:4px; font-family:monospace; width:240px">
                 <small style="color:var(--muted); margin-left:6px">
                   scopes memory to <code>agent:&lt;you&gt;/<span x-text="newKey.agent_slug || '…'"></span></code>;
-                  clear to share with all your agents (legacy)
+                  normalized server-side, so anything works. Reuse a slug to
+                  give another key the SAME memory; clear to share across all
+                  your agents (legacy).
                 </small>
               </div>
             </div>
@@ -351,9 +352,10 @@
         )) return;
         this.rotating = true; this.error = null;
         try {
-          // Revoke FIRST in the rotate case — the unique (user_id, agent_slug)
-          // constraint would otherwise reject the new key. We still recover
-          // gracefully if the create fails (the user can re-create manually).
+          // Revoke the old key first so the rotated name doesn't leave two
+          // live keys behind. (Same-slug duplicates are allowed now, so this
+          // is about hygiene, not a constraint — a failed create just means
+          // the user re-creates manually.)
           await window.ms.fetch(`/v1/users/me/api-keys/${k.id}`, { method: "DELETE" });
           const body = { agent_name: k.agent_name };
           if (k.agent_slug) body.agent_slug = k.agent_slug;
@@ -608,6 +610,29 @@
           "   the user before applying. The /apply call is destructive and",
           "   irreversible (invalidated facts can be reactivated; deleted",
           "   episodes cannot).",
+          "",
+          "═══ What to capture — the DURABILITY TEST ═══",
+          "",
+          "Before writing ANYTHING ask: will this still matter in 30 days?",
+          "Most of a turn is NOT worth storing — it already lives in the",
+          "transcript. Capture the durable lesson, never the transient run.",
+          "",
+          "  DURABLE (write):   people / ownership, infra + access paths,",
+          "                     system behaviours + constraints, user prefs",
+          "  EPHEMERAL (skip):  individual build / pipeline / run outcomes,",
+          "                     one-off task dispatches, transient UI states,",
+          "                     protocol noise, what was just said this turn",
+          "",
+          "  ✗ \"Build #1927 on branch X failed\"   (a run — ephemeral)",
+          "  ✓ \"ESX builds need MODEL=FNAC_ESX\"    (the lesson — durable)",
+          "",
+          "Identifiers (MR / bug / pipeline #) go INSIDE a sentence about the",
+          "fact, never as the standalone subject — a bare '!14886' becomes a",
+          "junk graph entity that pollutes search. Do NOT mirror extracted",
+          "facts into `fact:*` blocks (they're already graph edges), and do",
+          "NOT write per-turn `chat:*` summary blocks (use ONE note_save",
+          "document per chat). If a write returns skipped:true, the server",
+          "rejected it as junk/duplicate — fix the summarizer, don't retry.",
           "",
           "═══ When to call ═══",
           "",
@@ -907,6 +932,28 @@
           "- **Forgetting policy** — explicit forget = new episode + optional",
           "  PATCH invalid_at.",
           "",
+          "### What to capture (the durability test)",
+          "",
+          "Before writing, ask: **will this matter in 30 days?** Most of a",
+          "turn already lives in the transcript — store the durable lesson,",
+          "not the transient run.",
+          "",
+          "- **Durable** (write): people / ownership, infra + access paths,",
+          "  system behaviours + constraints, user preferences.",
+          "- **Ephemeral** (skip): individual build / pipeline / run outcomes,",
+          "  one-off task dispatches, transient UI states, what was just said.",
+          "",
+          "```",
+          "✗ \"Build #1927 on branch X failed\"   (a run — ephemeral)",
+          "✓ \"ESX builds need MODEL=FNAC_ESX\"    (the lesson — durable)",
+          "```",
+          "",
+          "MR / bug / pipeline numbers go INSIDE the sentence, never as the",
+          "standalone subject (a bare `!14886` becomes junk graph noise).",
+          "Don't mirror facts into `fact:*` blocks (already graph edges); don't",
+          "write per-turn `chat:*` summary blocks (one `note_save` doc per chat).",
+          "A `skipped: true` write response means the server rejected junk/dup.",
+          "",
           "### Rules of thumb",
           "",
           "- One discrete fact per episode. Never dump whole transcripts.",
@@ -1086,8 +1133,35 @@
           "  intent routing    not every question needs memory — decide first",
           "  forgetting        explicit-forget = new episode (+ optional PATCH)",
           "",
+          "═══ What to capture — the DURABILITY TEST (read this) ═══",
+          "",
+          "Before writing ANYTHING ask: will this matter in 30 days? Most of",
+          "a run is NOT worth storing — it already lives in the transcript.",
+          "Capture the durable lesson, never the transient run.",
+          "",
+          "  DURABLE (write):   people / ownership, infra + access paths,",
+          "                     system behaviours + constraints, user prefs",
+          "  EPHEMERAL (skip):  individual build / pipeline / run outcomes,",
+          "                     one-off task dispatches, transient UI states,",
+          "                     protocol noise, what was just said this turn",
+          "",
+          "  ✗ \"Build #1927 on branch X failed\"   (a run — ephemeral)",
+          "  ✓ \"ESX builds need MODEL=FNAC_ESX\"    (the lesson — durable)",
+          "",
+          "  • Identifiers (MR / bug / pipeline #) go INSIDE a sentence about",
+          "    the fact — never as the standalone subject. A bare '!14886' or",
+          "    'Build #19' becomes a junk graph entity that pollutes search.",
+          "  • Do NOT write `fact:*` memory blocks — facts belong in episodes",
+          "    only; a fact block duplicates a graph edge and bloats the prompt.",
+          "  • Do NOT write per-turn `chat:<id>:summary:<ts>` blocks. If a",
+          "    running summary is worth keeping it's a DOCUMENT: one",
+          "    note_save('chats/<chat_id>.md', …) overwritten with the latest.",
+          "  • A write that returns `skipped: true` was rejected as junk or a",
+          "    duplicate — that's a signal to fix the summarizer, not retry.",
+          "",
           "═══ Rules ═══",
           "  • One discrete fact per write — never whole transcripts.",
+          "  • Batch a turn's durable facts into ONE episode, not N writes.",
           "  • Never store credentials, tokens, full PII without consent.",
           "  • Contradictions: write the new state; service retires the old.",
           "  • reference_time = when it happened, not when you recorded it.",
