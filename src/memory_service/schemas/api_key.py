@@ -6,18 +6,18 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-_AGENT_SLUG_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$"
-
-
 class CreateAPIKeyRequest(BaseModel):
     agent_name: str = Field(min_length=1, max_length=128)
     # When set, requests via this key default to namespace
-    # `agent:<user_id>/<agent_slug>`. Two keys with the same slug (same user)
-    # share memory — that's how you opt into cross-agent recall on purpose.
-    # Leave null to keep the legacy unscoped behaviour (writes to user:<id>).
-    agent_slug: str | None = Field(
-        default=None, pattern=_AGENT_SLUG_PATTERN, max_length=64
-    )
+    # `agent:<user_id>/<agent_slug>`. Multiple keys with the same slug
+    # (same user) share memory — that's how you give several agents /
+    # machines their own credential for one namespace. Leave null to
+    # keep the legacy unscoped behaviour (writes to user:<id>).
+    #
+    # NOT pattern-validated: the server slugifies whatever you send
+    # (lowercase, hyphenate, trim) so input is lenient and a slug is
+    # never stored in a form the namespace parser would reject.
+    agent_slug: str | None = Field(default=None, max_length=128)
 
 
 class APIKeyResponse(BaseModel):
@@ -63,6 +63,7 @@ class APIKeyScopeUpdate(BaseModel):
     explicit `namespace=agent:<id>/<old-slug>` and via the user's
     default cross-agent search).
     """
-    agent_slug: str | None = Field(
-        ..., pattern=_AGENT_SLUG_PATTERN, max_length=64
-    )
+    # Not pattern-validated — the server slugifies it (see
+    # core.namespaces.slugify_agent_slug). Send null / "" to clear the
+    # scope. Anything else is normalized to a valid slug.
+    agent_slug: str | None = Field(..., max_length=128)

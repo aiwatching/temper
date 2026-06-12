@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from memory_service.models._base import Base, TimestampMixin, UUIDPKMixin
@@ -16,9 +16,10 @@ from memory_service.models._base import Base, TimestampMixin, UUIDPKMixin
 
 class APIKey(Base, UUIDPKMixin, TimestampMixin):
     __tablename__ = "api_keys"
-    __table_args__ = (
-        UniqueConstraint("user_id", "agent_slug", name="uq_api_keys_user_agent_slug"),
-    )
+    # No unique constraint on (user_id, agent_slug): multiple keys may
+    # share one slug on purpose — each agent / machine gets its own
+    # credential while writing into the same agent:<user_id>/<slug>
+    # namespace. Auth identity is the unique key_hash, not the slug.
 
     user_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True

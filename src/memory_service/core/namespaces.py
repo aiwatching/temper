@@ -46,6 +46,24 @@ NamespaceKind = Literal["user", "agent", "group", "org", "public"]
 # 1–64 chars. Same conventions as org/group slugs to keep namespace strings
 # readable + URL-safe.
 _AGENT_SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
+_SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify_agent_slug(text: str | None) -> str | None:
+    """Coerce arbitrary text into a valid agent_slug, or None.
+
+    Lowercase, collapse every run of non-alnum into a single hyphen,
+    trim hyphens, cap at 64. Guarantees the result matches
+    `_AGENT_SLUG_RE` (or is None when nothing usable remains). Used
+    everywhere a slug enters the system — API-key create / scope edit,
+    onboarding username → slug — so a slug is sanitized once at the
+    edge and is never stored in a form the namespace parser would
+    later reject.
+    """
+    if text is None:
+        return None
+    s = _SLUG_INVALID_RE.sub("-", text.lower()).strip("-")[:64].strip("-")
+    return s or None
 
 
 @dataclass(frozen=True)

@@ -163,15 +163,18 @@ async def provision(
     await db.flush()
     db.add(UserGroupMembership(user_id=u.id, group_id=group.id, role="member"))
 
-    # ---- API key, scoped to username ----
-    # agent_slug = username puts the key's default namespace at
-    # agent:<user_id>/<username>, which is the predictable place for
-    # the user's own agent to read/write.
+    # ---- API key, scoped to a slug derived from the username ----
+    # agent_slug puts the key's default namespace at
+    # agent:<user_id>/<slug>. The username is slugified first — a raw
+    # username with '_' / '.' / uppercase would be an invalid slug the
+    # namespace parser later rejects (the key couldn't even write), and
+    # the scope-edit UI couldn't save it. _slugify keeps it valid.
+    api_slug = _slugify(username) or "agent"
     plaintext = generate_api_key()
     api_key = APIKey(
         user_id=u.id,
         agent_name=(payload.display_name or username),
-        agent_slug=username,
+        agent_slug=api_slug,
         key_hash=hash_api_key(plaintext),
         prefix=api_key_prefix(plaintext),
     )
@@ -192,7 +195,7 @@ async def provision(
         must_change_password=True,
         api_key=plaintext,
         api_key_prefix=api_key.prefix,
-        api_key_agent_slug=api_key.agent_slug or username,
+        api_key_agent_slug=api_key.agent_slug or api_slug,
         created=ProvisionCreatedFlags(
             org=org_created,
             group=group_created,

@@ -73,10 +73,13 @@
     document.querySelectorAll("button.edit-scope").forEach(b => b.addEventListener("click", async () => {
       const current = b.dataset.slug || "";
       const next = prompt(
-        "New agent_slug (lowercase letters, digits, hyphens; ≤64 chars).\n" +
-        "Leave blank to clear (key becomes legacy / unscoped — writes go to flat user:<id>).\n\n" +
-        "Note: the key plaintext stays the same. Agents holding it keep working, but\n" +
-        "their future writes/reads route to the new namespace. Old data isn't moved.",
+        "New agent_slug. Anything you type is normalized to lowercase\n" +
+        "letters/digits/hyphens (≤64 chars) — no need to avoid spaces or\n" +
+        "punctuation. Leave blank to clear (key becomes unscoped — writes\n" +
+        "go to flat user:<id>).\n\n" +
+        "Multiple keys CAN share one slug — that's how several agents share\n" +
+        "a memory namespace. The key plaintext stays the same; future\n" +
+        "reads/writes route to the new namespace. Old data isn't moved.",
         current,
       );
       if (next === null) return;  // user hit cancel

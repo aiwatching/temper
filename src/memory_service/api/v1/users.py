@@ -4,14 +4,12 @@ Org-level user admin endpoints land in Phase 1.3.
 """
 from __future__ import annotations
 
-import re
-
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
 
 from memory_service.api.deps import CurrentUser, DBDep
 from memory_service.core.auth import api_key_prefix, generate_api_key, hash_api_key
+from memory_service.core.namespaces import slugify_agent_slug as _slugify_agent_name
 from memory_service.models import APIKey, User
 from memory_service.schemas.api_key import (
     AdminAPIKeyListItem,
@@ -21,19 +19,6 @@ from memory_service.schemas.api_key import (
     APIKeyUpdateRequest,
     CreateAPIKeyRequest,
 )
-
-
-_SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
-
-
-def _slugify_agent_name(name: str) -> str | None:
-    """Best-effort agent_name → agent_slug. Mirrors the integrate.html
-    JS so server and UI agree. Returns None when the result would be
-    empty (e.g. an emoji-only name) — the caller falls back to a NULL
-    agent_slug (legacy / unscoped) so creation still succeeds.
-    """
-    s = _SLUG_INVALID_RE.sub("-", name.lower()).strip("-")[:64].strip("-")
-    return s or None
 
 router = APIRouter(prefix="/users/me/api-keys", tags=["api-keys"])
 admin_router = APIRouter(prefix="/admin/api-keys", tags=["api-keys"])
@@ -49,14 +34,17 @@ async def create_api_key(
 
     `agent_slug` (when given) becomes the key's routing scope: requests
     authed by this key default to namespace `agent:<user_id>/<slug>`.
-    Two keys with the same slug share that scope on purpose; the DB
-    unique constraint blocks accidental duplicates.
+    Multiple keys may share one slug on purpose — that's how several
+    agents / machines get their own credential for one memory namespace.
+    The slug is slugified server-side, so any input is accepted and
+    normalized (never rejected for "special characters").
     """
-    # When the caller didn't pin a slug, derive one from agent_name so every
-    # new key is scoped by default (matches the integrate-page JS behaviour
-    # but also covers raw API / memctl / curl creations).
-    effective_slug = payload.agent_slug
-    if effective_slug is None:
+    # Explicit slug → slugify it. No slug → derive one from agent_name
+    # so every new key is scoped by default (matches the integrate-page
+    # JS, and covers raw API / memctl / curl creations).
+    if payload.agent_slug is not None:
+        effective_slug = _slugify_agent_name(payload.agent_slug)
+    else:
         effective_slug = _slugify_agent_name(payload.agent_name)
     plaintext = generate_api_key()
     api_key = APIKey(
@@ -67,25 +55,7 @@ async def create_api_key(
         prefix=api_key_prefix(plaintext),
     )
     db.add(api_key)
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        derived_hint = ""
-        if payload.agent_slug is None and effective_slug is not None:
-            derived_hint = (
-                f" (slug was auto-derived from agent_name; pass "
-                f"agent_slug explicitly to override)"
-            )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"You already have an active key with agent_slug "
-                f"{effective_slug!r}{derived_hint}. Revoke / rename the existing "
-                "one, or pick a different slug — two keys with the same slug "
-                "share memory, which is fine if that's what you want."
-            ),
-        ) from None
+    await db.commit()
     await db.refresh(api_key)
     return APIKeyCreatedResponse(
         id=api_key.id,
@@ -129,20 +99,11 @@ async def update_api_key_scope(
     api_key = (await db.execute(stmt)).scalar_one_or_none()
     if api_key is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="API key not found")
-    api_key.agent_slug = payload.agent_slug
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"You already have another key with agent_slug "
-                f"{payload.agent_slug!r}. Two keys sharing a slug is allowed "
-                "(that's how memory sharing works), but the DB constraint "
-                "blocks duplicates — revoke / rename the existing one first."
-            ),
-        ) from None
+    # Slugify rather than reject: any input is normalized to a valid
+    # slug (or None to clear). Multiple keys may share a slug, so there's
+    # no uniqueness conflict to handle.
+    api_key.agent_slug = _slugify_agent_name(payload.agent_slug)
+    await db.commit()
     await db.refresh(api_key)
     return api_key
 
