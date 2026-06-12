@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="snapshotsPage()" x-init="load()">
+  <h2>Memory snapshots</h2>
+  <p style="color:var(--muted)">
+    Point-in-time backups of <strong>your own</strong> memory. The
+    service auto-saves your blocks + documents daily; you can also take
+    one manually before a big change, then restore to any snapshot
+    below. Snapshots are private to you.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="notice"><div class="msg ok" x-text="notice"></div></template>
+
+  <p>
+    <button @click="openCreate()">+ Take snapshot now</button>
+    <button class="secondary" @click="load()">Refresh</button>
+  </p>
+
+  <!-- Create dialog -->
+  <template x-if="showCreate">
+    <div class="card" style="margin-top:12px; border:2px solid var(--accent)">
+      <h3>Take a snapshot</h3>
+      <form @submit.prevent="create()" class="stacked" style="max-width:none">
+        <div>
+          <label>note (optional)</label>
+          <input type="text" x-model="form.note" placeholder="e.g. before the big refactor" maxlength="500">
+        </div>
+        <label style="display:flex; align-items:center; gap:6px; margin:4px 0">
+          <input type="checkbox" x-model="form.include_episodes">
+          include episodes
+          <span style="color:var(--muted-2); font-size:11px">
+            (slower; restoring re-extracts them via the LLM — usually leave off)
+          </span>
+        </label>
+        <div>
+          <button type="submit" :disabled="creating" x-text="creating ? 'Saving…' : 'Save snapshot'"></button>
+          <button type="button" class="secondary" @click="showCreate=false">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </template>
+
+  <table>
+    <thead><tr>
+      <th>when</th><th>kind</th><th>contents</th><th>size</th><th>note</th><th></th>
+    </tr></thead>
+    <tbody>
+      <template x-if="!loading && snapshots.length === 0">
+        <tr><td colspan="6"><em>No snapshots yet. The daily auto-save will create one, or take one now.</em></td></tr>
+      </template>
+      <template x-for="s in snapshots" :key="s.id">
+        <tr>
+          <td><code x-text="window.ms.fmtDate(s.created_at)"></code></td>
+          <td>
+            <template x-if="s.kind === 'auto'"><span class="badge entity">auto</span></template>
+            <template x-if="s.kind === 'manual'"><span class="badge fact">manual</span></template>
+          </td>
+          <td>
+            <span x-text="s.blocks_count + ' blocks'"></span> ·
+            <span x-text="s.documents_count + ' docs'"></span>
+            <template x-if="s.include_episodes">
+              <span> · <span x-text="s.episodes_count + ' episodes'"></span></span>
+            </template>
+          </td>
+          <td x-text="fmtSize(s.size_bytes)"></td>
+          <td x-text="s.note || '—'"></td>
+          <td>
+            <button class="secondary" @click="openRestore(s)">Restore</button>
+            <button class="danger" @click="remove(s)">Delete</button>
+          </td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+
+  <!-- Restore modal -->
+  <template x-if="restoreTarget">
+    <div class="card" style="margin-top:16px; border:2px solid var(--bad)">
+      <h3>Restore snapshot from <code x-text="window.ms.fmtDate(restoreTarget.created_at)"></code></h3>
+      <p style="color:var(--muted); font-size:12px">
+        This loads the snapshot's
+        <span x-text="restoreTarget.blocks_count"></span> blocks +
+        <span x-text="restoreTarget.documents_count"></span> documents
+        <template x-if="restoreTarget.include_episodes">
+          <span>+ <span x-text="restoreTarget.episodes_count"></span> episodes</span>
+        </template>
+        back into your memory.
+      </p>
+
+      <div class="tabs" style="margin-bottom:12px">
+        <button :class="restoreMode === 'merge' ? 'active' : ''"   @click="restoreMode='merge'">Merge (safe)</button>
+        <button :class="restoreMode === 'replace' ? 'active' : ''" @click="restoreMode='replace'">Replace</button>
+      </div>
+      <template x-if="restoreMode === 'merge'">
+        <p style="color:var(--muted); font-size:12px">
+          The snapshot's items are written over your current ones with
+          the same key/path. Anything you added since the snapshot is
+          kept. Recommended.
+        </p>
+      </template>
+      <template x-if="restoreMode === 'replace'">
+        <p style="color:var(--muted); font-size:12px">
+          Your current blocks + documents are <strong>wiped first</strong>,
+          then the snapshot is loaded — your memory becomes exactly what
+          it was at snapshot time. (The graph isn't cleared.)
+        </p>
+      </template>
+      <template x-if="restoreTarget.include_episodes">
+        <p style="color:var(--yellow, #b80); font-size:12px">
+          ⚠ This snapshot includes episodes — restoring re-extracts each
+          one through the LLM (slow, costs tokens).
+        </p>
+      </template>
+
+      <p>
+        <button class="danger" @click="doRestore()" :disabled="restoring"
+          x-text="restoring ? 'Restoring…' : ('Restore (' + restoreMode + ')')"></button>
+        <button class="secondary" @click="restoreTarget=null">Cancel</button>
+      </p>
+    </div>
+  </template>
+
+  <template x-if="restoreResult">
+    <div class="card" style="margin-top:16px; border:2px solid var(--accent)">
+      <h3>Restore complete</h3>
+      <p style="color:var(--muted); font-size:12px">mode: <code x-text="restoreResult.mode"></code></p>
+      <table style="margin:8px 0">
+        <tr><th>blocks</th><td x-text="kindLine(restoreResult.blocks)"></td></tr>
+        <tr><th>documents</th><td x-text="kindLine(restoreResult.documents)"></td></tr>
+        <template x-if="restoreResult.episodes && (restoreResult.episodes.inserted || restoreResult.episodes.errored)">
+          <tr><th>episodes</th><td x-text="kindLine(restoreResult.episodes)"></td></tr>
+        </template>
+      </table>
+      <template x-if="restoreResult.errors && restoreResult.errors.length">
+        <p class="msg bad" x-text="restoreResult.errors.length + ' item(s) failed — see API response for detail'"></p>
+      </template>
+      <button class="secondary" @click="restoreResult=null">Dismiss</button>
+    </div>
+  </template>
+</section>
+
+<script>
+  function snapshotsPage() {
+    return {
+      snapshots: [], loading: true, error: null, notice: null,
+      showCreate: false, creating: false,
+      form: { note: "", include_episodes: false },
+      restoreTarget: null, restoreMode: "merge", restoring: false,
+      restoreResult: null,
+
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        try {
+          const d = await window.ms.json("/v1/me/snapshots");
+          this.snapshots = d.snapshots;
+        } catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      openCreate() {
+        this.form = { note: "", include_episodes: false };
+        this.showCreate = true;
+        this.notice = null; this.error = null;
+      },
+      async create() {
+        this.creating = true; this.error = null;
+        try {
+          await window.ms.json("/v1/me/snapshots", {
+            method: "POST",
+            body: JSON.stringify({
+              note: this.form.note || null,
+              include_episodes: this.form.include_episodes,
+            }),
+          });
+          this.showCreate = false;
+          this.notice = "Snapshot saved.";
+          await this.load();
+        } catch (e) { this.error = e.message; }
+        finally { this.creating = false; }
+      },
+      openRestore(s) {
+        this.restoreTarget = s;
+        this.restoreMode = "merge";
+        this.restoreResult = null;
+        this.error = null;
+      },
+      async doRestore() {
+        const s = this.restoreTarget;
+        if (this.restoreMode === "replace" &&
+            !confirm("Replace wipes your current blocks + documents before loading the snapshot. Continue?")) {
+          return;
+        }
+        this.restoring = true; this.error = null;
+        try {
+          const r = await window.ms.json(
+            `/v1/me/snapshots/${s.id}/restore?mode=${this.restoreMode}`,
+            { method: "POST" });
+          this.restoreTarget = null;
+          this.restoreResult = r;
+          this.notice = "Restore complete.";
+        } catch (e) { this.error = e.message; }
+        finally { this.restoring = false; }
+      },
+      async remove(s) {
+        if (!confirm(`Delete the snapshot from ${window.ms.fmtDate(s.created_at)}? This can't be undone.`)) return;
+        try {
+          await window.ms.fetch(`/v1/me/snapshots/${s.id}`, { method: "DELETE" });
+          await this.load();
+        } catch (e) { this.error = e.message; }
+      },
+      kindLine(k) {
+        if (!k) return "—";
+        return `inserted ${k.inserted}, errored ${k.errored}`;
+      },
+      fmtSize(b) {
+        if (b == null) return "—";
+        if (b < 1024) return b + " B";
+        if (b < 1024*1024) return (b/1024).toFixed(0) + " KB";
+        return (b/1024/1024).toFixed(1) + " MB";
+      },
+    };
+  }
+</script>
+{% endblock %}

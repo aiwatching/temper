@@ -109,6 +109,13 @@ async def admin_documents(request: Request) -> HTMLResponse:
     )
 
 
+@router.get("/admin/snapshots", response_class=HTMLResponse, include_in_schema=False)
+async def admin_snapshots(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "snapshots.html", {"title": "Memory snapshots", "wide": True}
+    )
+
+
 @router.get("/admin/episodes", response_class=HTMLResponse, include_in_schema=False)
 async def admin_episodes(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "episodes.html", {"title": "Episodes"})
