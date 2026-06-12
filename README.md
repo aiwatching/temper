@@ -153,9 +153,13 @@ docker compose up --build
 If you're plugging an agent into TEMPER, start here:
 
 - **`docs/agent-integration-prompt.md`** — the canonical routing
-  contract. Embed it verbatim in your agent's system prompt.
-- **`docs/api-guide.md`** — REST surface (write, search, blocks,
-  documents, jobs, turn_context).
+  contract. Embed it verbatim in your agent's system prompt
+  (the prompt-only path).
+- **`docs/api-reference.md`** — the **programmatic** path: every
+  agent-relevant endpoint with request/response shapes + gotchas, for
+  teams wiring TEMPER into their own tool layer. Pair with
+  `{base}/openapi.json` to generate a typed client.
+- **`docs/api-guide.md`** — a guided flow tour (curl-by-curl).
 - **`docs/memory-blocks.md`** — KV memory design + use cases.
 - **`docs/memory-frameworks-comparison.md`** — why graphiti vs mem0,
   and when each one's the right primitive.
