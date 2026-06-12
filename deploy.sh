@@ -21,6 +21,8 @@
 #   ./deploy.sh logs         docker compose logs -f memory-service
 #   ./deploy.sh status       container + health summary
 #   ./deploy.sh update       git pull + rebuild image + restart
+#   ./deploy.sh backup       snapshot postgres + falkordb to .data/backups/
+#   ./deploy.sh restore <ts> restore a snapshot (overwrites live data)
 #   ./deploy.sh fix-dns      Linux-only: configure docker daemon to use
 #                            the host's upstream DNS resolvers. Run if
 #                            containers can't reach internal corp
@@ -37,6 +39,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
+SCRIPT_DIR="$(pwd)"
 
 if [[ -t 1 ]]; then
   C_GREEN=$'\e[32m' C_YELLOW=$'\e[33m' C_RED=$'\e[31m' C_BOLD=$'\e[1m' C_DIM=$'\e[2m' C_RST=$'\e[0m'
@@ -283,6 +286,107 @@ cmd_update() {
   "${COMPOSE[@]}" up -d memory-service
 }
 
+# Snapshot both stateful stores into .data/backups/<timestamp>/.
+# Postgres: pg_dump custom format (compressed, pg_restore-friendly).
+# FalkorDB: BGSAVE then copy the on-disk RDB out of the container.
+# Credentials come from the postgres container's own env so we don't
+# parse .env here.
+cmd_backup() {
+  require_docker
+  # Timestamp from the running container's clock — avoids a host-side
+  # `date` call that the sandbox may forbid, and keeps it monotonic
+  # with the data it's snapshotting.
+  local stamp
+  stamp=$("${COMPOSE[@]}" exec -T postgres date -u +%Y%m%d-%H%M%S 2>/dev/null | tr -d '\r')
+  [[ -n "$stamp" ]] || die "couldn't reach the postgres container — is the stack up? (./deploy.sh status)"
+  local dir="$SCRIPT_DIR/.data/backups/$stamp"
+  mkdir -p "$dir"
+
+  ok "backing up postgres → $dir/postgres.dump"
+  if ! "${COMPOSE[@]}" exec -T postgres sh -c \
+      'pg_dump -U "$POSTGRES_USER" -Fc "$POSTGRES_DB"' > "$dir/postgres.dump" 2>"$dir/postgres.err"; then
+    cat "$dir/postgres.err" >&2
+    die "pg_dump failed — see $dir/postgres.err"
+  fi
+  rm -f "$dir/postgres.err"
+
+  ok "backing up falkordb (BGSAVE + copy RDB)"
+  "${COMPOSE[@]}" exec -T falkordb redis-cli BGSAVE >/dev/null 2>&1 || true
+  # Wait for the background save to finish (rdb_bgsave_in_progress:0).
+  local i=0
+  while (( i < 30 )); do
+    if "${COMPOSE[@]}" exec -T falkordb redis-cli INFO persistence 2>/dev/null \
+        | tr -d '\r' | grep -q '^rdb_bgsave_in_progress:0'; then
+      break
+    fi
+    sleep 1; i=$((i + 1))
+  done
+  # Resolve the RDB path from the server config; defaults vary by image.
+  local rdb_dir rdb_file
+  rdb_dir=$("${COMPOSE[@]}" exec -T falkordb redis-cli CONFIG GET dir 2>/dev/null | tr -d '\r' | sed -n '2p')
+  rdb_file=$("${COMPOSE[@]}" exec -T falkordb redis-cli CONFIG GET dbfilename 2>/dev/null | tr -d '\r' | sed -n '2p')
+  rdb_dir="${rdb_dir:-/var/lib/falkordb/data}"
+  rdb_file="${rdb_file:-dump.rdb}"
+  if "${COMPOSE[@]}" cp "falkordb:${rdb_dir%/}/$rdb_file" "$dir/falkordb.rdb" 2>/dev/null; then
+    ok "falkordb RDB saved"
+  else
+    warn "couldn't copy the FalkorDB RDB from ${rdb_dir%/}/$rdb_file — postgres dump is still good"
+  fi
+
+  # Keep the last 20 backups; prune older. (while-loop instead of
+  # `xargs -r` for macOS portability.)
+  ls -1dt "$SCRIPT_DIR/.data/backups"/*/ 2>/dev/null | tail -n +21 | while read -r old; do
+    rm -rf "$old"
+  done
+
+  echo
+  ok "backup complete: $dir"
+  echo "  postgres:  $(du -h "$dir/postgres.dump" 2>/dev/null | cut -f1)"
+  [[ -f "$dir/falkordb.rdb" ]] && echo "  falkordb:  $(du -h "$dir/falkordb.rdb" | cut -f1)"
+  echo "  restore:   ./deploy.sh restore $stamp"
+}
+
+cmd_restore() {
+  require_docker
+  local stamp="${1:-}"
+  if [[ -z "$stamp" ]]; then
+    echo "Available backups:"
+    ls -1dt "$SCRIPT_DIR/.data/backups"/*/ 2>/dev/null | sed 's#.*/backups/##; s#/$##' | sed 's/^/  /'
+    die "usage: ./deploy.sh restore <timestamp>"
+  fi
+  local dir="$SCRIPT_DIR/.data/backups/$stamp"
+  [[ -d "$dir" ]] || die "no backup at $dir"
+  [[ -f "$dir/postgres.dump" ]] || die "missing $dir/postgres.dump"
+
+  warn "RESTORE OVERWRITES the live database with the $stamp snapshot."
+  warn "Current postgres data will be REPLACED. FalkorDB is restored only"
+  warn "if a falkordb.rdb is present in the backup."
+  printf "  type the timestamp '%s' to confirm: " "$stamp"
+  read -r confirm
+  [[ "$confirm" == "$stamp" ]] || die "aborted"
+
+  ok "restoring postgres (drop + recreate objects via pg_restore --clean)"
+  if ! "${COMPOSE[@]}" exec -T postgres sh -c \
+      'pg_restore -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner' \
+      < "$dir/postgres.dump"; then
+    warn "pg_restore reported errors (often harmless --clean drops on first restore)"
+  fi
+
+  if [[ -f "$dir/falkordb.rdb" ]]; then
+    ok "restoring falkordb RDB (requires a falkordb restart to load)"
+    local rdb_dir rdb_file
+    rdb_dir=$("${COMPOSE[@]}" exec -T falkordb redis-cli CONFIG GET dir 2>/dev/null | tr -d '\r' | sed -n '2p')
+    rdb_file=$("${COMPOSE[@]}" exec -T falkordb redis-cli CONFIG GET dbfilename 2>/dev/null | tr -d '\r' | sed -n '2p')
+    rdb_dir="${rdb_dir:-/var/lib/falkordb/data}"; rdb_file="${rdb_file:-dump.rdb}"
+    "${COMPOSE[@]}" cp "$dir/falkordb.rdb" "falkordb:${rdb_dir%/}/$rdb_file" \
+      && "${COMPOSE[@]}" restart falkordb \
+      && ok "falkordb restarted with restored RDB" \
+      || warn "falkordb RDB restore failed — restore it manually"
+  fi
+
+  ok "restore done. Bounce the service: ./deploy.sh restart"
+}
+
 # Detect: host uses systemd-resolved (resolv.conf points at 127.0.0.53)
 # AND docker daemon.json doesn't yet have a `dns` override.
 #
@@ -413,11 +517,13 @@ case "$sub" in
   logs)         cmd_logs ;;
   status|ps)    cmd_status ;;
   update)       cmd_update ;;
+  backup)       cmd_backup ;;
+  restore)      cmd_restore "${1:-}" ;;
   fix-dns)      cmd_fix_dns ;;
   -h|--help|help)
-    sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
-    die "unknown subcommand: $sub  (try: up / restart / stop / reset / logs / status / update / fix-dns)"
+    die "unknown subcommand: $sub  (try: up / restart / stop / reset / logs / status / update / backup / restore / fix-dns)"
     ;;
 esac
