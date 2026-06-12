@@ -145,6 +145,24 @@ class Settings(BaseSettings):
     embedding_model: _NoneIfEmptyStr = None
     embedding_dimensions: _NoneIfEmptyInt = None  # auto from defaults
 
+    # --- Per-user memory snapshots ---
+    # The built-in scheduler writes one `auto` snapshot per user every
+    # snapshot_interval_hours, capturing blocks + documents (the
+    # precisely-restorable primitives; episodes are derived graph data
+    # and re-extract lossily, so they're excluded from auto snapshots).
+    # Users restore to any kept snapshot via /v1/me/snapshots.
+    snapshot_enabled: bool = True
+    snapshot_interval_hours: int = 24
+    # How many `auto` snapshots to keep per user (older ones pruned).
+    # 30 daily ≈ a month of point-in-time history. Manual snapshots are
+    # never auto-pruned.
+    snapshot_retention: int = 30
+    # The scheduler tick cadence. It wakes this often and snapshots any
+    # user whose last auto snapshot is older than snapshot_interval_hours
+    # — so a restart just means the next tick catches whoever's due,
+    # rather than resetting a fixed daily clock.
+    snapshot_tick_minutes: int = 60
+
     # --- Auth / sessions ---
     # JWT signing algorithm and lifetime for /v1/auth/login tokens.
     jwt_algorithm: str = "HS256"

@@ -58,16 +58,25 @@ _logger = logging.getLogger(__name__)
 # ---------- export ----------
 
 
-async def build_bundle(user: User, db: AsyncSession) -> MemoryBundleV1:
+async def build_bundle(
+    user: User, db: AsyncSession, *, include_episodes: bool = True,
+) -> MemoryBundleV1:
     """Read everything owned by `user` and pack into a bundle.
 
     The user's own permissions don't gate this — they own the data.
     Caller (the API layer) is responsible for deciding whether to
-    expose this to anyone other than the user themselves."""
+    expose this to anyone other than the user themselves.
+
+    `include_episodes=False` skips the episode pass entirely. Episode
+    export reads each episode's content back from FalkorDB one node at
+    a time (single-worker graph DB), so it's the expensive part — the
+    daily auto-snapshot omits it and captures only the precisely-
+    restorable blocks + documents.
+    """
 
     blocks = await _export_blocks(user, db)
     documents = await _export_documents(user, db)
-    episodes = await _export_episodes(user, db)
+    episodes = await _export_episodes(user, db) if include_episodes else []
 
     return MemoryBundleV1(
         exported_at=datetime.now(UTC),

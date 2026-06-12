@@ -25,6 +25,7 @@ from memory_service.api.v1 import namespaces as v1_namespaces
 from memory_service.api.v1 import onboarding as v1_onboarding
 from memory_service.api.v1 import orgs as v1_orgs
 from memory_service.api.v1 import sagas as v1_sagas
+from memory_service.api.v1 import snapshots as v1_snapshots
 from memory_service.api.v1 import search as v1_search
 from memory_service.api.v1 import stats as v1_stats
 from memory_service.api.v1 import system as v1_system
@@ -74,8 +75,36 @@ async def _run_bootstrap() -> None:
         break
 
 
+async def _snapshot_scheduler() -> None:
+    """Background loop: every snapshot_tick_minutes, snapshot any user
+    whose last auto snapshot is overdue. Self-correcting across
+    restarts (per-user due-check), and a no-op when snapshot_enabled
+    is false. Assumes a single worker process — TEMPER's container runs
+    uvicorn without --workers, so the loop runs once.
+    """
+    import asyncio
+
+    from memory_service.core.snapshots import run_due_snapshots
+
+    settings = get_settings()
+    tick = max(1, settings.snapshot_tick_minutes) * 60
+    db = get_database()
+    while True:
+        try:
+            async for session in db.session():
+                await run_due_snapshots(session)
+                break
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            _logger.exception("snapshot scheduler tick failed")
+        await asyncio.sleep(tick)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
+    import asyncio
+
     settings = get_settings()
     from memory_service.logging_config import configure_logging
 
@@ -84,9 +113,25 @@ async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
     await _ensure_schema_for_test()
     await _run_bootstrap()
     _logger.info("memory-service starting (env=%s)", settings.app_env)
+
+    snapshot_task: asyncio.Task | None = None
+    if settings.snapshot_enabled and settings.app_env != "test":
+        snapshot_task = asyncio.create_task(_snapshot_scheduler())
+        _logger.info(
+            "snapshot scheduler started (every %dm, %dh interval, keep %d)",
+            settings.snapshot_tick_minutes,
+            settings.snapshot_interval_hours,
+            settings.snapshot_retention,
+        )
     try:
         yield
     finally:
+        if snapshot_task is not None:
+            snapshot_task.cancel()
+            try:
+                await snapshot_task
+            except (asyncio.CancelledError, Exception):
+                pass
         await get_database().dispose()
         _logger.info("memory-service shut down cleanly")
 
@@ -137,6 +182,7 @@ def create_app() -> FastAPI:
     app.include_router(v1_documents.router, prefix="/v1")
     app.include_router(v1_typed_memory.router, prefix="/v1")
     app.include_router(v1_memory_export.router, prefix="/v1")
+    app.include_router(v1_snapshots.router, prefix="/v1")
     app.include_router(v1_onboarding.router, prefix="/v1")
 
     # Admin page + static

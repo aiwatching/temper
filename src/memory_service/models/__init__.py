@@ -7,6 +7,7 @@ from memory_service.models.group import Group, UserGroupMembership
 from memory_service.models.memory_block import GLOBAL_AGENT_SLUG, MemoryBlock
 from memory_service.models.org import Organization
 from memory_service.models.schema import EntitySchema
+from memory_service.models.snapshot import MemorySnapshot
 from memory_service.models.user import User
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     "EpisodeMetadata",
     "EntitySchema",
     "MemoryBlock",
+    "MemorySnapshot",
     "GLOBAL_AGENT_SLUG",
 ]
