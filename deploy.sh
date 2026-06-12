@@ -23,6 +23,9 @@
 #   ./deploy.sh update       git pull + rebuild image + restart
 #   ./deploy.sh backup       snapshot postgres + falkordb to .data/backups/
 #   ./deploy.sh restore <ts> restore a snapshot (overwrites live data)
+#   ./deploy.sh install-backup-timer [--time HH:MM]
+#                            systemd timer: run backup daily (default 03:00)
+#   ./deploy.sh backup-status   show next/last run + existing snapshots
 #   ./deploy.sh fix-dns      Linux-only: configure docker daemon to use
 #                            the host's upstream DNS resolvers. Run if
 #                            containers can't reach internal corp
@@ -387,6 +390,89 @@ cmd_restore() {
   ok "restore done. Bounce the service: ./deploy.sh restart"
 }
 
+# Install a systemd timer that runs `./deploy.sh backup` daily.
+# systemd over cron: survives reboot, journald logs, `list-timers`
+# shows next run, Persistent=true catches up a run missed while the
+# box was off.
+cmd_install_backup_timer() {
+  if [[ "$(uname)" != "Linux" ]]; then
+    die "install-backup-timer is Linux/systemd only. On macOS run ./deploy.sh backup from a launchd job or cron yourself."
+  fi
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found — this host isn't systemd-managed."
+
+  local at="03:00"
+  if [[ "${1:-}" == "--time" && -n "${2:-}" ]]; then
+    at="$2"
+  fi
+  # OnCalendar wants HH:MM:SS; accept HH:MM and append seconds.
+  [[ "$at" =~ ^[0-9]{2}:[0-9]{2}$ ]] && at="$at:00"
+
+  local user; user="$(id -un)"
+  local svc=/etc/systemd/system/temper-backup.service
+  local tmr=/etc/systemd/system/temper-backup.timer
+
+  ok "writing $svc"
+  sudo tee "$svc" >/dev/null <<EOF
+[Unit]
+Description=TEMPER daily backup (pg_dump + falkordb RDB)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=$user
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=$SCRIPT_DIR/deploy.sh backup
+EOF
+
+  ok "writing $tmr (daily at $at)"
+  sudo tee "$tmr" >/dev/null <<EOF
+[Unit]
+Description=Run TEMPER backup daily
+
+[Timer]
+OnCalendar=*-*-* $at
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now temper-backup.timer
+  echo
+  ok "backup timer installed + enabled."
+  echo "  Next runs:   ./deploy.sh backup-status"
+  echo "  Run now:     sudo systemctl start temper-backup.service"
+  echo "  Logs:        journalctl -u temper-backup.service"
+  echo "  Remove:      ./deploy.sh uninstall-backup-timer"
+}
+
+cmd_backup_status() {
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found."
+  if ! systemctl list-unit-files temper-backup.timer >/dev/null 2>&1 \
+      || ! systemctl cat temper-backup.timer >/dev/null 2>&1; then
+    warn "no backup timer installed. Run ./deploy.sh install-backup-timer"
+    return 1
+  fi
+  systemctl list-timers temper-backup.timer --no-pager 2>/dev/null || true
+  echo
+  echo "Last run:"
+  systemctl status temper-backup.service --no-pager -n 5 2>/dev/null \
+    | sed -n '1,8p' || true
+  echo
+  echo "Existing snapshots in .data/backups:"
+  ls -1dt "$SCRIPT_DIR/.data/backups"/*/ 2>/dev/null | sed 's#.*/backups/##; s#/$##' | sed 's/^/  /' | head -10
+}
+
+cmd_uninstall_backup_timer() {
+  command -v systemctl >/dev/null 2>&1 || die "systemctl not found."
+  sudo systemctl disable --now temper-backup.timer 2>/dev/null || true
+  sudo rm -f /etc/systemd/system/temper-backup.timer /etc/systemd/system/temper-backup.service
+  sudo systemctl daemon-reload
+  ok "backup timer removed. Existing snapshots in .data/backups are kept."
+}
+
 # Detect: host uses systemd-resolved (resolv.conf points at 127.0.0.53)
 # AND docker daemon.json doesn't yet have a `dns` override.
 #
@@ -519,11 +605,14 @@ case "$sub" in
   update)       cmd_update ;;
   backup)       cmd_backup ;;
   restore)      cmd_restore "${1:-}" ;;
+  install-backup-timer)   cmd_install_backup_timer "${1:-}" "${2:-}" ;;
+  backup-status)          cmd_backup_status ;;
+  uninstall-backup-timer) cmd_uninstall_backup_timer ;;
   fix-dns)      cmd_fix_dns ;;
   -h|--help|help)
-    sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'
     ;;
   *)
-    die "unknown subcommand: $sub  (try: up / restart / stop / reset / logs / status / update / backup / restore / fix-dns)"
+    die "unknown subcommand: $sub  (try: up / restart / stop / reset / logs / status / update / backup / restore / install-backup-timer / backup-status / fix-dns)"
     ;;
 esac
