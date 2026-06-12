@@ -109,14 +109,15 @@ async def test_org_member_lifecycle(client) -> None:  # type: ignore[no-untyped-
         headers={"Authorization": f"Bearer {admin_token}"},
     )
 
-    # super_admin adds Alice as org admin
+    # super_admin adds Alice to the org (membership is flat — no per-org
+    # admin role; org management is super_admin-only).
     r = await client.post(
         "/v1/orgs/acme/members",
-        json={"user_id": alice_id, "is_org_admin": True},
+        json={"user_id": alice_id},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r.status_code == 201, r.text
-    assert r.json()["is_org_admin"] is True
+    assert r.json()["email"] == "alice@example.com"
 
     # Alice can now see members of her org
     r = await client.get(
@@ -128,7 +129,7 @@ async def test_org_member_lifecycle(client) -> None:  # type: ignore[no-untyped-
     assert len(members) == 1
     assert members[0]["email"] == "alice@example.com"
 
-    # A user from another org can't view acme members
+    # A user in no org can't view acme members
     bob_token = await _register(client, "bob@example.com")
     r = await client.get(
         "/v1/orgs/acme/members",
@@ -136,16 +137,7 @@ async def test_org_member_lifecycle(client) -> None:  # type: ignore[no-untyped-
     )
     assert r.status_code == 403, r.text
 
-    # Alice (org admin) can demote herself via PATCH
-    r = await client.patch(
-        f"/v1/orgs/acme/members/{alice_id}",
-        json={"is_org_admin": False},
-        headers={"Authorization": f"Bearer {alice_token}"},
-    )
-    assert r.status_code == 200
-    assert r.json()["is_org_admin"] is False
-
-    # Now alice is just a member — can't add more people
+    # A plain member can't add people (super_admin-only)
     r = await client.post(
         "/v1/orgs/acme/members",
         json={"user_id": "11111111-1111-1111-1111-111111111111"},
@@ -153,9 +145,16 @@ async def test_org_member_lifecycle(client) -> None:  # type: ignore[no-untyped-
     )
     assert r.status_code == 403
 
+    # But a member can remove themselves (self-leave).
+    r = await client.delete(
+        f"/v1/orgs/acme/members/{alice_id}",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert r.status_code == 204, r.text
+
 
 @pytest.mark.asyncio
-async def test_org_write_requires_org_admin(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
+async def test_org_write_requires_super_admin(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
     admin_token = await _register(client, "root@example.com")
     await _promote_super_admin(client, "root@example.com")
     alice_token = await _register(client, "alice@example.com")
@@ -168,29 +167,25 @@ async def test_org_write_requires_org_admin(client, mock_graphiti) -> None:  # t
     )
     await client.post(
         "/v1/orgs/acme/members",
-        json={"user_id": alice_id, "is_org_admin": False},
+        json={"user_id": alice_id},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
 
-    # Plain org member: read ok, write denied
+    # Plain org member can't write to the org namespace — that's
+    # super_admin-only by design.
     r = await client.post(
         "/v1/episodes",
-        json={"namespace": "org:acme", "content": "shared fact"},
+        json={"namespace": "org:acme", "content": "a shared organization fact worth recording"},
         headers={"Authorization": f"Bearer {alice_token}"},
     )
     assert r.status_code == 403
-    assert "org_admin" in r.json()["detail"]
+    assert "super_admin" in r.json()["detail"]
 
-    # Promote alice → write now works
-    await client.patch(
-        f"/v1/orgs/acme/members/{alice_id}",
-        json={"is_org_admin": True},
-        headers={"Authorization": f"Bearer {admin_token}"},
-    )
+    # super_admin can write to the org namespace.
     r = await client.post(
         "/v1/episodes",
-        json={"namespace": "org:acme", "content": "shared fact"},
-        headers={"Authorization": f"Bearer {alice_token}"},
+        json={"namespace": "org:acme", "content": "a shared organization fact worth recording"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r.status_code == 201, r.text
 
@@ -199,7 +194,7 @@ async def test_org_write_requires_org_admin(client, mock_graphiti) -> None:  # t
 
 
 @pytest.mark.asyncio
-async def test_group_creator_becomes_admin_and_can_invite(client) -> None:  # type: ignore[no-untyped-def]
+async def test_super_admin_creates_group_and_adds_members(client) -> None:  # type: ignore[no-untyped-def]
     admin_token = await _register(client, "root@example.com")
     await _promote_super_admin(client, "root@example.com")
     alice_token = await _register(client, "alice@example.com")
@@ -220,31 +215,37 @@ async def test_group_creator_becomes_admin_and_can_invite(client) -> None:  # ty
             headers={"Authorization": f"Bearer {admin_token}"},
         )
 
-    # Alice creates a group → she's the admin
+    # A plain member can't create a group — super_admin only.
     r = await client.post(
         "/v1/groups",
-        json={"slug": "engineers", "name": "Engineering"},
+        json={"slug": "engineers", "name": "Engineering", "org_slug": "acme"},
         headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    assert r.status_code == 403, r.text
+
+    # super_admin creates it (must name the owning org).
+    r = await client.post(
+        "/v1/groups",
+        json={"slug": "engineers", "name": "Engineering", "org_slug": "acme"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r.status_code == 201, r.text
     assert r.json()["org_slug"] == "acme"
-    assert r.json()["member_count"] == 1
 
-    # Bob can see the group exists (org-wide visibility)
+    # Bob (org member, not in group) sees the group exists but can't
+    # read its members.
     r = await client.get(
         "/v1/groups",
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert {g["slug"] for g in r.json()} == {"engineers"}
-
-    # But Bob can't read its members until added
     r = await client.get(
         "/v1/groups/engineers/members",
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert r.status_code == 403
 
-    # Bob can't add himself
+    # Bob can't add himself — super_admin only.
     r = await client.post(
         "/v1/groups/engineers/members",
         json={"user_id": bob_id},
@@ -252,11 +253,11 @@ async def test_group_creator_becomes_admin_and_can_invite(client) -> None:  # ty
     )
     assert r.status_code == 403
 
-    # Alice (admin) adds Bob → Bob now sees members and can write
+    # super_admin adds Bob → Bob now sees members.
     r = await client.post(
         "/v1/groups/engineers/members",
         json={"user_id": bob_id},
-        headers={"Authorization": f"Bearer {alice_token}"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r.status_code == 201
     r = await client.get(
@@ -264,15 +265,13 @@ async def test_group_creator_becomes_admin_and_can_invite(client) -> None:  # ty
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert r.status_code == 200
-    assert {m["email"] for m in r.json()} == {"alice@example.com", "bob@example.com"}
+    assert {m["email"] for m in r.json()} == {"bob@example.com"}
 
 
 @pytest.mark.asyncio
 async def test_group_write_requires_membership(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
     admin_token = await _register(client, "root@example.com")
     await _promote_super_admin(client, "root@example.com")
-    alice_token = await _register(client, "alice@example.com")
-    alice_id = (await _me(client, alice_token))["id"]
     bob_token = await _register(client, "bob@example.com")
     bob_id = (await _me(client, bob_token))["id"]
 
@@ -281,22 +280,21 @@ async def test_group_write_requires_membership(client, mock_graphiti) -> None:  
         json={"slug": "acme", "name": "Acme"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    for uid in (alice_id, bob_id):
-        await client.post(
-            "/v1/orgs/acme/members",
-            json={"user_id": uid},
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
+    await client.post(
+        "/v1/orgs/acme/members",
+        json={"user_id": bob_id},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
     await client.post(
         "/v1/groups",
-        json={"slug": "engineers", "name": "Engineering"},
-        headers={"Authorization": f"Bearer {alice_token}"},
+        json={"slug": "engineers", "name": "Engineering", "org_slug": "acme"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
     # Bob (org member, not in group) can't write to group:engineers
     r = await client.post(
         "/v1/episodes",
-        json={"namespace": "group:engineers", "content": "fact"},
+        json={"namespace": "group:engineers", "content": "a durable engineering team fact to remember"},
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert r.status_code == 403
@@ -306,34 +304,45 @@ async def test_group_write_requires_membership(client, mock_graphiti) -> None:  
     await client.post(
         "/v1/groups/engineers/members",
         json={"user_id": bob_id},
-        headers={"Authorization": f"Bearer {alice_token}"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     r = await client.post(
         "/v1/episodes",
-        json={"namespace": "group:engineers", "content": "fact"},
+        json={"namespace": "group:engineers", "content": "a durable engineering team fact to remember"},
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert r.status_code == 201, r.text
 
 
 @pytest.mark.asyncio
-async def test_user_in_no_org_cannot_create_group(client) -> None:  # type: ignore[no-untyped-def]
+async def test_non_super_admin_cannot_create_group(client) -> None:  # type: ignore[no-untyped-def]
     token = await _register(client, "solo@example.com")
     r = await client.post(
         "/v1/groups",
-        json={"slug": "myteam", "name": "Solo Team"},
+        json={"slug": "myteam", "name": "Solo Team", "org_slug": "acme"},
         headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 403
+    assert "super_admin" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_group_requires_org_slug(client) -> None:  # type: ignore[no-untyped-def]
+    admin_token = await _register(client, "root@example.com")
+    await _promote_super_admin(client, "root@example.com")
+    r = await client.post(
+        "/v1/groups",
+        json={"slug": "myteam", "name": "Solo Team"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r.status_code == 400
     assert "org" in r.json()["detail"].lower()
 
 
 @pytest.mark.asyncio
-async def test_self_leave_group_without_admin(client) -> None:  # type: ignore[no-untyped-def]
+async def test_self_leave_group(client) -> None:  # type: ignore[no-untyped-def]
     admin_token = await _register(client, "root@example.com")
     await _promote_super_admin(client, "root@example.com")
-    alice_token = await _register(client, "alice@example.com")
-    alice_id = (await _me(client, alice_token))["id"]
     bob_token = await _register(client, "bob@example.com")
     bob_id = (await _me(client, bob_token))["id"]
 
@@ -342,24 +351,23 @@ async def test_self_leave_group_without_admin(client) -> None:  # type: ignore[n
         json={"slug": "acme", "name": "Acme"},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    for uid in (alice_id, bob_id):
-        await client.post(
-            "/v1/orgs/acme/members",
-            json={"user_id": uid},
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
+    await client.post(
+        "/v1/orgs/acme/members",
+        json={"user_id": bob_id},
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
     await client.post(
         "/v1/groups",
-        json={"slug": "engineers", "name": "Engineering"},
-        headers={"Authorization": f"Bearer {alice_token}"},
+        json={"slug": "engineers", "name": "Engineering", "org_slug": "acme"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     await client.post(
         "/v1/groups/engineers/members",
         json={"user_id": bob_id},
-        headers={"Authorization": f"Bearer {alice_token}"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
-    # Bob (member) can remove himself even though he's not admin
+    # Bob (plain member) can remove himself even though he's not super_admin.
     r = await client.delete(
         f"/v1/groups/engineers/members/{bob_id}",
         headers={"Authorization": f"Bearer {bob_token}"},
