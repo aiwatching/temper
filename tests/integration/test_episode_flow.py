@@ -184,6 +184,104 @@ async def test_duplicate_content_deduped(client, mock_graphiti) -> None:  # type
 
 
 @pytest.mark.asyncio
+async def test_reject_policy_returns_422(client, mock_graphiti, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """policy=reject: sub-floor content is a 422, nothing written."""
+    import os
+
+    from memory_service.config import get_settings
+
+    monkeypatch.setitem(os.environ, "EPISODE_MIN_CONTENT_POLICY", "reject")
+    get_settings.cache_clear()
+    try:
+        token = await _register_and_login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await client.post("/v1/episodes", json={"content": "short"}, headers=headers)
+        assert r.status_code == 422, r.text
+        assert "quality floor" in r.json()["detail"]
+        assert mock_graphiti.add_episode.await_count == 0
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_off_policy_writes_short_content(client, mock_graphiti, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """policy=off: pre-guard behavior — short content writes normally."""
+    import os
+
+    from memory_service.config import get_settings
+
+    monkeypatch.setitem(os.environ, "EPISODE_MIN_CONTENT_POLICY", "off")
+    get_settings.cache_clear()
+    try:
+        token = await _register_and_login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+        r = await client.post("/v1/episodes", json={"content": "short"}, headers=headers)
+        assert r.status_code == 201, r.text
+        assert r.json()["skipped"] is False
+        assert mock_graphiti.add_episode.await_count == 1
+    finally:
+        get_settings.cache_clear()
+
+
+def _fake_bulk_result(uuids: list[str]) -> SimpleNamespace:
+    return SimpleNamespace(
+        episodes=[
+            SimpleNamespace(uuid=u, created_at=datetime.now(UTC)) for u in uuids
+        ],
+        nodes=[SimpleNamespace(uuid="n1")],
+        edges=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_bulk_skips_junk_and_intra_batch_dupes(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
+    """Bulk: floor + dedup applied per item; only clean unique items
+    reach graphiti, and skipped_count reports the drops."""
+    mock_graphiti.add_episode_bulk = AsyncMock(
+        return_value=_fake_bulk_result(["bulk-1", "bulk-2"])
+    )
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    r = await client.post(
+        "/v1/episodes/bulk",
+        json={
+            "items": [
+                {"content": "Jerry's English teacher is Sarah."},
+                {"content": "→ ok: {"},                                  # floor
+                {"content": "Jerry's English teacher is Sarah."},        # intra-batch dup
+                {"content": "Sarah teaches English at Toronto High."},
+            ]
+        },
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["skipped_count"] == 2
+    assert body["episode_ids"] == ["bulk-1", "bulk-2"]
+    # graphiti only saw the two clean items
+    sent = mock_graphiti.add_episode_bulk.await_args.kwargs["bulk_episodes"]
+    assert len(sent) == 2
+
+
+@pytest.mark.asyncio
+async def test_bulk_all_junk_short_circuits(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
+    """A batch where everything is dropped never calls graphiti."""
+    mock_graphiti.add_episode_bulk = AsyncMock()
+    token = await _register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    r = await client.post(
+        "/v1/episodes/bulk",
+        json={"items": [{"content": "x"}, {"content": "→ ok: {"}]},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["episode_ids"] == []
+    assert body["skipped_count"] == 2
+    assert mock_graphiti.add_episode_bulk.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_delete_episode_owner_only(client, mock_graphiti) -> None:  # type: ignore[no-untyped-def]
     token_a = await _register_and_login(client, "ownera@example.com")
     headers_a = {"Authorization": f"Bearer {token_a}"}
