@@ -24,7 +24,11 @@
 #   ./deploy.sh backup       snapshot postgres + falkordb to .data/backups/
 #   ./deploy.sh restore <ts> restore a snapshot (overwrites live data)
 #   ./deploy.sh install-backup-timer [--time HH:MM]
-#                            systemd timer: run backup daily (default 03:00)
+#                            systemd timer: run backup daily (default 03:00).
+#                            NOTE: `up` already installs this automatically;
+#                            use this only to change the time. Opt out with
+#                            TEMPER_AUTO_BACKUP_TIMER=0; change default time
+#                            with TEMPER_BACKUP_TIME=HH:MM.
 #   ./deploy.sh backup-status   show next/last run + existing snapshots
 #   ./deploy.sh fix-dns      Linux-only: configure docker daemon to use
 #                            the host's upstream DNS resolvers. Run if
@@ -217,6 +221,11 @@ cmd_up() {
     warn "check logs: ./deploy.sh logs"
   fi
 
+  # Make sure daily backups are scheduled — automatically, so the
+  # operator never has to remember `install-backup-timer`. Idempotent +
+  # best-effort; won't fail the deploy.
+  _ensure_backup_timer
+
   local host_ip port bind
   host_ip=$(detect_host_ip)
   port=$(grep -E '^MS_PORT=' .env | tail -1 | cut -d= -f2)
@@ -394,6 +403,45 @@ cmd_restore() {
 # systemd over cron: survives reboot, journald logs, `list-timers`
 # shows next run, Persistent=true catches up a run missed while the
 # box was off.
+# True if the temper-backup timer unit is already installed.
+_backup_timer_installed() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl list-unit-files temper-backup.timer >/dev/null 2>&1 \
+    && systemctl cat temper-backup.timer >/dev/null 2>&1
+}
+
+# Write the unit files + enable the timer. `sudo_cmd` is the sudo
+# invocation to use ("sudo" or "sudo -n" for non-interactive).
+_write_backup_timer() {
+  local at="$1" sudo_cmd="$2"
+  local user; user="$(id -un)"
+  $sudo_cmd tee /etc/systemd/system/temper-backup.service >/dev/null <<EOF
+[Unit]
+Description=TEMPER daily backup (pg_dump + falkordb RDB)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=$user
+WorkingDirectory=$SCRIPT_DIR
+ExecStart=$SCRIPT_DIR/deploy.sh backup
+EOF
+  $sudo_cmd tee /etc/systemd/system/temper-backup.timer >/dev/null <<EOF
+[Unit]
+Description=Run TEMPER backup daily
+
+[Timer]
+OnCalendar=*-*-* $at
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+  $sudo_cmd systemctl daemon-reload \
+    && $sudo_cmd systemctl enable --now temper-backup.timer
+}
+
 cmd_install_backup_timer() {
   if [[ "$(uname)" != "Linux" ]]; then
     die "install-backup-timer is Linux/systemd only. On macOS run ./deploy.sh backup from a launchd job or cron yourself."
@@ -407,45 +455,53 @@ cmd_install_backup_timer() {
   # OnCalendar wants HH:MM:SS; accept HH:MM and append seconds.
   [[ "$at" =~ ^[0-9]{2}:[0-9]{2}$ ]] && at="$at:00"
 
-  local user; user="$(id -un)"
-  local svc=/etc/systemd/system/temper-backup.service
-  local tmr=/etc/systemd/system/temper-backup.timer
-
-  ok "writing $svc"
-  sudo tee "$svc" >/dev/null <<EOF
-[Unit]
-Description=TEMPER daily backup (pg_dump + falkordb RDB)
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-User=$user
-WorkingDirectory=$SCRIPT_DIR
-ExecStart=$SCRIPT_DIR/deploy.sh backup
-EOF
-
-  ok "writing $tmr (daily at $at)"
-  sudo tee "$tmr" >/dev/null <<EOF
-[Unit]
-Description=Run TEMPER backup daily
-
-[Timer]
-OnCalendar=*-*-* $at
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now temper-backup.timer
+  ok "installing backup timer (daily at $at)"
+  _write_backup_timer "$at" "sudo"
   echo
   ok "backup timer installed + enabled."
   echo "  Next runs:   ./deploy.sh backup-status"
   echo "  Run now:     sudo systemctl start temper-backup.service"
   echo "  Logs:        journalctl -u temper-backup.service"
   echo "  Remove:      ./deploy.sh uninstall-backup-timer"
+}
+
+# Called from cmd_up so the daily backup timer is set up automatically
+# on deploy — the operator never has to run install-backup-timer by
+# hand. Best-effort + idempotent: silent if already installed, skipped
+# on non-systemd / opt-out, and NEVER fails the deploy. Needs root to
+# write the unit files; uses passwordless sudo if available, otherwise
+# prints a one-line hint instead of blocking the deploy on a password.
+_ensure_backup_timer() {
+  # Every early-out uses explicit `if`: this runs inside cmd_up under
+  # `set -e`, and a bare `cmd && return` whose left side "fails" can
+  # abort the whole deploy. Never let backup setup do that.
+  if [[ "$(uname)" != "Linux" ]]; then return 0; fi
+  if ! command -v systemctl >/dev/null 2>&1; then return 0; fi
+  # Opt out: TEMPER_AUTO_BACKUP_TIMER=0 (e.g. you run your own backups).
+  if [[ "${TEMPER_AUTO_BACKUP_TIMER:-1}" == "0" ]]; then return 0; fi
+  if _backup_timer_installed; then return 0; fi   # already there
+
+  local at="${TEMPER_BACKUP_TIME:-03:00}"
+  [[ "$at" =~ ^[0-9]{2}:[0-9]{2}$ ]] && at="$at:00"
+
+  if sudo -n true 2>/dev/null; then
+    # Passwordless sudo — install quietly.
+    if _write_backup_timer "$at" "sudo -n" >/dev/null 2>&1; then
+      ok "daily backup timer installed (runs $at; ./deploy.sh backup-status)"
+    else
+      warn "couldn't auto-install the backup timer — run: ./deploy.sh install-backup-timer"
+    fi
+  elif [[ -t 0 ]]; then
+    # Interactive terminal — one-time sudo prompt is acceptable here.
+    info "setting up the daily backup timer (one-time sudo) ..."
+    if _write_backup_timer "$at" "sudo"; then
+      ok "daily backup timer installed (runs $at)"
+    else
+      warn "backup timer not installed — run: ./deploy.sh install-backup-timer"
+    fi
+  else
+    warn "daily backups not scheduled (needs sudo). Run once: ./deploy.sh install-backup-timer"
+  fi
 }
 
 cmd_backup_status() {
