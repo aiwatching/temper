@@ -35,6 +35,9 @@ agents/smith/docs/design/
 
 # Local data and dumps
 data/
+# Runtime artifacts: PID files, logs, chosen DB ports, generated
+# cleanup scripts. Created by install.sh / start.sh / cleanup_memory.py.
+.data/
 *.db
 *.sqlite
 *.sqlite3
