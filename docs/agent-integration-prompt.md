@@ -18,6 +18,36 @@ This document is the single source of truth for how to use them.
 
 ## 1. Memory routing — DECIDE FIRST, THEN ACT
 
+### Step 0 — the DURABILITY TEST (capture filter, applies before routing)
+
+Before writing ANYTHING, ask: **"will this still matter in 30 days?"**
+Routing (below) only decides *where* durable info goes. This step
+decides *whether to write at all*. Most of what flows through a turn is
+NOT worth capturing — it already lives in the chat transcript.
+
+**DURABLE — capture it:**
+  - Facts about people / teams / ownership ("binxu owns the FortiNAC build")
+  - Infrastructure knowledge: hosts, IPs, access paths, credential
+    locations ("Jenkins build server is 10.15.33.5; jobs archive under …")
+  - System behaviours + constraints discovered while working
+    ("the TP connector needs script approval before it can query NFRs")
+  - User preferences and recurring workflows
+
+**EPHEMERAL — do NOT write; it's already in the transcript:**
+  - Individual run outcomes: "Build #1926 failed", "pipeline cdb93ef9 started"
+  - One-off task dispatches / status pings: "task 48a35ce1 is running"
+  - Transient UI / page states: "OWA hit a SAML login page"
+  - What the user just asked or what you just replied this turn
+  - Protocol noise / truncated fragments ("→ ok: {", "no substantive info")
+
+If an ephemeral event contains a durable *lesson*, capture ONLY the lesson:
+  ❌ "Build #1927 on branch 7.6.7_Mantis_1298572 failed with MODEL=FNAC_ESX"
+  ✓ "FortiNAC ESX builds need MODEL=FNAC_ESX as a Jenkins parameter"
+
+Identifiers (MR/bug/pipeline numbers) belong INSIDE a sentence about the
+durable fact, never as the standalone subject of a write — a bare
+`!14886` or `Build #19` becomes a junk graph entity that pollutes search.
+
 ### STATE — current, always-on, structured
 
   Active tasks                → `task_add` / `task_update` / `task_complete`
@@ -346,6 +376,27 @@ ONLY when you want the user's OTHER agents to see this fact too
   ❌ Skipping `note_save` when the user shared a long page ("just
      remember it"). The content lives in chat history, not in
      queryable memory — future-you can't find it.
+  ❌ Writing transient run logs as facts. "Build #1926 failed",
+     "pipeline X started", "MR !14886 passed" are ephemeral (see the
+     durability test) — they flood the graph with single-use entities
+     that never recur and drown real knowledge in search. Capture the
+     durable lesson, not the run.
+  ❌ Mirroring extracted facts into raw `fact:*` memory blocks. Facts
+     belong in graphiti episodes (`note_event`) ONLY — a block keyed
+     `fact:other:<name>` duplicates what's already an entity + edge,
+     bloats every `list_blocks`, and pollutes the always-on prompt.
+     Blocks are for STATE (a few dozen keys: focus, tasks, prefs), not
+     a fact dumping ground.
+  ❌ Writing per-turn conversation summaries as `chat:<id>:summary:<ts>`
+     blocks. A summarizer emitting one block per segment turns the KV
+     store into a transcript mirror. If a running summary is worth
+     keeping, it's a DOCUMENT: `note_save('chats/<chat_id>.md', …)` —
+     ONE document per chat, overwritten with the latest cumulative
+     summary (TEMPER keeps revisions automatically).
+  ❌ Writing content the server will skip. Episodes shorter than the
+     quality floor, or duplicates within the dedup window, come back
+     with `skipped: true` — treat that as a signal your summarizer
+     produced junk, not as success.
 
 ## 11. Rules
 
