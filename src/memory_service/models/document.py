@@ -32,6 +32,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -84,7 +85,14 @@ class Document(Base, UUIDPKMixin, TimestampMixin):
     # Import metadata — first-class for indexed lookup.
     source: Mapped[str | None] = mapped_column(String(64), default=None)
     source_url: Mapped[str | None] = mapped_column(Text, default=None)
-    imported_at: Mapped[datetime | None] = mapped_column(default=None)
+    # timezone=True must be explicit: the DDL column is TIMESTAMPTZ, and
+    # a bare `datetime` annotation derives a NAIVE DateTime — asyncpg
+    # then rejects the tz-aware values we actually pass (DataError →
+    # HTTP 500). Same fix on DocumentLink.created_at and
+    # DocumentRevision.revised_at below.
+    imported_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None,
+    )
 
     # Auxiliary. GIN-indexable.
     frontmatter: Mapped[dict[str, Any]] = mapped_column(
@@ -127,7 +135,9 @@ class DocumentLink(Base):
         String(255), primary_key=True, default=None,
     )
     label: Mapped[str | None] = mapped_column(Text, default=None)
-    created_at: Mapped[datetime | None] = mapped_column(default=None)
+    created_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None,
+    )
 
 
 class DocumentRevision(Base, UUIDPKMixin):
@@ -155,6 +165,8 @@ class DocumentRevision(Base, UUIDPKMixin):
     frontmatter: Mapped[dict[str, Any] | None] = mapped_column(
         JSONBVariant, default=None,
     )
-    revised_at: Mapped[datetime | None] = mapped_column(default=None)
+    revised_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None,
+    )
     revised_by: Mapped[str | None] = mapped_column(String(128), default=None)
     reason: Mapped[str | None] = mapped_column(Text, default=None)
