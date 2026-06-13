@@ -74,6 +74,14 @@ COPY alembic.ini /app/alembic.ini
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# The app runs as non-root `app`, so anything it writes at runtime needs
+# an app-owned dir. /app is root-owned (WORKDIR + COPY run as root), so
+# pre-create + chown the backups dir. Docker also copies this ownership
+# onto the empty `backups_data` named volume when it's first mounted
+# here — without it the volume would be root-owned and the backup write
+# would hit PermissionError.
+RUN mkdir -p /app/.data/backups && chown -R app:app /app/.data
+
 USER app
 
 EXPOSE 18088

@@ -221,6 +221,16 @@ cmd_up() {
     warn "check logs: ./deploy.sh logs"
   fi
 
+  # Fix the backups volume ownership. The container runs as non-root
+  # `app`, but a freshly-created named volume (or one created by an
+  # older image) is root-owned → the in-app backup write hits
+  # PermissionError. Chown it as root inside the running container.
+  # Idempotent + best-effort; never fails the deploy.
+  "${COMPOSE[@]}" exec -T -u root memory-service \
+    chown -R app:app /app/.data/backups >/dev/null 2>&1 \
+    && ok "backups volume is app-writable" \
+    || warn "couldn't chown the backups volume (in-app backups may fail until fixed)"
+
   # Make sure daily backups are scheduled — automatically, so the
   # operator never has to remember `install-backup-timer`. Idempotent +
   # best-effort; won't fail the deploy.
