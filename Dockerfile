@@ -48,10 +48,12 @@ RUN if [ -n "$PIP_TRUSTED_HOSTS" ]; then \
 # -------- runtime ----------
 FROM python:3.13-slim AS runtime
 
-# Same libpq runtime lib needed for asyncpg at execution time.
-# `curl` for the HEALTHCHECK; nothing else.
+# libpq5: asyncpg runtime. curl: HEALTHCHECK.
+# postgresql-client: `pg_dump` / `pg_restore` for the in-app backup
+# feature (POST /v1/admin/backups dumps Postgres over the network).
 RUN apt-get update -qq && apt-get install -y --no-install-recommends \
     libpq5 \
+    postgresql-client \
     curl \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system app && useradd --system --gid app --home /app app

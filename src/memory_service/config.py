@@ -163,6 +163,19 @@ class Settings(BaseSettings):
     # rather than resetting a fixed daily clock.
     snapshot_tick_minutes: int = 60
 
+    # --- In-app full backups (super_admin, web-driven) ---
+    # Where POST /v1/admin/backups writes dumps. In docker this is a
+    # named volume (see docker-compose.yml). Falls back to a local dir
+    # for dev. Distinct from the host-level ./deploy.sh backup, which
+    # remains the CLI / systemd-timer path.
+    backup_dir: str = ".data/backups"
+    # Read-only mount of FalkorDB's data dir so the service can copy the
+    # RDB after issuing BGSAVE. Empty = skip the graph half of a backup
+    # (Postgres-only) — e.g. native/dev where the volume isn't mounted.
+    falkordb_data_dir: _NoneIfEmptyStr = None
+    # Keep at most this many in-app backups; older pruned on each run.
+    backup_keep: int = 20
+
     # --- Auth / sessions ---
     # JWT signing algorithm and lifetime for /v1/auth/login tokens.
     jwt_algorithm: str = "HS256"

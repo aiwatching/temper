@@ -107,6 +107,19 @@ services:
       FALKORDB_HOST: "falkordb"
       FALKORDB_PORT: "6379"
       FALKORDB_BROWSER_PORT: "0"
+      # Where the in-app backup feature writes dumps (must match the
+      # backups_data mount below). Read by core/backups.py.
+      BACKUP_DIR: "/app/.data/backups"
+      # Where the falkordb RDB is readable from inside this container —
+      # the falkordb data volume mounted read-only below. After a BGSAVE
+      # the service copies the RDB from here into a backup.
+      FALKORDB_DATA_DIR: "/falkordb-data"
+    volumes:
+      # Persist backups outside the container; survives recreate.
+      - backups_data:/app/.data/backups
+      # Read-only view of FalkorDB's data dir so the service can grab the
+      # RDB after triggering BGSAVE — no docker exec / host access needed.
+      - falkordb_data:/falkordb-data:ro
     ports:
       # Default: only the local host can reach the API. Set MS_BIND=0.0.0.0
       # in .env if you really want it open (and put nginx in front).
@@ -116,3 +129,4 @@ volumes:
   postgres_data:
   falkordb_data:
   ollama_data:
+  backups_data:

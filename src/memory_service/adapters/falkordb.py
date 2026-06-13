@@ -42,6 +42,59 @@ async def _read_response(reader: asyncio.StreamReader) -> tuple[bytes, bytes]:
     return (line[:1], line[1:].rstrip(b"\r\n"))
 
 
+async def falkordb_bgsave(settings: Settings | None = None) -> tuple[bool, str]:
+    """Trigger a FalkorDB/Redis BGSAVE and wait for it to finish.
+
+    Used by the in-app backup: after this returns ok, the RDB on disk
+    is current and the service can copy it from the read-only data
+    mount. Returns (ok, detail). Best-effort — a failure here just
+    means the backup is Postgres-only.
+    """
+    settings = settings or get_settings()
+    try:
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(settings.falkordb_host, settings.falkordb_port),
+            timeout=5.0,
+        )
+    except Exception as exc:
+        return (False, f"connect failed: {exc}")
+
+    try:
+        writer.write(_encode_command("BGSAVE"))
+        await writer.drain()
+        kind, payload = await _read_response(reader)
+        if kind == b"-":
+            return (False, payload.decode("utf-8", errors="replace"))
+
+        # Poll INFO persistence until rdb_bgsave_in_progress:0.
+        for _ in range(60):  # ~30s
+            await asyncio.sleep(0.5)
+            writer.write(_encode_command("INFO", "persistence"))
+            await writer.drain()
+            kind, first = await _read_response(reader)
+            if kind != b"$":
+                continue
+            try:
+                n = int(first)
+            except ValueError:
+                n = -1
+            body = b""
+            if n > 0:
+                body = await asyncio.wait_for(reader.readexactly(n + 2), timeout=5.0)
+            text = body.decode("utf-8", errors="replace")
+            if "rdb_bgsave_in_progress:0" in text:
+                return (True, "bgsave complete")
+        return (True, "bgsave triggered (completion not confirmed)")
+    except Exception as exc:
+        return (False, f"bgsave error: {exc}")
+    finally:
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
 async def ping_falkordb(settings: Settings | None = None) -> FalkorPing:
     """Liveness + capability probe for FalkorDB.
 

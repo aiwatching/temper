@@ -116,6 +116,13 @@ async def admin_snapshots(request: Request) -> HTMLResponse:
     )
 
 
+@router.get("/admin/backups", response_class=HTMLResponse, include_in_schema=False)
+async def admin_backups(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request, "backups.html", {"title": "Full backups", "wide": True}
+    )
+
+
 @router.get("/admin/episodes", response_class=HTMLResponse, include_in_schema=False)
 async def admin_episodes(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "episodes.html", {"title": "Episodes"})

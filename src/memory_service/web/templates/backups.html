@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card" x-data="backupsPage()" x-init="load()">
+  <h2>Full backups</h2>
+  <p style="color:var(--muted)">
+    Whole-service snapshots — a Postgres dump (users, keys, blocks,
+    documents, episode metadata, memory snapshots) plus FalkorDB's graph
+    RDB (entities + facts + episode content). <strong>super_admin only.</strong>
+    Restore is a CLI op (<code>./deploy.sh restore &lt;id&gt;</code>) — it
+    overwrites the live database, so it deliberately isn't a web button.
+  </p>
+  <p style="color:var(--muted); font-size:12px">
+    For per-user, point-in-time memory restore see
+    <a href="/admin/snapshots">Snapshots</a>. A daily host timer also runs
+    backups automatically; this page triggers an extra one on demand.
+  </p>
+
+  <template x-if="error"><div class="msg bad" x-text="error"></div></template>
+  <template x-if="notice"><div class="msg ok" x-text="notice"></div></template>
+
+  <p>
+    <button @click="create()" :disabled="creating">
+      <span x-text="creating ? 'Backing up…' : '+ Back up now'"></span>
+    </button>
+    <button class="secondary" @click="load()">Refresh</button>
+  </p>
+
+  <table>
+    <thead><tr>
+      <th>when (id)</th><th>status</th><th>Postgres</th><th>FalkorDB graph</th><th></th>
+    </tr></thead>
+    <tbody>
+      <template x-if="!loading && backups.length === 0">
+        <tr><td colspan="5"><em>No backups yet. Click "Back up now".</em></td></tr>
+      </template>
+      <template x-for="b in backups" :key="b.id">
+        <tr>
+          <td>
+            <code x-text="b.id"></code>
+            <template x-if="b.created_at">
+              <small style="color:var(--muted); margin-left:6px" x-text="window.ms.fmtDate(b.created_at)"></small>
+            </template>
+          </td>
+          <td>
+            <template x-if="b.status === 'complete'"><span class="badge done">complete</span></template>
+            <template x-if="b.status === 'running'"><span class="badge pending">running</span></template>
+            <template x-if="b.status === 'failed'"><span class="badge failed" :title="b.error">failed</span></template>
+          </td>
+          <td>
+            <template x-if="b.has_postgres">
+              <a :href="`/v1/admin/backups/${b.id}/download/postgres`" x-text="fmtSize(b.postgres_bytes)"></a>
+            </template>
+            <template x-if="!b.has_postgres"><span style="color:var(--muted)">—</span></template>
+          </td>
+          <td>
+            <template x-if="b.has_falkordb">
+              <a :href="`/v1/admin/backups/${b.id}/download/falkordb`" x-text="fmtSize(b.falkordb_bytes)"></a>
+            </template>
+            <template x-if="!b.has_falkordb"><span style="color:var(--muted)" title="No RDB captured — FalkorDB data dir not mounted, or BGSAVE failed">—</span></template>
+          </td>
+          <td>
+            <button class="danger" @click="remove(b)">Delete</button>
+          </td>
+        </tr>
+      </template>
+    </tbody>
+  </table>
+
+  <p style="color:var(--muted); font-size:11px; margin-top:10px">
+    Download links stream the raw <code>pg_dump -Fc</code> archive and the
+    FalkorDB <code>.rdb</code>. Restore with
+    <code>pg_restore</code> / by dropping the RDB into FalkorDB's data dir
+    (or <code>./deploy.sh restore &lt;id&gt;</code> on the host).
+  </p>
+</section>
+
+<script>
+  function backupsPage() {
+    return {
+      backups: [], loading: true, error: null, notice: null, creating: false,
+      async load() {
+        window.ms.requireAuth();
+        this.loading = true; this.error = null;
+        try {
+          const d = await window.ms.json("/v1/admin/backups");
+          this.backups = d.backups;
+        } catch (e) { this.error = e.message; }
+        finally { this.loading = false; }
+      },
+      async create() {
+        this.creating = true; this.error = null; this.notice = null;
+        try {
+          await window.ms.json("/v1/admin/backups", { method: "POST" });
+          this.notice = "Backup complete.";
+          await this.load();
+        } catch (e) { this.error = e.message; }
+        finally { this.creating = false; }
+      },
+      async remove(b) {
+        if (!confirm(`Delete backup ${b.id}? This can't be undone.`)) return;
+        try {
+          await window.ms.fetch(`/v1/admin/backups/${b.id}`, { method: "DELETE" });
+          await this.load();
+        } catch (e) { this.error = e.message; }
+      },
+      fmtSize(n) {
+        if (!n) return "0 B";
+        if (n < 1024) return n + " B";
+        if (n < 1024*1024) return (n/1024).toFixed(0) + " KB";
+        return (n/1024/1024).toFixed(1) + " MB";
+      },
+    };
+  }
+</script>
+{% endblock %}
