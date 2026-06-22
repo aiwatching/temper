@@ -487,13 +487,17 @@ async def _refresh_links(db: AsyncSession, doc: Document) -> None:
     await db.execute(
         sa_delete(DocumentLink).where(DocumentLink.source_document_id == doc.id)
     )
-    # Insert parsed.
+    # Insert parsed. target_namespace="" is the sentinel for "same
+    # namespace as the source" — required because the column is part
+    # of document_links's primary key and Postgres rejects NULL in PK
+    # columns (the failure mode pre-0017: any in-namespace wikilink
+    # 500'd the document PUT).
     links = parse_wikilinks(doc.content)
     for link in links:
         db.add(DocumentLink(
             source_document_id=doc.id,
             target_path=link.target_path,
-            target_namespace=link.target_namespace,
+            target_namespace=link.target_namespace or "",
             label=link.label,
             created_at=datetime.now(UTC),
         ))
@@ -520,9 +524,9 @@ async def backlinks_of(
     ns = _resolve_ns(namespace, user)
     if not await can_read(user, ns, db):
         raise DocumentPermissionError(f"no read access to {ns.raw}")
-    # A link with target_namespace IS NULL inherits the source's
-    # namespace — match those when source.namespace == target.namespace.
-    # A link with target_namespace set must match explicitly.
+    # target_namespace == "" is the sentinel for "same namespace as
+    # the source document" (PK can't hold NULL, see migration 0017);
+    # a real namespace string is an explicit cross-namespace link.
     stmt = (
         select(Document, DocumentLink.label)
         .join(DocumentLink, DocumentLink.source_document_id == Document.id)
@@ -531,7 +535,7 @@ async def backlinks_of(
             Document.user_id == user.id,
             or_(
                 and_(
-                    DocumentLink.target_namespace.is_(None),
+                    DocumentLink.target_namespace == "",
                     Document.namespace == ns.raw,
                 ),
                 DocumentLink.target_namespace == ns.raw,

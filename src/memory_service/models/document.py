@@ -129,10 +129,13 @@ class DocumentLink(Base):
     )
     target_path: Mapped[str] = mapped_column(String(512), primary_key=True)
     # Defaulted fields go after non-defaulted (dataclass ordering).
-    # NULL on target_namespace means "same namespace as the source
-    # document"; explicit value supports cross-namespace links.
-    target_namespace: Mapped[str | None] = mapped_column(
-        String(255), primary_key=True, default=None,
+    # "" (empty string) is the sentinel for "same namespace as the
+    # source document"; a real namespace string ("group:foo",
+    # "agent:<id>/<slug>", ...) supports cross-namespace links. The
+    # column is part of the primary key, so NULL is rejected by
+    # Postgres — see migration 0017 for the NULL→"" rewrite.
+    target_namespace: Mapped[str] = mapped_column(
+        String(255), primary_key=True, default="",
     )
     label: Mapped[str | None] = mapped_column(Text, default=None)
     created_at: Mapped[datetime | None] = mapped_column(
