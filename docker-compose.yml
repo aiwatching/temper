@@ -54,6 +54,17 @@ services:
     restart: unless-stopped
     volumes:
       - ollama_data:/root/.ollama
+    # Bind on the host so OTHER hosts (e.g. a Forge KB on a different
+    # machine) can use this GPU-backed ollama as their embedding /
+    # inference endpoint. Internal containers (memory-service) still
+    # reach it via the compose service name "ollama" — the port export
+    # is purely for external callers.
+    #
+    # ⚠️ Ollama itself has NO auth: anyone who can reach this port can
+    # query / load models. Only do this on a trusted network (internal
+    # corp / VPN). Set OLLAMA_PORT in .env to override.
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
